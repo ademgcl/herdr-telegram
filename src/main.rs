@@ -216,6 +216,16 @@ async fn send_kb(s: &State, chat_id: i64, text: &str, keyboard: Option<Value>) -
             Ok(v) => return v["message_id"].as_i64(),
             Err(e) => {
                 eprintln!("send failed (attempt {}): {e}", attempt + 1);
+                // a timed-out request may still have been delivered — retrying
+                // would produce an exact duplicate message. only retry when we
+                // are sure the request never reached Telegram.
+                let retryable = e
+                    .downcast_ref::<reqwest::Error>()
+                    .map(|re| re.is_connect())
+                    .unwrap_or(false);
+                if !retryable {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
@@ -544,7 +554,7 @@ async fn edit_kb(s: &State, chat_id: i64, message_id: i64, text: &str, keyboard:
 
 // ---------- status transitions & notifications ----------
 
-async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool) {
+async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool, src: &str) {
     let old = {
         let mut m = s.status.lock().await;
         m.insert(pane.to_string(), new_status.to_string())
@@ -552,49 +562,51 @@ async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool) {
     if silent || old.as_deref() == Some(new_status) {
         return;
     }
-    // idle counts too: herdr reports "idle" instead of "done" whenever the
-    // tab was seen in the local TUI — that must not silence remote alerts
-    if !matches!(new_status, "blocked" | "done" | "idle") {
+    let is_attention = matches!(new_status, "blocked" | "done" | "idle");
+    if !is_attention {
+        return;
+    }
+    // herdr flips working→done→idle within moments when the local TUI has
+    // seen the tab — done and idle mean the same thing here, so collapse
+    // that flip-flop into one alert
+    if old.as_deref() == Some("done") && new_status == "idle"
+        || old.as_deref() == Some("idle") && new_status == "done"
+    {
+        println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
         return;
     }
     // an active prompt job reports its own outcome — suppress the parallel alert
     if s.jobs.lock().await.contains_key(pane) {
         return;
     }
+    println!("[alert] {src}: {pane} {old:?}→{new_status}");
     let label = match rpc(s, "agent.get", json!({"target": pane})).await {
-        Ok(v) => {
-            let a = &v["agent"];
-            format!(
-                "{} · {}",
-                a["agent"].as_str().unwrap_or("?"),
-                a["terminal_title_stripped"].as_str().unwrap_or("")
-            )
-        }
+        Ok(v) => v["agent"]["agent"].as_str().unwrap_or("?").to_string(),
         Err(_) => pane.to_string(),
     };
     let hint = match new_status {
-        "blocked" => "\n↩️ reply to continue this agent",
+        "blocked" => "\n↩️ reply to answer",
         _ => "",
     };
     let verb = if new_status == "idle" { "ready" } else { new_status };
-    let text = format!("{} {verb}: {label}{hint}", emoji(new_status));
-    let tail = read_output(s, pane, 25).await.unwrap_or_default();
-    let text = if tail.is_empty() {
-        text
-    } else {
-        format!("{text}\n\n{tail}")
-    };
+    let text = format!("{} {}: {}{hint}", emoji(new_status), verb, label);
     set_focus(s, pane).await;
     for id in &s.cfg.owners {
-        let mid = send(s, *id, &text).await;
+        let mid = send_kb(
+            s,
+            *id,
+            &text,
+            Some(json!([[btn("show output".into(), &format!("o:{pane}"))]])),
+        )
+        .await;
         remember(s, *id, mid, pane).await;
     }
 }
 
-async fn reconcile(s: &State, silent: bool) {
+async fn reconcile(s: &State, silent: bool, src: &str) {
     if let Ok(rows) = list_agents(s).await {
         for r in rows {
-            observe_status(s, &r.pane, &r.status, silent).await;
+            observe_status(s, &r.pane, &r.status, silent, src).await;
         }
     }
 }
@@ -608,7 +620,7 @@ async fn event_task(s: Arc<State>) {
             Err(e) => eprintln!("[events] stream error: {e}"),
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
-        reconcile(&s, false).await; // catch up on anything missed while disconnected
+        reconcile(&s, false, "reconnect").await; // catch up on anything missed while disconnected
     }
 }
 
@@ -667,7 +679,7 @@ async fn run_stream(s: &Arc<State>) -> Res<&'static str> {
                     continue;
                 }
             };
-            observe_status(s, pane, &status, false).await;
+            observe_status(s, pane, &status, false, "event").await;
         }
     }
 }
@@ -713,7 +725,7 @@ async fn prompt_job(s: Arc<State>, chat: i64, pane: String, text: String) {
                 Err(e) => format!("⚠️ error: {e}"),
             };
             // sync the cache so the event stream / watchdog don't re-report this transition
-            observe_status(&s, &pane, &settled, true).await;
+            observe_status(&s, &pane, &settled, true, "job").await;
             let mid = send(&s, chat, &msg).await;
             remember(&s, chat, mid, &pane).await;
             set_focus(&s, &pane).await;
@@ -986,7 +998,7 @@ async fn main() -> Res<()> {
     }
 
     // seed status cache without notification storm
-    reconcile(&s, true).await;
+    reconcile(&s, true, "seed").await;
 
     // discard any update backlog (stale-command replay protection)
     let backlog = get_updates(&s, 0, 0).await?;
@@ -1003,7 +1015,7 @@ async fn main() -> Res<()> {
     let mut watchdog_tick = tokio::time::interval(Duration::from_secs(60));
     loop {
         tokio::select! {
-            _ = watchdog_tick.tick() => reconcile(&s, false).await,
+            _ = watchdog_tick.tick() => reconcile(&s, false, "watchdog").await,
             updates = async {
                 let off = *s.offset.lock().await;
                 get_updates(&s, off, TG_POLL_SECS).await
