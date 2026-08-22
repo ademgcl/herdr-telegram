@@ -37,6 +37,8 @@ struct State {
     focus: Mutex<Option<String>>,
     // chat -> pane awaiting raw keys as next message (⌨️ button)
     keywait: Mutex<HashMap<i64, String>>,
+    // chat -> workspace awaiting a shell command to run (⌨️ run button)
+    runwait: Mutex<HashMap<i64, String>>,
 }
 
 fn load_env_file() {
@@ -361,16 +363,26 @@ const SPAWN_KINDS: &[&str] = &[
     "opencode", "claude", "codex", "gemini", "cursor", "copilot", "amp", "droid", "grok", "qwen",
 ];
 
-fn spawn_kb() -> Value {
+fn spawn_kb(ws: Option<&str>) -> Value {
     let mut rows: Vec<Vec<Value>> = SPAWN_KINDS
         .chunks(2)
         .map(|pair| {
             pair.iter()
-                .map(|k| btn((*k).to_string(), &format!("k:{k}")))
+                .map(|k| {
+                    let data = match ws {
+                        Some(w) => format!("k:{w}:{k}"),
+                        None => format!("k:{k}"),
+                    };
+                    btn((*k).to_string(), &data)
+                })
                 .collect()
         })
         .collect();
-    rows.push(vec![btn("← back".into(), "m")]);
+    let back = match ws {
+        Some(w) => format!("w:{w}"),
+        None => "m".to_string(),
+    };
+    rows.push(vec![btn("← back".into(), &back)]);
     json!(rows)
 }
 
@@ -389,8 +401,12 @@ async fn ensure_tg_space(s: &State) -> Res<String> {
         .to_string())
 }
 
-async fn spawn_agent(s: &State, kind: &str) -> Res<AgentRow> {
-    let ws = ensure_tg_space(s).await?;
+async fn spawn_agent(s: &State, kind: &str, target_ws: Option<&str>) -> Res<AgentRow> {
+    // chosen space wins; otherwise keep remote spawns in the dedicated tg space
+    let ws = match target_ws {
+        Some(w) if !w.is_empty() => w.to_string(),
+        _ => ensure_tg_space(s).await?,
+    };
     // fresh tab per spawn => fresh root pane, no layout math
     let tab = rpc_t(s, "tab.create", json!({"workspace_id": ws}), 30).await?;
     let pane = tab["root_pane"]["pane_id"]
@@ -439,7 +455,7 @@ async fn build_ws_view(s: &State, ws: &str) -> Res<(String, Value)> {
     let mut text = format!("🖥 {label}\n\n");
     let mut kb = Vec::new();
     if agents.is_empty() {
-        text.push_str("(no live agents here)");
+        text.push_str("(no live agents here)\n");
     }
     for a in &agents {
         let title: String = a.title.chars().take(36).collect();
@@ -449,8 +465,23 @@ async fn build_ws_view(s: &State, ws: &str) -> Res<(String, Value)> {
             &format!("a:{}", a.pane),
         )]);
     }
+    kb.push(vec![
+        btn("➕ agent".into(), &format!("n:{ws}")),
+        btn("⌨️ run cmd".into(), &format!("R:{ws}")),
+    ]);
     kb.push(vec![btn("← spaces".into(), "m")]);
     Ok((text, json!(kb)))
+}
+
+/// read raw pane output (command panes have no agent to read through)
+async fn read_pane_output(s: &State, pane: &str, lines: u32) -> Res<String> {
+    let r = rpc(
+        s,
+        "pane.read",
+        json!({"pane_id": pane, "source": "recent_unwrapped", "lines": lines}),
+    )
+    .await?;
+    Ok(r["read"]["text"].as_str().unwrap_or("").trim().to_string())
 }
 
 async fn build_agent_card(s: &State, pane: &str) -> Res<(String, Value)> {
@@ -502,9 +533,20 @@ async fn handle_callback(s: Arc<State>, cbq: &Value) {
     .await;
     let (Some(chat), Some(msg_id)) = (chat, msg_id) else { return };
 
-    let route: Vec<&str> = data.splitn(2, ':').collect();
+    let route: Vec<&str> = data.splitn(3, ':').collect();
     if route.as_slice() == ["n"] {
-        edit_kb(&s, chat, msg_id, "spawn which agent?", Some(spawn_kb())).await;
+        edit_kb(&s, chat, msg_id, "spawn which agent?", Some(spawn_kb(None))).await;
+        return;
+    }
+    if let ["n", ws] = route.as_slice() {
+        edit_kb(
+            &s,
+            chat,
+            msg_id,
+            &format!("spawn into {ws}: which agent?"),
+            Some(spawn_kb(Some(ws))),
+        )
+        .await;
         return;
     }
     if route.as_slice() == ["N"] {
@@ -527,8 +569,23 @@ async fn handle_callback(s: Arc<State>, cbq: &Value) {
         return;
     }
     if let ["k", kind] = route.as_slice() {
-        edit_kb(&s, chat, msg_id, &format!("⏳ starting {kind}…"), None).await;
-        match spawn_agent(&s, kind).await {
+        edit_kb(&s, chat, msg_id, &format!("⏳ starting {kind} in tg space…"), None).await;
+        match spawn_agent(&s, kind, None).await {
+            Ok(row) => {
+                remember(&s, chat, Some(msg_id), &row.pane).await;
+                set_focus(&s, &row.pane).await;
+                match build_agent_card(&s, &row.pane).await {
+                    Ok((text, kb)) => edit_kb(&s, chat, msg_id, &text, Some(kb)).await,
+                    Err(e) => edit_kb(&s, chat, msg_id, &format!("✅ started\n⚠️ {e}"), None).await,
+                }
+            }
+            Err(e) => edit_kb(&s, chat, msg_id, &format!("⚠️ spawn failed: {e}"), None).await,
+        }
+        return;
+    }
+    if let ["k", ws, kind] = route.as_slice() {
+        edit_kb(&s, chat, msg_id, &format!("⏳ starting {kind} in {ws}…"), None).await;
+        match spawn_agent(&s, kind, Some(ws)).await {
             Ok(row) => {
                 remember(&s, chat, Some(msg_id), &row.pane).await;
                 set_focus(&s, &row.pane).await;
@@ -551,6 +608,31 @@ async fn handle_callback(s: Arc<State>, cbq: &Value) {
             msg_id,
             &format!("⌨️ send keys for {pane}\nnext message = keys (e.g. `y enter`, `esc`)"),
             None,
+        )
+        .await;
+        return;
+    }
+    if let ["R", ws] = route.as_slice() {
+        // arm run-mode: next plain text is executed in a fresh tab of this space
+        s.runwait.lock().await.insert(chat, ws.to_string());
+        edit_kb(
+            &s,
+            chat,
+            msg_id,
+            &format!("⌨️ send the command to run in {ws}\nnext message = shell command (fresh tab)"),
+            None,
+        )
+        .await;
+        return;
+    }
+    if let ["p", pane] = route.as_slice() {
+        let out = read_pane_output(&s, pane, 120).await.unwrap_or_default();
+        let body = if out.is_empty() { "(no output)".to_string() } else { out };
+        send_kb(
+            &s,
+            chat,
+            &body,
+            Some(json!([[btn("🔄 refresh".into(), &format!("p:{pane}"))]])),
         )
         .await;
         return;
@@ -1018,7 +1100,68 @@ async fn handle_message(s: Arc<State>, chat: i64, msg: &Value) {
         return;
     }
 
-    // ⌨️ keys-mode armed via button: next plain message is raw keys
+    // ⌨️ run-mode armed via R button: next plain message is a shell command
+    if let Some(ws) = s.runwait.lock().await.remove(&chat) {
+        // fresh tab in the chosen space => isolated pane, no layout math
+        let tab = match rpc_t(
+            &s,
+            "tab.create",
+            json!({"workspace_id": ws}),
+            30,
+        )
+        .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                send(&s, chat, &format!("⚠️ {e}")).await;
+                return;
+            }
+        };
+        let pane = tab["root_pane"]["pane_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let cmd = text.trim();
+        send(&s, chat, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}")).await;
+        if let Err(e) = rpc_t(
+            &s,
+            "pane.send_text",
+            json!({"pane_id": pane, "text": format!("{cmd}")}),
+            30,
+        )
+        .await
+        {
+            send(&s, chat, &format!("⚠️ {e}")).await;
+            return;
+        }
+        let _ = rpc(
+            &s,
+            "pane.send_keys",
+            json!({"pane_id": pane, "keys": ["enter"]}),
+        )
+        .await;
+        // give short commands a moment, then show first output
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let out = read_pane_output(&s, &pane, 40).await.unwrap_or_default();
+        let body = if out.is_empty() {
+            "(no output yet)".to_string()
+        } else {
+            out
+        };
+        let mid = send_kb(
+            &s,
+            chat,
+            &body,
+            Some(json!([[
+                btn("🔄 output".into(), &format!("p:{pane}")),
+            ]])),
+        )
+        .await;
+        remember(&s, chat, mid, &pane).await;
+        return;
+    }
+
+    // ⌨️ keys-mode armed via K button: next plain message is raw keys
     if let Some(pane) = s.keywait.lock().await.remove(&chat) {
         let key_list: Vec<&str> = text.split_whitespace().collect();
         match rpc(&s, "agent.send_keys", json!({"target": pane, "keys": key_list})).await {
@@ -1194,6 +1337,7 @@ async fn main() -> Res<()> {
         torder: Mutex::new(Default::default()),
         focus: Mutex::new(None),
         keywait: Mutex::new(HashMap::new()),
+        runwait: Mutex::new(HashMap::new()),
         cfg,
         http,
     });
