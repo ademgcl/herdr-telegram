@@ -552,7 +552,9 @@ async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool) {
     if silent || old.as_deref() == Some(new_status) {
         return;
     }
-    if !matches!(new_status, "blocked" | "done") {
+    // idle counts too: herdr reports "idle" instead of "done" whenever the
+    // tab was seen in the local TUI — that must not silence remote alerts
+    if !matches!(new_status, "blocked" | "done" | "idle") {
         return;
     }
     // an active prompt job reports its own outcome — suppress the parallel alert
@@ -570,12 +572,12 @@ async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool) {
         }
         Err(_) => pane.to_string(),
     };
-    let hint = if new_status == "blocked" {
-        "\n↩️ reply to continue this agent"
-    } else {
-        ""
+    let hint = match new_status {
+        "blocked" => "\n↩️ reply to continue this agent",
+        _ => "",
     };
-    let text = format!("{} {new_status}: {label}{hint}", emoji(new_status));
+    let verb = if new_status == "idle" { "ready" } else { new_status };
+    let text = format!("{} {verb}: {label}{hint}", emoji(new_status));
     set_focus(s, pane).await;
     for id in &s.cfg.owners {
         let mid = send(s, *id, &text).await;
