@@ -140,13 +140,7 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
     .await?;
 
     let detail = get_agent(socket, &pane).await?;
-    Ok(AgentRow {
-        kind: detail.kind,
-        pane: detail.pane,
-        title: detail.title,
-        status: detail.status,
-        ws: detail.ws,
-    })
+    Ok(detail.into())
 }
 
 pub async fn send_agent_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> {

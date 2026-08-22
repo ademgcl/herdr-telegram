@@ -8,7 +8,7 @@ use crate::{
     state::AppState,
     ui::{
         agent_card_kb, build_agent_card_text, build_menu_text,
-        main_menu_kb, topic_help_text,
+        main_menu_kb, topic_help_text, ws_label,
     },
 };
 
@@ -100,15 +100,8 @@ async fn handle_topic_agent_message(
     }
 
     // Bare message inside agent's topic -> prompt that agent!
-    let row = crate::types::AgentRow {
-        kind: agent.kind,
-        pane: agent.pane,
-        title: agent.title,
-        status: agent.status,
-        ws: agent.ws,
-    };
     s.set_focus(pane).await;
-    enqueue_prompt(s, chat, Some(thread_id), row, text.to_string()).await;
+    enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
 }
 
 async fn handle_general_forum_message(
@@ -153,8 +146,7 @@ async fn handle_general_forum_message(
         match spawn_agent(&s.cfg.socket, kind, ws).await {
             Ok(row) => {
                 let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                let sp = spaces.iter().find(|w| w.id == row.ws).map(|w| w.label.as_str()).unwrap_or(&row.ws);
-                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, sp, &row.status).await {
+                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, ws_label(&spaces, &row.ws), &row.status).await {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}] in topic #{topic_th}", row.kind, row.pane), None).await;
                 } else {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}]", row.kind, row.pane), None).await;

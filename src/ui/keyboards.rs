@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 use crate::types::{AgentRow, WorkspaceInfo};
-use super::emoji::{emoji, worst_status};
+use super::{emoji, views::ws_label, worst_status};
 
 pub const SPAWN_KINDS: &[&str] = &[
     "opencode", "claude", "codex", "gemini", "cursor", "copilot", "amp", "droid", "grok", "qwen",
@@ -59,13 +59,8 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
     ]);
 
     for a in agents {
-        let sp_label = spaces
-            .iter()
-            .find(|s| s.id == a.ws)
-            .map(|s| s.label.as_str())
-            .unwrap_or(&a.ws);
         kb.push(vec![btn(
-            format!("{} {} @ {}", emoji(&a.status), a.kind, sp_label),
+            format!("{} {} @ {}", emoji(&a.status), a.kind, ws_label(spaces, &a.ws)),
             &format!("a:{}", a.pane),
         )]);
     }

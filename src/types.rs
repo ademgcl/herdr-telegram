@@ -3,6 +3,8 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub const TG_POLL_SECS: i64 = 25;
 pub const STALE_SECS: u64 = 600;
 pub const PROMPT_TIMEOUT_MS: u64 = 300_000;
+pub const WATCH_TIMEOUT_MS: u64 = 600_000;
+pub const WATCH_REASSURE_ROUNDS: u64 = 3;
 pub const MAX_MSG_UNITS: usize = 3900;
 pub const SINGLE_INSTANCE_PORT: u16 = 47319;
 
@@ -23,6 +25,18 @@ pub struct AgentDetail {
     pub status: String,
     pub ws: String,
     pub cwd: String,
+}
+
+impl From<AgentDetail> for AgentRow {
+    fn from(d: AgentDetail) -> Self {
+        Self {
+            kind: d.kind,
+            pane: d.pane,
+            title: d.title,
+            status: d.status,
+            ws: d.ws,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

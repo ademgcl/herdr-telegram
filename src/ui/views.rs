@@ -2,45 +2,78 @@ use crate::types::{AgentDetail, AgentRow, WorkspaceInfo, MAX_MSG_UNITS};
 use super::emoji::{emoji, worst_status};
 
 pub fn fit(text: &str, max_units: usize) -> String {
-    let total_units = text.encode_utf16().count();
-    if total_units <= max_units {
+    if text.encode_utf16().count() <= max_units {
         return text.to_string();
     }
     let marker = "\n\n… [truncated] …\n\n";
-    let marker_units = marker.encode_utf16().count();
-    if max_units <= marker_units {
-        let mut out = String::new();
-        for ch in text.chars() {
-            if out.encode_utf16().count() + ch.len_utf16() > max_units {
-                break;
+    if max_units <= marker.encode_utf16().count() {
+        return text.chars().fold(String::new(), |mut out, ch| {
+            if out.encode_utf16().count() + ch.len_utf16() <= max_units {
+                out.push(ch);
             }
-            out.push(ch);
-        }
-        return out;
+            out
+        });
     }
-    let avail = max_units - marker_units;
-    let head = avail * 60 / 100;
-    let tail = avail - head;
-    let mut h = String::new();
-    for ch in text.chars() {
-        if h.encode_utf16().count() + ch.len_utf16() > head {
-            break;
-        }
-        h.push(ch);
+    let avail = max_units - marker.encode_utf16().count();
+    let (head, tail) = (avail * 60 / 100, avail - avail * 60 / 100);
+    let mut units = 0;
+    let mut head_end = 0;
+    for (i, ch) in text.char_indices() {
+        if units + ch.len_utf16() > head { break; }
+        units += ch.len_utf16();
+        head_end = i + ch.len_utf16();
     }
-    let rest = &text[text.char_indices().nth(h.chars().count()).map(|(i, _)| i).unwrap_or(0)..];
-    let mut t = String::new();
-    for ch in rest.chars().rev() {
-        if t.encode_utf16().count() + ch.len_utf16() > tail {
-            break;
-        }
-        t.insert(0, ch);
+    let mut units = 0;
+    let mut tail_start = text.len();
+    for (i, ch) in text.char_indices().rev() {
+        if units + ch.len_utf16() > tail { break; }
+        units += ch.len_utf16();
+        tail_start = i;
     }
-    format!("{h}{marker}{t}")
+    format!("{}{marker}{}", &text[..head_end], &text[tail_start..])
+}
+
+pub fn ws_label<'a>(spaces: &'a [WorkspaceInfo], id: &'a str) -> &'a str {    spaces
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.label.as_str())
+        .unwrap_or(id)
 }
 
 pub fn fit_msg(text: &str) -> String {
     fit(text, MAX_MSG_UNITS)
+}
+
+/// Split text into Telegram-sized chunks (line-aligned where possible).
+pub fn chunks(text: &str, max_units: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_units = 0;
+    for line in text.lines() {
+        let line_units = line.encode_utf16().count();
+        if line_units + 1 > max_units {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+                cur_units = 0;
+            }
+            out.push(fit(line, max_units));
+            continue;
+        }
+        if cur_units > 0 && cur_units + 1 + line_units > max_units {
+            out.push(std::mem::take(&mut cur));
+            cur_units = 0;
+        }
+        if cur_units > 0 {
+            cur.push('\n');
+            cur_units += 1;
+        }
+        cur.push_str(line);
+        cur_units += line_units;
+    }
+    if !cur.is_empty() || out.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String {
@@ -60,16 +93,11 @@ pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String 
         text.push_str("(none — tap ➕ or wait for detection)\n");
     }
     for a in agents {
-        let sp_label = spaces
-            .iter()
-            .find(|s| s.id == a.ws)
-            .map(|s| s.label.as_str())
-            .unwrap_or(&a.ws);
         text.push_str(&format!(
             "{} {} @ {} [{}]\n",
             emoji(&a.status),
             a.kind,
-            sp_label,
+            ws_label(spaces, &a.ws),
             a.pane,
         ));
     }
@@ -105,27 +133,6 @@ pub fn build_agent_card_text(a: &AgentDetail) -> String {
         a.cwd,
         a.title,
     )
-}
-
-pub fn agents_summary(spaces: &[WorkspaceInfo], agents: &[AgentRow], highlight: &str) -> String {
-    let label = |id: &str| {
-        spaces
-            .iter()
-            .find(|s| s.id == id)
-            .map(|s| s.label.clone())
-            .unwrap_or_else(|| id.to_string())
-    };
-    let mut out = String::new();
-    for r in agents {
-        let mark = if r.pane == highlight { "▶️" } else { "·" };
-        out.push_str(&format!(
-            "{mark}{} {} @ {}\n",
-            emoji(&r.status),
-            r.kind,
-            label(&r.ws),
-        ));
-    }
-    out
 }
 
 pub fn help_text() -> &'static str {

@@ -1,12 +1,15 @@
 use std::sync::Arc;
 use serde_json::json;
 use crate::{
-    herdr::client::{list_agents, list_workspaces, read_agent_output, rpc_t},
+    herdr::client::{read_agent_output, rpc_t},
     jobs::job::Job,
-    notifier::status::observe_status,
+    notifier::{observe_status, refresh_topic_title},
     state::AppState,
-    types::{AgentRow, PromptRequest, PROMPT_TIMEOUT_MS},
-    ui::{agents_summary, emoji},
+    types::{
+        AgentRow, PromptRequest, MAX_MSG_UNITS, PROMPT_TIMEOUT_MS, WATCH_REASSURE_ROUNDS,
+        WATCH_TIMEOUT_MS,
+    },
+    ui::{chunks, emoji},
 };
 
 pub async fn enqueue_prompt(
@@ -25,11 +28,7 @@ pub async fn enqueue_prompt(
     let existing = s.jobs.lock().await.get(&row.pane).cloned();
     if let Some(job) = existing {
         job.queue.lock().await.push_back(req);
-        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-        let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
-        let summary = agents_summary(&spaces, &agents, &row.pane);
-        let msg = format!("📨 queued — runs after current task\n\n{summary}");
-        let mid = s.tg.send_msg(chat_id, thread_id, &msg, None).await;
+        let mid = s.tg.send_msg(chat_id, thread_id, "📨 queued — runs after the current task", None).await;
         s.remember(chat_id, mid, &row.pane).await;
         return;
     }
@@ -52,12 +51,8 @@ async fn run_job(s: AppState, first_req: PromptRequest, row: AgentRow, job: Arc<
             },
         };
 
-        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-        let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
-        let summary = agents_summary(&spaces, &agents, &pane);
-        let notify = format!("📨 got it — {} is on it\n\n{summary}", row.kind);
-        let mid = s.tg.send_msg(req.chat_id, req.message_thread_id, &notify, None).await;
-        s.remember(req.chat_id, mid, &pane).await;
+        // No chat ack — the agent's topic title flips to 🔄 instead
+        refresh_topic_title(&s, &pane, "working").await;
         s.set_focus(&pane).await;
 
         process_prompt(&s, req.chat_id, req.message_thread_id, &pane, req.text, &job).await;
@@ -90,73 +85,90 @@ async fn process_prompt(
         PROMPT_TIMEOUT_MS / 1000 + 60,
     );
 
-    tokio::select! {
+    let r = tokio::select! {
         _ = job.cancel.notified() => {
             job.mark_stopped();
-            let mid = s.tg.send_msg(chat_id, thread_id, "✋ prompt cancelled", None).await;
-            s.remember(chat_id, mid, pane).await;
+            report(s, chat_id, thread_id, pane, "✋ prompt cancelled").await;
+            return;
         }
-        r = fut => {
-            let wait_timed_out = match &r {
-                Err(e) => e.to_string().contains("agent.prompt timed out"),
-                Ok(_) => false,
-            };
-            let mut msg = if let Err(e) = &r {
-                if wait_timed_out { String::new() } else { format!("⚠️ error: {e}") }
-            } else {
-                String::new()
-            };
+        r = fut => r,
+    };
 
-            if wait_timed_out {
-                s.tg.send_msg(chat_id, thread_id, "⏳ still working — pinging when done", None).await;
-                for round in 0..12 {
-                    if job.is_stopped() { return; }
-                    let w = rpc_t(
-                        &s.cfg.socket,
-                        "agent.wait",
-                        json!({"target": pane, "until": ["idle", "done", "blocked"], "timeout_ms": 600_000}),
-                        660,
-                    ).await;
-
-                    let settled = match &w {
-                        Ok(v) => v["agent"]["agent_status"].as_str().or(v["agent_status"].as_str()).map(|x| x.to_string()),
-                        Err(e) => {
-                            if e.to_string().contains("agent.wait timed out") {
-                                if round % 3 == 2 {
-                                    s.tg.send_msg(chat_id, thread_id, "⏳ still going…", None).await;
-                                }
-                                continue;
-                            }
-                            Some("unknown".into())
-                        }
-                    };
-                    let Some(settled) = settled else { continue };
-                    let out = read_agent_output(&s.cfg.socket, pane, 50).await.unwrap_or_default();
-                    msg = if out.is_empty() {
-                        format!("{} {settled}\n(no readable output)", emoji(&settled))
-                    } else {
-                        format!("{} {settled}\n\n{out}", emoji(&settled))
-                    };
-                    observe_status(s, pane, &settled, true, "job").await;
-                    break;
-                }
-                if msg.is_empty() {
-                    msg = "⚠️ gave up watching (agent never settled)".into();
-                }
-            } else if let Ok(v) = &r {
-                let settled = v["agent"]["agent_status"].as_str().or(v["agent_status"].as_str()).unwrap_or("unknown");
-                let out = read_agent_output(&s.cfg.socket, pane, 50).await.unwrap_or_default();
-                msg = if out.is_empty() {
-                    format!("{} {settled}\n(no readable output)", emoji(settled))
-                } else {
-                    format!("{} {settled}\n\n{out}", emoji(settled))
-                };
-                observe_status(s, pane, settled, true, "job").await;
-            }
-
-            let mid = s.tg.send_msg(chat_id, thread_id, &msg, None).await;
-            s.remember(chat_id, mid, pane).await;
-            s.set_focus(pane).await;
+    match r {
+        Ok(v) => {
+            let settled = v["agent"]["agent_status"]
+                .as_str()
+                .or(v["agent_status"].as_str())
+                .unwrap_or("unknown");
+            finish(s, chat_id, thread_id, pane, settled).await;
+        }
+        Err(e) if e.to_string().contains("timed out") => {
+            s.tg.send_msg(chat_id, thread_id, "⏳ still working — pinging when done", None).await;
+            watch(s, chat_id, thread_id, pane, job).await;
+        }
+        Err(e) => {
+            report(s, chat_id, thread_id, pane, &format!("⚠️ error: {e}")).await;
         }
     }
+}
+
+async fn watch(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, job: &Job) {
+    for round in 0u64.. {
+        if job.is_stopped() { return; }
+        let w = rpc_t(
+            &s.cfg.socket,
+            "agent.wait",
+            json!({"target": pane, "until": ["idle", "done", "blocked"], "timeout_ms": WATCH_TIMEOUT_MS}),
+            WATCH_TIMEOUT_MS / 1000 + 60,
+        );
+        tokio::select! {
+            _ = job.cancel.notified() => {
+                job.mark_stopped();
+                report(s, chat_id, thread_id, pane, "✋ prompt cancelled").await;
+                return;
+            }
+            w = w => match w {
+                Ok(v) => {
+                    let settled = v["agent"]["agent_status"]
+                        .as_str()
+                        .or(v["agent_status"].as_str())
+                        .unwrap_or("unknown");
+                    if matches!(settled, "idle" | "done" | "blocked" | "exited" | "closed" | "dead") {
+                        finish(s, chat_id, thread_id, pane, settled).await;
+                        return;
+                    }
+                }
+                Err(e) if !e.to_string().contains("timed out") => {
+                    report(s, chat_id, thread_id, pane, &format!("⚠️ error: {e}")).await;
+                    return;
+                }
+                Err(_) => {
+                    if round % WATCH_REASSURE_ROUNDS == WATCH_REASSURE_ROUNDS - 1 {
+                        s.tg.send_msg(chat_id, thread_id, "⏳ still going…", None).await;
+                    }
+                }
+            },
+        }
+    }
+}
+
+async fn finish(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, settled: &str) {
+    let out = read_agent_output(&s.cfg.socket, pane, 2000).await.unwrap_or_default();
+    let header = format!("{} {settled}", emoji(settled));
+    let parts: Vec<String> = if out.is_empty() {
+        vec![format!("{header}\n(no readable output)")]
+    } else {
+        chunks(&format!("{header}\n\n{out}"), MAX_MSG_UNITS)
+    };
+    observe_status(s, pane, settled, true, "job").await;
+    refresh_topic_title(s, pane, settled).await;
+    for part in &parts {
+        report(s, chat_id, thread_id, pane, part).await;
+    }
+    s.set_focus(pane).await;
+}
+
+async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
+    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
+    s.remember(chat_id, mid, pane).await;
 }
