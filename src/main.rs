@@ -35,6 +35,8 @@ struct State {
     targets: Mutex<HashMap<(i64, i64), String>>,
     torder: Mutex<std::collections::VecDeque<(i64, i64)>>,
     focus: Mutex<Option<String>>,
+    // chat -> pane awaiting raw keys as next message (⌨️ button)
+    keywait: Mutex<HashMap<i64, String>>,
 }
 
 fn load_env_file() {
@@ -83,12 +85,14 @@ fn cfg_from_env() -> Res<Cfg> {
 // ---------- herdr client: one exchange per connection ----------
 
 async fn rpc(s: &State, method: &str, params: Value) -> Res<Value> {
-    rpc_to(&s.cfg.socket, method, params).await
+    rpc_t(s, method, params, 30).await
 }
 
-async fn rpc_to(socket: &str, method: &str, params: Value) -> Res<Value> {
+/// long waits (agent.prompt) need their own budget — a fixed 30s cap
+/// silently kills any prompt whose agent works longer than that.
+async fn rpc_t(s: &State, method: &str, params: Value, timeout_secs: u64) -> Res<Value> {
     let fut = async {
-        let mut conn = UnixStream::connect(socket).await?;
+        let mut conn = UnixStream::connect(&s.cfg.socket).await?;
         let req = json!({"id": "tg", "method": method, "params": params});
         conn.write_all(format!("{req}\n").as_bytes()).await?;
         conn.flush().await?;
@@ -101,7 +105,7 @@ async fn rpc_to(socket: &str, method: &str, params: Value) -> Res<Value> {
         }
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     };
-    tokio::time::timeout(Duration::from_secs(30), fut)
+    tokio::time::timeout(Duration::from_secs(timeout_secs), fut)
         .await
         .map_err(|_| format!("herdr {method} timed out"))?
 }
@@ -301,7 +305,74 @@ async fn build_menu(s: &State) -> Res<(String, Value)> {
     if spaces.is_empty() {
         text.push_str("(no spaces)");
     }
+    kb.push(vec![btn("➕ spawn agent".into(), "n")]);
     Ok((text, json!(kb)))
+}
+
+const SPAWN_KINDS: &[&str] = &[
+    "opencode", "claude", "codex", "gemini", "cursor", "copilot", "amp", "droid", "grok", "qwen",
+];
+
+fn spawn_kb() -> Value {
+    let mut rows: Vec<Vec<Value>> = SPAWN_KINDS
+        .chunks(2)
+        .map(|pair| {
+            pair.iter()
+                .map(|k| btn((*k).to_string(), &format!("k:{k}")))
+                .collect()
+        })
+        .collect();
+    rows.push(vec![btn("← back".into(), "m")]);
+    json!(rows)
+}
+
+/// ensure a dedicated "tg" space exists so remote spawns never disturb
+/// the user's local layout; returns its workspace_id
+async fn ensure_tg_space(s: &State) -> Res<String> {
+    for (id, label, _) in list_workspaces(s).await? {
+        if label == "tg" {
+            return Ok(id);
+        }
+    }
+    let r = rpc_t(s, "workspace.create", json!({"label": "tg"}), 30).await?;
+    Ok(r["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string())
+}
+
+async fn spawn_agent(s: &State, kind: &str) -> Res<AgentRow> {
+    let ws = ensure_tg_space(s).await?;
+    // fresh tab per spawn => fresh root pane, no layout math
+    let tab = rpc_t(s, "tab.create", json!({"workspace_id": ws}), 30).await?;
+    let pane = tab["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // names must be unique among live agents; kind list has no names to check
+    let name = format!("tg-{kind}-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs());
+
+    rpc_t(
+        s,
+        "agent.start",
+        json!({"name": name, "kind": kind, "pane_id": pane}),
+        90, // herdr waits for the agent to become ready
+    )
+    .await?;
+
+    let v = rpc(s, "agent.get", json!({"target": pane})).await?;
+    let a = &v["agent"];
+    Ok(AgentRow {
+        kind: a["agent"].as_str().unwrap_or(kind).into(),
+        pane: a["pane_id"].as_str().unwrap_or(&pane).into(),
+        title: a["terminal_title_stripped"].as_str().unwrap_or("").into(),
+        status: a["agent_status"].as_str().unwrap_or("unknown").into(),
+        ws: a["workspace_id"].as_str().unwrap_or(&ws).into(),
+    })
 }
 
 async fn build_ws_view(s: &State, ws: &str) -> Res<(String, Value)> {
@@ -352,7 +423,10 @@ async fn build_agent_card(s: &State, pane: &str) -> Res<(String, Value)> {
         pane,
     );
     let kb = json!([
-        [btn("📄 recent output".into(), &format!("o:{pane}"))],
+        [
+            btn("📄 output".into(), &format!("o:{pane}")),
+            btn("⌨️ keys".into(), &format!("K:{pane}")),
+        ],
         [
             btn("🔄 refresh".into(), &format!("a:{pane}")),
             btn(format!("← {}", ws), &format!("w:{ws}")),
@@ -381,6 +455,40 @@ async fn handle_callback(s: Arc<State>, cbq: &Value) {
     let (Some(chat), Some(msg_id)) = (chat, msg_id) else { return };
 
     let route: Vec<&str> = data.splitn(2, ':').collect();
+    if route.as_slice() == ["n"] {
+        edit_kb(&s, chat, msg_id, "spawn which agent?", Some(spawn_kb())).await;
+        return;
+    }
+    if let ["k", kind] = route.as_slice() {
+        edit_kb(&s, chat, msg_id, &format!("⏳ starting {kind}…"), None).await;
+        match spawn_agent(&s, kind).await {
+            Ok(row) => {
+                remember(&s, chat, Some(msg_id), &row.pane).await;
+                set_focus(&s, &row.pane).await;
+                match build_agent_card(&s, &row.pane).await {
+                    Ok((text, kb)) => edit_kb(&s, chat, msg_id, &text, Some(kb)).await,
+                    Err(e) => edit_kb(&s, chat, msg_id, &format!("✅ started\n⚠️ {e}"), None).await,
+                }
+            }
+            Err(e) => edit_kb(&s, chat, msg_id, &format!("⚠️ spawn failed: {e}"), None).await,
+        }
+        return;
+    }
+    if let ["K", pane] = route.as_slice() {
+        // arm keys-mode: next plain text is sent as raw keys
+        s.keywait.lock().await.insert(chat, pane.to_string());
+        set_focus(&s, pane).await;
+        edit_kb(
+            &s,
+            chat,
+            msg_id,
+            &format!("⌨️ send keys for {pane}\nnext message = keys (e.g. `y enter`, `esc`)"),
+            None,
+        )
+        .await;
+        return;
+    }
+
     let view: Option<Res<(String, Value)>> = match route.as_slice() {
         ["m"] => Some(build_menu(&s).await),
         ["w", ws] => Some(build_ws_view(&s, ws).await),
@@ -562,7 +670,7 @@ async fn prompt_job(s: Arc<State>, chat: i64, pane: String, text: String) {
     let cancel = Arc::new(Notify::new());
     s.jobs.lock().await.insert(pane.clone(), cancel.clone());
 
-    let fut = rpc(
+    let fut = rpc_t(
         &s,
         "agent.prompt",
         json!({
@@ -570,6 +678,7 @@ async fn prompt_job(s: Arc<State>, chat: i64, pane: String, text: String) {
             "text": text,
             "wait": {"until": ["idle", "done", "blocked"], "timeout_ms": PROMPT_TIMEOUT_MS}
         }),
+        PROMPT_TIMEOUT_MS / 1000 + 60,
     );
 
     tokio::select! {
@@ -608,14 +717,13 @@ async fn prompt_job(s: Arc<State>, chat: i64, pane: String, text: String) {
 // ---------- command handling ----------
 
 fn help_text() -> &'static str {
-    "↩️ reply to any bot message  → talks to that agent\n\
-     plain text                  → last agent you interacted with\n\
-     \"<pane|kind> <text>\"         → explicit target\n\n\
-     /agents   browse spaces & agents (tap = open)\n\
+    "/agents   control panel: spaces, agents, ➕ spawn\n\
      /read     recent output of focused agent\n\
-     /cancel   abort pending prompts\n\
+     /cancel   abort prompts / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
-     alerts fire automatically when an agent ⛔ needs input or ✅ finishes"
+     ↩️ reply to any bot message → talks to that agent\n\
+     plain text → focused agent\n\n\
+     alerts fire on ⛔ needs-input / ✅ finish — just reply to them"
 }
 
 async fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow> {
@@ -664,6 +772,7 @@ async fn handle_message(s: Arc<State>, chat: i64, msg: &Value) {
     }
 
     if cmd == "/cancel" {
+        s.keywait.lock().await.remove(&chat);
         let jobs: HashMap<String, Arc<Notify>> = std::mem::take(&mut *s.jobs.lock().await);
         for n in jobs.values() {
             n.notify_waiters();
@@ -674,6 +783,20 @@ async fn handle_message(s: Arc<State>, chat: i64, msg: &Value) {
             &format!("✋ cancelled {} pending job(s)", jobs.len()),
         )
         .await;
+        return;
+    }
+
+    // ⌨️ keys-mode armed via button: next plain message is raw keys
+    if let Some(pane) = s.keywait.lock().await.remove(&chat) {
+        let key_list: Vec<&str> = text.split_whitespace().collect();
+        match rpc(&s, "agent.send_keys", json!({"target": pane, "keys": key_list})).await {
+            Ok(_) => {
+                send(&s, chat, "⌨️ sent").await;
+            }
+            Err(e) => {
+                send(&s, chat, &format!("⚠️ {e}")).await;
+            }
+        }
         return;
     }
 
@@ -835,6 +958,7 @@ async fn main() -> Res<()> {
         targets: Mutex::new(HashMap::new()),
         torder: Mutex::new(Default::default()),
         focus: Mutex::new(None),
+        keywait: Mutex::new(HashMap::new()),
         cfg,
         http,
     });
