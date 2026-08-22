@@ -1,0 +1,72 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+use serde_json::Value;
+use crate::{
+    handlers::{handle_callback, handle_dm_message, handle_forum_message},
+    state::AppState,
+    types::STALE_SECS,
+};
+
+pub async fn handle_update(s: AppState, u: &Value) {
+    if u.get("callback_query").is_some() {
+        handle_callback(s, &u["callback_query"]).await;
+        return;
+    }
+
+    if let Some(member) = u.get("my_chat_member") {
+        let from = member["from"]["id"].as_i64().unwrap_or(0);
+        let chat = &member["chat"];
+        let chat_id = chat["id"].as_i64().unwrap_or(0);
+        let title = chat["title"].as_str().unwrap_or("");
+        if s.cfg.owners.contains(&from) {
+            println!("[telegram] bot added/updated in group '{title}' (ID: {chat_id}) by owner {from}");
+        }
+        return;
+    }
+
+    let msg = &u["message"];
+    if msg.is_null() {
+        return;
+    }
+
+    let from = msg["from"]["id"].as_i64();
+    let chat_id = msg["chat"]["id"].as_i64();
+    let chat_type = msg["chat"]["type"].as_str().unwrap_or("");
+    let text = msg["text"].as_str().unwrap_or("");
+
+    let (Some(from), Some(chat_id)) = (from, chat_id) else { return };
+
+    if !s.cfg.owners.contains(&from) {
+        return; // Silently ignore non-owners
+    }
+
+    if text.is_empty() {
+        return;
+    }
+
+    let date = msg["date"].as_u64().unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if now.saturating_sub(date) > STALE_SECS {
+        println!("[tg] dropping stale update");
+        return;
+    }
+
+    if chat_type == "private" && chat_id == from {
+        handle_dm_message(s, chat_id, msg).await;
+    } else if chat_type == "supergroup" || chat_type == "group" {
+        if let Some(forum_id) = s.cfg.forum {
+            if chat_id == forum_id {
+                handle_forum_message(s, chat_id, msg).await;
+            }
+        } else {
+            println!("[telegram] message in group {chat_id} ('{}') without TELEGRAM_FORUM_CHAT_ID", msg["chat"]["title"].as_str().unwrap_or(""));
+            let th = msg["message_thread_id"].as_i64();
+            let note = format!(
+                "🤖 Connected to Herdr!\n\nTo enable per-agent forum topics, add this group to `.env`:\n`TELEGRAM_FORUM_CHAT_ID={chat_id}`"
+            );
+            s.tg.send_msg(chat_id, th, &note, None).await;
+        }
+    }
+}

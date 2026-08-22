@@ -1,0 +1,215 @@
+use std::time::Duration;
+use serde_json::{json, Value};
+use crate::{
+    herdr::client::{
+        list_agents, list_workspaces,
+        read_agent_output, read_pane_output, rpc_t, send_agent_keys, send_pane_text,
+    },
+    jobs::enqueue_prompt,
+    state::AppState,
+    types::AgentRow,
+    ui::{
+        build_menu_text, help_text, main_menu_kb, pane_output_kb,
+    },
+};
+
+pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
+    let text = msg["text"].as_str().unwrap_or("").trim();
+    if text.is_empty() { return; }
+
+    let (cmd, arg) = match text.split_once(char::is_whitespace) {
+        Some((c, a)) => (c, a.trim()),
+        None => (text, ""),
+    };
+
+    let reply_pane: Option<String> = match msg["reply_to_message"]["message_id"].as_i64() {
+        Some(rid) => s.targets.lock().await.get(&(chat, rid)).cloned(),
+        None => None,
+    };
+
+    if cmd == "/start" || cmd == "/help" {
+        s.tg.send_msg(chat, None, help_text(), None).await;
+        return;
+    }
+
+    if cmd == "/cancel" {
+        s.keywait.lock().await.remove(&chat);
+        s.runwait.lock().await.remove(&chat);
+        let count = s.cancel_all_jobs().await;
+        s.tg.send_msg(chat, None, &format!("✋ cancelled {count} pending job(s)"), None).await;
+        return;
+    }
+
+    if let Some(ws) = s.runwait.lock().await.remove(&chat) {
+        handle_run_command(&s, chat, &ws, text).await;
+        return;
+    }
+
+    if let Some(pane) = s.keywait.lock().await.remove(&chat) {
+        let keys: Vec<&str> = text.split_whitespace().collect();
+        match send_agent_keys(&s.cfg.socket, &pane, &keys).await {
+            Ok(_) => { s.tg.send_msg(chat, None, "⌨️ sent", None).await; }
+            Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await; }
+        }
+        return;
+    }
+
+    let rows = match list_agents(&s.cfg.socket).await {
+        Ok(r) => r,
+        Err(e) => {
+            s.tg.send_msg(chat, None, &format!("⚠️ herdr unreachable: {e}"), None).await;
+            return;
+        }
+    };
+
+    if cmd == "/agents" {
+        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+        s.tg.send_msg(chat, None, &build_menu_text(&spaces, &rows), Some(main_menu_kb(&spaces, &rows))).await;
+        return;
+    }
+
+    if cmd == "/keys" && !arg.is_empty() {
+        let (t, keys) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+        let pane = if keys.is_empty() { None } else { resolve_target(&rows, Some(t)).map(|r| r.pane) };
+        let Some(pane) = pane else {
+            s.tg.send_msg(chat, None, "usage: /keys <pane|kind> <key> [key...]  e.g. /keys w8:p1 y enter", None).await;
+            return;
+        };
+        let key_list: Vec<&str> = keys.split_whitespace().collect();
+        match send_agent_keys(&s.cfg.socket, &pane, &key_list).await {
+            Ok(_) => { s.tg.send_msg(chat, None, "⌨️ sent", None).await; }
+            Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await; }
+        }
+        return;
+    }
+
+    if cmd == "/read" {
+        let row = match resolve_target(&rows, Some(arg)) {
+            Some(r) => Some(r),
+            None if arg.is_empty() => s.get_focus().await.and_then(|p| rows.iter().find(|r| r.pane == p).cloned()),
+            _ => None,
+        };
+        let Some(row) = row else {
+            s.tg.send_msg(chat, None, "unknown target — see /agents", None).await;
+            return;
+        };
+        match read_agent_output(&s.cfg.socket, &row.pane, 80).await {
+            Ok(out) => {
+                let body = if out.is_empty() { "(no output)".into() } else { out };
+                let mid = s.tg.send_msg(chat, None, &body, None).await;
+                s.remember(chat, mid, &row.pane).await;
+                s.set_focus(&row.pane).await;
+            }
+            Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await; }
+        }
+        return;
+    }
+
+    if cmd.starts_with('/') {
+        s.tg.send_msg(chat, None, "unknown command — /help", None).await;
+        return;
+    }
+
+    // Bare text prompt routing
+    let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    let explicit = if rest.is_empty() { None } else { resolve_target(&rows, Some(head)).map(|r| (r, rest.to_string())) };
+    let via_reply = reply_pane.as_deref().and_then(|p| rows.iter().find(|r| r.pane == p)).cloned();
+    let via_focus = s.get_focus().await.and_then(|p| rows.iter().find(|r| r.pane == p)).cloned();
+
+    let (row, prompt_text) = if let Some(pair) = explicit {
+        pair
+    } else if let Some(r) = via_reply {
+        (r, text.to_string())
+    } else if let Some(r) = via_focus {
+        (r, text.to_string())
+    } else if let Some(r) = resolve_target(&rows, Some("")) {
+        (r, text.to_string())
+    } else {
+        s.tg.send_msg(chat, None, "who? tap an agent in /agents, or reply to its last message", None).await;
+        return;
+    };
+
+    if prompt_text.trim().is_empty() { return; }
+    s.set_focus(&row.pane).await;
+    enqueue_prompt(s.clone(), chat, None, row, prompt_text).await;
+}
+
+pub fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow> {
+    match spec {
+        None | Some("") => {
+            if rows.len() == 1 { rows.first().cloned() } else { None }
+        }
+        Some(t) => rows.iter().find(|r| r.pane == t).cloned().or_else(|| {
+            let m: Vec<_> = rows.iter().filter(|r| r.kind == t).collect();
+            if m.len() == 1 { m.first().map(|r| (*r).clone()) } else { None }
+        }),
+    }
+}
+
+async fn handle_run_command(s: &AppState, chat: i64, ws: &str, cmd: &str) {
+    let tab = match rpc_t(&s.cfg.socket, "tab.create", json!({"workspace_id": ws}), 30).await {
+        Ok(t) => t,
+        Err(e) => {
+            s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+            return;
+        }
+    };
+    let pane = tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string();
+    let cmd = cmd.trim();
+    s.tg.send_msg(chat, None, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
+    if let Err(e) = send_pane_text(&s.cfg.socket, &pane, cmd).await {
+        s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+        return;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let out = read_pane_output(&s.cfg.socket, &pane, 40).await.unwrap_or_default();
+    let body = if out.is_empty() { "(no output yet)".into() } else { out };
+    let mid = s.tg.send_msg(chat, None, &body, Some(pane_output_kb(&pane))).await;
+    s.remember(chat, mid, &pane).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_target_by_pane() {
+        let rows = vec![
+            AgentRow {
+                kind: "claude".into(),
+                pane: "w1:p1".into(),
+                title: "dev".into(),
+                status: "idle".into(),
+                ws: "w1".into(),
+            },
+            AgentRow {
+                kind: "opencode".into(),
+                pane: "w1:p2".into(),
+                title: "fix".into(),
+                status: "working".into(),
+                ws: "w1".into(),
+            },
+        ];
+        let found = resolve_target(&rows, Some("w1:p1"));
+        assert_eq!(found.unwrap().pane, "w1:p1");
+
+        let by_kind = resolve_target(&rows, Some("opencode"));
+        assert_eq!(by_kind.unwrap().pane, "w1:p2");
+
+        let nonexistent = resolve_target(&rows, Some("gemini"));
+        assert!(nonexistent.is_none());
+    }
+
+    #[test]
+    fn test_resolve_single_agent() {
+        let rows = vec![AgentRow {
+            kind: "claude".into(),
+            pane: "w1:p1".into(),
+            title: "".into(),
+            status: "idle".into(),
+            ws: "w1".into(),
+        }];
+        let found = resolve_target(&rows, None);
+        assert_eq!(found.unwrap().pane, "w1:p1");
+    }
+}

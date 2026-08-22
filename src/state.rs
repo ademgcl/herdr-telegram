@@ -1,0 +1,83 @@
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
+use tokio::sync::Mutex;
+use crate::{
+    config::Cfg,
+    jobs::job::Job,
+    telegram::client::TelegramClient,
+    topics::TopicManager,
+    types::Res,
+};
+
+pub struct State {
+    pub cfg: Cfg,
+    pub tg: TelegramClient,
+    pub topics: TopicManager,
+    pub offset: Mutex<u64>,
+    pub status: Mutex<HashMap<String, String>>,
+    pub jobs: Mutex<HashMap<String, Arc<Job>>>,
+    pub targets: Mutex<HashMap<(i64, i64), String>>,
+    pub torder: Mutex<VecDeque<(i64, i64)>>,
+    pub focus: Mutex<Option<String>>,
+    pub keywait: Mutex<HashMap<i64, String>>,
+    pub runwait: Mutex<HashMap<i64, String>>,
+}
+
+pub type AppState = Arc<State>;
+
+impl State {
+    pub fn new(cfg: Cfg) -> Res<AppState> {
+        let tg = TelegramClient::new(cfg.token.clone())?;
+        let topics = TopicManager::new(cfg.forum, cfg.socket.clone(), tg.clone());
+        Ok(Arc::new(Self {
+            cfg,
+            tg,
+            topics,
+            offset: Mutex::new(0),
+            status: Mutex::new(HashMap::new()),
+            jobs: Mutex::new(HashMap::new()),
+            targets: Mutex::new(HashMap::new()),
+            torder: Mutex::new(VecDeque::new()),
+            focus: Mutex::new(None),
+            keywait: Mutex::new(HashMap::new()),
+            runwait: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
+        let Some(msg_id) = msg_id else { return };
+        let mut ord = self.torder.lock().await;
+        let mut map = self.targets.lock().await;
+        while map.len() >= 512 {
+            match ord.pop_front() {
+                Some(old) => {
+                    map.remove(&old);
+                }
+                None => break,
+            }
+        }
+        if map.insert((chat, msg_id), pane.to_string()).is_none() {
+            ord.push_back((chat, msg_id));
+        }
+    }
+
+    pub async fn set_focus(&self, pane: &str) {
+        *self.focus.lock().await = Some(pane.to_string());
+    }
+
+    pub async fn get_focus(&self) -> Option<String> {
+        self.focus.lock().await.clone()
+    }
+
+    pub async fn cancel_all_jobs(&self) -> usize {
+        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
+        let count = jobs.len();
+        for job in jobs.values() {
+            job.mark_stopped();
+            job.cancel.notify_waiters();
+        }
+        count
+    }
+}
