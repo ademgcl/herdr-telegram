@@ -578,6 +578,12 @@ async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool) {
     };
     let verb = if new_status == "idle" { "ready" } else { new_status };
     let text = format!("{} {verb}: {label}{hint}", emoji(new_status));
+    let tail = read_output(s, pane, 25).await.unwrap_or_default();
+    let text = if tail.is_empty() {
+        text
+    } else {
+        format!("{text}\n\n{tail}")
+    };
     set_focus(s, pane).await;
     for id in &s.cfg.owners {
         let mid = send(s, *id, &text).await;
@@ -949,6 +955,10 @@ async fn handle_update(s: Arc<State>, u: &Value) {
 
 #[tokio::main]
 async fn main() -> Res<()> {
+    // single-instance guard: a second copy would double every push alert
+    let _guard = tokio::net::TcpListener::bind("127.0.0.1:47319")
+        .await
+        .map_err(|_| "another herdr-telegram instance is already running")?;
     let cfg = cfg_from_env()?;
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
