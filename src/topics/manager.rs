@@ -41,8 +41,31 @@ impl TopicManager {
         self.storage.remove(pane)
     }
 
+    /// True if this flipped the pane to unread (new unseen activity in its topic).
+    pub fn mark_unread(&self, pane: &str) -> bool {
+        self.storage.mark_unread(pane)
+    }
+
+    /// True if this flipped the pane to read (owner interacted with its topic).
+    pub fn mark_read(&self, pane: &str) -> bool {
+        self.storage.mark_read(pane)
+    }
+
+    fn is_unread(&self, pane: &str) -> bool {
+        self.storage.is_unread(pane)
+    }
+
     pub fn topic_name(kind: &str, space: &str, status: &str) -> String {
         format!("{} {kind} · {space}", emoji(status))
+    }
+
+    fn titled_name(&self, pane: &str, kind: &str, space: &str, status: &str) -> String {
+        let base = Self::topic_name(kind, space, status);
+        if self.is_unread(pane) {
+            format!("📩 {base}")
+        } else {
+            base
+        }
     }
 
     pub async fn ensure_topic(&self, pane: &str, kind: &str, space: &str, status: &str) -> Option<i64> {
@@ -50,7 +73,7 @@ impl TopicManager {
             return Some(t);
         }
         let forum = self.forum_id?;
-        let name = Self::topic_name(kind, space, status);
+        let name = self.titled_name(pane, kind, space, status);
         match self.tg.create_forum_topic(forum, &name).await {
             Ok(thread) => {
                 println!("[topics] created topic #{thread} for {pane} ({name})");
@@ -67,7 +90,7 @@ impl TopicManager {
     pub async fn update_topic_title(&self, pane: &str, kind: &str, space: &str, status: &str) {
         let Some(forum) = self.forum_id else { return };
         let Some(thread) = self.ensure_topic(pane, kind, space, status).await else { return };
-        let name = Self::topic_name(kind, space, status);
+        let name = self.titled_name(pane, kind, space, status);
         let _ = self.tg.edit_forum_topic(forum, thread, &name).await;
     }
 

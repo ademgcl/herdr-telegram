@@ -161,6 +161,13 @@ async fn finish(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, 
         chunks(&format!("{header}\n\n{out}"), MAX_MSG_UNITS)
     };
     observe_status(s, pane, settled, true, "job").await;
+    // Result landed in the agent's own topic → mark unread (marker shows in title)
+    if let Some(th) = thread_id
+        && s.cfg.forum == Some(chat_id)
+        && s.topics.pane_of_thread(th).as_deref() == Some(pane)
+    {
+        s.topics.mark_unread(pane);
+    }
     refresh_topic_title(s, pane, settled).await;
     for part in &parts {
         report(s, chat_id, thread_id, pane, part).await;

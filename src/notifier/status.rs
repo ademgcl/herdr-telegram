@@ -63,9 +63,6 @@ pub async fn observe_status(
         .map(|w| format!("#{} {}", w.number, w.label))
         .unwrap_or_else(|| ws_id.clone());
 
-    // Dynamically update forum topic title
-    s.topics.update_topic_title(pane, &kind, raw_space, new_status).await;
-
     let hint = match new_status {
         "blocked" => "\n↩️ reply or type in topic to answer",
         _ => "",
@@ -80,13 +77,16 @@ pub async fn observe_status(
 
     s.set_focus(pane).await;
 
-    // Send to agent forum topic if configured
+    // Send to agent forum topic if configured; flag topic unread + show it in title
     if let Some(forum) = s.cfg.forum {
         if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space, new_status).await {
             let mid = s.tg
                 .send_msg(forum, Some(thread), &text, Some(agent_topic_action_kb(pane)))
                 .await;
             s.remember(forum, mid, pane).await;
+            if mid.is_some() && s.topics.mark_unread(pane) {
+                s.topics.update_topic_title(pane, &kind, raw_space, new_status).await;
+            }
         }
     }
 

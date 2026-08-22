@@ -51,6 +51,12 @@ async fn handle_topic_agent_message(
         return;
     };
 
+    // Owner spoke in the topic → it's been read; drop the 📩 marker
+    if s.topics.mark_read(pane) {
+        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+        s.topics.update_topic_title(pane, &agent.kind, ws_label(&spaces, &agent.ws), &agent.status).await;
+    }
+
     if cmd == "/help" {
         s.tg.send_msg(chat, Some(thread_id), &topic_help_text(pane, &agent.kind), None).await;
         return;
