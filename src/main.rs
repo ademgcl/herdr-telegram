@@ -73,6 +73,10 @@ fn cfg_from_env() -> Res<Cfg> {
             owners.push(id);
         }
     }
+    // .env often carries the same id under several keys (TELEGRAM_CHAT_ID +
+    // TELEGRAM_CHAT_ID_<NAME>) — duplicates would double every broadcast
+    owners.sort_unstable();
+    owners.dedup();
     if owners.is_empty() {
         return Err("no TELEGRAM_CHAT_ID* owner ids found".into());
     }
@@ -580,16 +584,34 @@ async fn observe_status(s: &State, pane: &str, new_status: &str, silent: bool, s
         return;
     }
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
-    let label = match rpc(s, "agent.get", json!({"target": pane})).await {
-        Ok(v) => v["agent"]["agent"].as_str().unwrap_or("?").to_string(),
-        Err(_) => pane.to_string(),
+    let (kind, ws_id, title) = match rpc(s, "agent.get", json!({"target": pane})).await {
+        Ok(v) => {
+            let a = &v["agent"];
+            (
+                a["agent"].as_str().unwrap_or("?").to_string(),
+                a["workspace_id"].as_str().unwrap_or("?").to_string(),
+                a["terminal_title_stripped"].as_str().unwrap_or("").to_string(),
+            )
+        }
+        Err(_) => ("?".into(), "?".into(), String::new()),
     };
+    let space = list_workspaces(s)
+        .await
+        .ok()
+        .and_then(|ws| ws.into_iter().find(|(id, _, _)| *id == ws_id))
+        .map(|(_, label, num)| format!("#{num} {label}"))
+        .unwrap_or_else(|| ws_id.clone());
     let hint = match new_status {
         "blocked" => "\n↩️ reply to answer",
         _ => "",
     };
     let verb = if new_status == "idle" { "ready" } else { new_status };
-    let text = format!("{} {}: {}{hint}", emoji(new_status), verb, label);
+    let mut text = format!("{} {}: {kind} @ {space}", emoji(new_status), verb);
+    if !title.is_empty() {
+        let short: String = title.chars().take(60).collect();
+        text.push_str(&format!("\n{short}"));
+    }
+    text.push_str(hint);
     set_focus(s, pane).await;
     for id in &s.cfg.owners {
         let mid = send_kb(
