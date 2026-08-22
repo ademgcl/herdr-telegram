@@ -331,7 +331,10 @@ async fn build_menu(s: &State) -> Res<(String, Value)> {
                 .collect(),
         );
     }
-    kb.push(vec![btn("➕ spawn agent".into(), "n")]);
+    kb.push(vec![
+        btn("➕ spawn agent".into(), "n"),
+        btn("🆕 space".into(), "N"),
+    ]);
 
     // ---- agents section ----
     text.push_str("\n🤖 agents\n");
@@ -502,6 +505,25 @@ async fn handle_callback(s: Arc<State>, cbq: &Value) {
     let route: Vec<&str> = data.splitn(2, ':').collect();
     if route.as_slice() == ["n"] {
         edit_kb(&s, chat, msg_id, "spawn which agent?", Some(spawn_kb())).await;
+        return;
+    }
+    if route.as_slice() == ["N"] {
+        edit_kb(&s, chat, msg_id, "⏳ creating space…", None).await;
+        let n = list_workspaces(&s).await.map(|w| w.len()).unwrap_or(0) + 1;
+        match rpc_t(
+            &s,
+            "workspace.create",
+            json!({"label": format!("space-{n}")}),
+            30,
+        )
+        .await
+        {
+            Ok(_) => match build_menu(&s).await {
+                Ok((text, kb)) => edit_kb(&s, chat, msg_id, &text, Some(kb)).await,
+                Err(e) => edit_kb(&s, chat, msg_id, &format!("✅ created\n⚠️ {e}"), None).await,
+            },
+            Err(e) => edit_kb(&s, chat, msg_id, &format!("⚠️ {e}"), None).await,
+        }
         return;
     }
     if let ["k", kind] = route.as_slice() {
