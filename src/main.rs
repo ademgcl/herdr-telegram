@@ -30,7 +30,7 @@ struct State {
     http: reqwest::Client,
     offset: Mutex<u64>,
     status: Mutex<HashMap<String, String>>,
-    jobs: Mutex<HashMap<String, Arc<Notify>>>,
+    jobs: Mutex<HashMap<String, Arc<Job>>>,
     // reply-routing: (chat, bot message id) -> agent pane; plus last-interacted pane
     targets: Mutex<HashMap<(i64, i64), String>>,
     torder: Mutex<std::collections::VecDeque<(i64, i64)>>,
@@ -305,21 +305,52 @@ async fn list_workspaces(s: &State) -> Res<Vec<(String, String, u64)>> {
 async fn build_menu(s: &State) -> Res<(String, Value)> {
     let spaces = list_workspaces(s).await?;
     let agents = list_agents(s).await?;
-    let mut text = String::from("🖥 spaces\n\n");
-    let mut kb = Vec::new();
-    for (id, label, num) in &spaces {
+    let label = |id: &str| {
+        spaces
+            .iter()
+            .find(|(sid, _, _)| sid == id)
+            .map(|(_, l, _)| l.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+
+    // ---- spaces section ----
+    let mut text = String::from("🗂 spaces\n");
+    let mut kb: Vec<Vec<Value>> = Vec::new();
+    for (id, sp_label, num) in &spaces {
         let mine: Vec<&AgentRow> = agents.iter().filter(|a| &a.ws == id).collect();
         let emo = worst_status(&mine);
-        text.push_str(&format!("{emo} #{num} {label} — {} agent(s)\n", mine.len()));
-        kb.push(vec![btn(
-            format!("{emo} {label}"),
-            &format!("w:{id}"),
-        )]);
+        text.push_str(&format!("{emo} #{num} {sp_label} — {} agent(s)\n", mine.len()));
     }
-    if spaces.is_empty() {
-        text.push_str("(no spaces)");
+    for pair in spaces.chunks(2) {
+        kb.push(
+            pair.iter()
+                .map(|(id, l, _)| {
+                    let mine: Vec<&AgentRow> = agents.iter().filter(|a| &a.ws == id).collect();
+                    btn(format!("{} {}", worst_status(&mine), l), &format!("w:{id}"))
+                })
+                .collect(),
+        );
     }
     kb.push(vec![btn("➕ spawn agent".into(), "n")]);
+
+    // ---- agents section ----
+    text.push_str("\n🤖 agents\n");
+    if agents.is_empty() {
+        text.push_str("(none — tap ➕ or wait for detection)\n");
+    }
+    for a in &agents {
+        text.push_str(&format!(
+            "{} {} @ {} [{}]\n",
+            emoji(&a.status),
+            a.kind,
+            label(&a.ws),
+            a.pane,
+        ));
+        kb.push(vec![btn(
+            format!("{} {} @ {}", emoji(&a.status), a.kind, label(&a.ws)),
+            &format!("a:{}", a.pane),
+        )]);
+    }
     Ok((text, json!(kb)))
 }
 
@@ -708,12 +739,95 @@ async fn run_stream(s: &Arc<State>) -> Res<&'static str> {
 
 // ---------- prompt jobs ----------
 
-async fn prompt_job(s: Arc<State>, chat: i64, pane: String, text: String) {
-    let cancel = Arc::new(Notify::new());
-    s.jobs.lock().await.insert(pane.clone(), cancel.clone());
+struct Job {
+    cancel: Notify,
+    stopped: std::sync::atomic::AtomicBool,
+    queue: Mutex<std::collections::VecDeque<(i64, String)>>,
+}
 
+/// one line per live agent; ▶️ marks who just received your message
+async fn agents_summary(s: &State, highlight: &str) -> String {
+    let spaces = list_workspaces(s).await.unwrap_or_default();
+    let label = |id: &str| {
+        spaces
+            .iter()
+            .find(|(sid, _, _)| sid == id)
+            .map(|(_, l, _)| l.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+    let rows = list_agents(s).await.unwrap_or_default();
+    let mut out = String::new();
+    for r in &rows {
+        let mark = if r.pane == highlight { "▶️" } else { "·" };
+        out.push_str(&format!(
+            "{mark}{} {} @ {}\n",
+            emoji(&r.status),
+            r.kind,
+            label(&a_ws(r)),
+        ));
+    }
+    out
+}
+
+fn a_ws(r: &AgentRow) -> String {
+    r.ws.clone()
+}
+
+async fn enqueue_prompt(s: Arc<State>, chat: i64, row: AgentRow, text: String) {
+    let existing = s.jobs.lock().await.get(&row.pane).cloned();
+    if let Some(job) = existing {
+        job.queue.lock().await.push_back((chat, text));
+        let summary = agents_summary(&s, &row.pane).await;
+        let mid = send(
+            &s,
+            chat,
+            &format!("📨 queued — runs after the current task\n\n{summary}"),
+        )
+        .await;
+        remember(&s, chat, mid, &row.pane).await;
+        return;
+    }
+    let job = Arc::new(Job {
+        cancel: Notify::new(),
+        stopped: std::sync::atomic::AtomicBool::new(false),
+        queue: Mutex::new(Default::default()),
+    });
+    s.jobs.lock().await.insert(row.pane.clone(), job.clone());
+    tokio::spawn(run_job(s.clone(), chat, row, text, job));
+}
+
+async fn run_job(s: Arc<State>, chat: i64, row: AgentRow, first: String, job: Arc<Job>) {
+    let pane = row.pane.clone();
+    let mut current = Some((chat, first));
+    loop {
+        let item = match current.take() {
+            Some(x) => x,
+            None => match job.queue.lock().await.pop_front() {
+                Some(x) => x,
+                None => break,
+            },
+        };
+        let (to_chat, text) = item;
+
+        let summary = agents_summary(&s, &pane).await;
+        let mid = send(&s, to_chat, &format!("📨 got it — {0} is on it\n\n{summary}", row.kind))
+            .await;
+        remember(&s, to_chat, mid, &pane).await;
+        set_focus(&s, &pane).await;
+
+        process_prompt(&s, to_chat, &pane, text, &job).await;
+        if job.stopped.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+    }
+    println!("[prompt] job done: {pane}");
+    s.jobs.lock().await.remove(&pane);
+}
+
+async fn process_prompt(s: &Arc<State>, chat: i64, pane: &str, text: String, job: &Job) {
+    println!("[prompt] -> {pane}: {}", text.chars().take(80).collect::<String>());
     let fut = rpc_t(
-        &s,
+        s,
         "agent.prompt",
         json!({
             "target": pane,
@@ -724,36 +838,90 @@ async fn prompt_job(s: Arc<State>, chat: i64, pane: String, text: String) {
     );
 
     tokio::select! {
-        _ = cancel.notified() => {
-            let mid = send(&s, chat, "✋ cancelled").await;
-            remember(&s, chat, mid, &pane).await;
+        _ = job.cancel.notified() => {
+            job.stopped.store(true, std::sync::atomic::Ordering::Relaxed);
+            let mid = send(s, chat, "✋ cancelled").await;
+            remember(s, chat, mid, pane).await;
         }
         r = fut => {
-            let settled = match &r {
-                Ok(v) => v["agent"]["agent_status"].as_str()
-                    .or(v["agent_status"].as_str())
-                    .unwrap_or("unknown").to_string(),
-                Err(_) => "unknown".to_string(),
+            // a wait-timeout is NOT a failure: the agent keeps working.
+            // fall back to open-ended watch rounds until it really settles.
+            let wait_timed_out = match &r {
+                Err(e) => e.to_string().contains("agent.prompt timed out"),
+                Ok(_) => false,
             };
-            let msg = match &r {
-                Ok(_) => {
-                    let out = read_output(&s, &pane, 50).await.unwrap_or_default();
-                    if out.is_empty() {
+            let mut msg = if let Err(e) = &r {
+                if wait_timed_out {
+                    String::new()
+                } else {
+                    format!("⚠️ error: {e}")
+                }
+            } else {
+                String::new()
+            };
+
+            if wait_timed_out {
+                send(s, chat, "⏳ still working — I'll ping you when it finishes").await;
+                for round in 0..12 {
+                    if job.stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    let w = rpc_t(
+                        s,
+                        "agent.wait",
+                        json!({
+                            "target": pane,
+                            "until": ["idle", "done", "blocked"],
+                            "timeout_ms": 600_000
+                        }),
+                        660,
+                    )
+                    .await;
+                    let settled = match &w {
+                        Ok(v) => v["agent"]["agent_status"].as_str()
+                            .or(v["agent_status"].as_str())
+                            .map(|x| x.to_string()),
+                        Err(e) => {
+                            if e.to_string().contains("agent.wait timed out") {
+                                if round % 3 == 2 {
+                                    send(s, chat, "⏳ still going…").await;
+                                }
+                                continue;
+                            }
+                            Some("unknown".to_string())
+                        }
+                    };
+                    let Some(settled) = settled else { continue };
+                    let out = read_output(s, pane, 50).await.unwrap_or_default();
+                    msg = if out.is_empty() {
                         format!("{} {settled}\n(no readable output)", emoji(&settled))
                     } else {
                         format!("{} {settled}\n\n{out}", emoji(&settled))
-                    }
+                    };
+                    observe_status(s, pane, &settled, true, "job").await;
+                    break;
                 }
-                Err(e) => format!("⚠️ error: {e}"),
-            };
-            // sync the cache so the event stream / watchdog don't re-report this transition
-            observe_status(&s, &pane, &settled, true, "job").await;
-            let mid = send(&s, chat, &msg).await;
-            remember(&s, chat, mid, &pane).await;
-            set_focus(&s, &pane).await;
+                if msg.is_empty() {
+                    msg = "⚠️ gave up watching (agent never settled)".into();
+                }
+            } else if let Ok(v) = &r {
+                let settled = v["agent"]["agent_status"].as_str()
+                    .or(v["agent_status"].as_str())
+                    .unwrap_or("unknown");
+                let out = read_output(s, pane, 50).await.unwrap_or_default();
+                msg = if out.is_empty() {
+                    format!("{} {settled}\n(no readable output)", emoji(settled))
+                } else {
+                    format!("{} {settled}\n\n{out}", emoji(settled))
+                };
+                observe_status(s, pane, settled, true, "job").await;
+            }
+
+            let mid = send(s, chat, &msg).await;
+            remember(s, chat, mid, pane).await;
+            set_focus(s, pane).await;
         }
     }
-    s.jobs.lock().await.remove(&pane);
 }
 
 // ---------- command handling ----------
@@ -815,9 +983,9 @@ async fn handle_message(s: Arc<State>, chat: i64, msg: &Value) {
 
     if cmd == "/cancel" {
         s.keywait.lock().await.remove(&chat);
-        let jobs: HashMap<String, Arc<Notify>> = std::mem::take(&mut *s.jobs.lock().await);
+        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *s.jobs.lock().await);
         for n in jobs.values() {
-            n.notify_waiters();
+            n.cancel.notify_waiters();
         }
         send(
             &s,
@@ -841,7 +1009,6 @@ async fn handle_message(s: Arc<State>, chat: i64, msg: &Value) {
         }
         return;
     }
-
     let rows = match list_agents(&s).await {
         Ok(r) => r,
         Err(e) => {
@@ -948,7 +1115,7 @@ async fn handle_message(s: Arc<State>, chat: i64, msg: &Value) {
         return;
     }
     set_focus(&s, &row.pane).await;
-    tokio::spawn(prompt_job(s.clone(), chat, row.pane, prompt_text));
+    enqueue_prompt(s.clone(), chat, row, prompt_text).await;
 }
 
 // ---------- auth & update routing ----------
@@ -1018,6 +1185,21 @@ async fn main() -> Res<()> {
     if pong["protocol"].as_u64() != Some(20) {
         eprintln!("[herdr] WARNING: unexpected protocol version — commands may fail");
     }
+
+    // register the Telegram menu button so commands are one tap, never typed
+    let _ = tg_call(
+        &s,
+        "setMyCommands",
+        json!({"commands": [
+            {"command": "agents", "description": "open control panel (spaces + agents)"},
+            {"command": "read", "description": "recent output of focused agent"},
+            {"command": "cancel", "description": "abort pending prompts / keys-mode"},
+            {"command": "keys", "description": "/keys <pane> y enter — send raw keys"},
+            {"command": "help", "description": "how to drive agents from here"},
+        ]}),
+        Duration::from_secs(15),
+    )
+    .await;
 
     // seed status cache without notification storm
     reconcile(&s, true, "seed").await;
