@@ -5,10 +5,7 @@ use crate::{
     jobs::job::Job,
     notifier::{observe_status, refresh_topic_title},
     state::AppState,
-    types::{
-        AgentRow, PromptRequest, MAX_MSG_UNITS, PROMPT_TIMEOUT_MS, WATCH_REASSURE_ROUNDS,
-        WATCH_TIMEOUT_MS,
-    },
+    types::{AgentRow, PromptRequest, MAX_MSG_UNITS, PROMPT_TIMEOUT_MS, WATCH_TIMEOUT_MS},
     ui::{chunks, emoji},
 };
 
@@ -102,8 +99,10 @@ async fn process_prompt(
                 .unwrap_or("unknown");
             finish(s, chat_id, thread_id, pane, settled).await;
         }
+        // Agent still busy — covers BOTH our client-side timeout ("herdr agent.prompt
+        // timed out") and herdr's server-side wait timeout ("timed out waiting for
+        // agent status"). Stay silent; keep watching until it settles or dies.
         Err(e) if e.to_string().contains("timed out") => {
-            s.tg.send_msg(chat_id, thread_id, "⏳ still working — pinging when done", None).await;
             watch(s, chat_id, thread_id, pane, job).await;
         }
         Err(e) => {
@@ -112,8 +111,10 @@ async fn process_prompt(
     }
 }
 
+/// Watch an agent until it settles — silently, for as long as it takes.
+/// Only speaks up on completion, cancellation, or a real failure.
 async fn watch(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, job: &Job) {
-    for round in 0u64.. {
+    loop {
         if job.is_stopped() { return; }
         let w = rpc_t(
             &s.cfg.socket,
@@ -142,11 +143,8 @@ async fn watch(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, j
                     report(s, chat_id, thread_id, pane, &format!("⚠️ error: {e}")).await;
                     return;
                 }
-                Err(_) => {
-                    if round % WATCH_REASSURE_ROUNDS == WATCH_REASSURE_ROUNDS - 1 {
-                        s.tg.send_msg(chat_id, thread_id, "⏳ still going…", None).await;
-                    }
-                }
+                // Round elapsed and the agent is still working — stay quiet
+                Err(_) => {}
             },
         }
     }
