@@ -103,13 +103,3 @@ pub fn agent_card_kb(pane: &str, ws: &str) -> Value {
 pub fn pane_output_kb(pane: &str) -> Value {
     json!([[btn("🔄 refresh", &format!("p:{pane}"))]])
 }
-
-pub fn agent_topic_action_kb(pane: &str) -> Value {
-    json!([
-        [
-            btn("📄 output", &format!("o:{pane}")),
-            btn("⌨️ keys", &format!("K:{pane}")),
-            btn("🔄 refresh", &format!("a:{pane}")),
-        ]
-    ])
-}

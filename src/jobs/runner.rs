@@ -14,6 +14,8 @@ use crate::{
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
+/// Busy alternate-screen panes reject large reads — poll a small visible tail.
+const LIVE_READ_LINES: u32 = 40;
 
 pub async fn enqueue_prompt(
     s: AppState,
@@ -101,13 +103,20 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     break;
                 }
 
-                // Still working — pulse the typing indicator, stream output tail
+                // Still working — pulse typing, stream the visible tail
                 let (chat, th) = *job.dest.lock().await;
                 s.tg.typing(chat, th).await;
                 if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {
                     continue;
                 }
-                let screen = read_screen(&s.cfg.socket, &pane, 400).await;
+                let screen = read_screen(&s.cfg.socket, &pane, LIVE_READ_LINES).await;
+                if screen.is_empty() {
+                    continue; // busy pane still refusing reads — try next tick
+                }
+                if !job.baseline_ok() {
+                    job.anchor_baseline(screen).await;
+                    continue;
+                }
                 let base = job.baseline.lock().await.clone();
                 let body = tail_fit(delta(&screen, &base), 3200);
                 if body.is_empty() {
@@ -139,6 +148,10 @@ async fn finalize(
     live_mid: &mut Option<i64>,
 ) {
     let screen = read_screen(&s.cfg.socket, pane, 2000).await;
+    if !job.baseline_ok() && !screen.is_empty() {
+        job.anchor_baseline(screen.clone()).await;
+        return; // never saw the pane during work — nothing to report
+    }
     let base = job.baseline.lock().await.clone();
     let body = join_trimmed(delta(&screen, &base));
     *job.baseline.lock().await = screen;
