@@ -154,8 +154,10 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     }
 }
 
-/// Turn the live message into the final result card: the accumulated stream
-/// IS the agent's output. Screen-delta is only a fallback when nothing streamed.
+/// Turn the live message into the final result card. Preference order:
+/// 1. opencode's structured store — the agent's literal final reply
+/// 2. the accumulated live stream
+/// 3. one screen-delta (fast tasks where nothing streamed)
 async fn finalize(
     s: &AppState,
     pane: &str,
@@ -164,13 +166,18 @@ async fn finalize(
     live_mid: &mut Option<i64>,
     acc: &mut Vec<String>,
 ) {
-    let body = if acc.is_empty() {
-        // Nothing streamed (fast task / reads refused) — try one screen delta
-        let screen = read_screen(&s.cfg.socket, pane, 2000).await;
-        let base = job.baseline.lock().await.clone();
-        join_trimmed(delta(&screen, &base))
-    } else {
-        join_trimmed(acc)
+    let cwd = get_agent(&s.cfg.socket, pane)
+        .await
+        .ok()
+        .map(|a| a.cwd);
+    let body = match cwd.as_deref().and_then(crate::opencode::final_reply) {
+        Some(reply) if !reply.trim().is_empty() => reply,
+        _ if !acc.is_empty() => join_trimmed(acc),
+        _ => {
+            let screen = read_screen(&s.cfg.socket, pane, 2000).await;
+            let base = job.baseline.lock().await.clone();
+            join_trimmed(delta(&screen, &base))
+        }
     };
 
     let header = format!("{} {settled}", emoji(settled));

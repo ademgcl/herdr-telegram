@@ -3,6 +3,7 @@ mod handlers;
 mod herdr;
 mod jobs;
 mod notifier;
+mod opencode;
 mod state;
 mod telegram;
 mod topics;
