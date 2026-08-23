@@ -77,29 +77,35 @@ pub async fn observe_status(
 
     s.set_focus(pane).await;
 
-    // Send to agent forum topic if configured; flag topic unread + show it in title
+    // Deliver the alert to the agent's forum topic; flag unread + show it in title
+    let mut delivered = false;
     if let Some(forum) = s.cfg.forum {
         if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space, new_status).await {
             let mid = s.tg
                 .send_msg(forum, Some(thread), &text, Some(agent_topic_action_kb(pane)))
                 .await;
             s.remember(forum, mid, pane).await;
-            if mid.is_some() && s.topics.mark_unread(pane) {
-                s.topics.update_topic_title(pane, &kind, raw_space, new_status).await;
+            if mid.is_some() {
+                delivered = true;
+                if s.topics.mark_unread(pane) {
+                    s.topics.update_topic_title(pane, &kind, raw_space, new_status).await;
+                }
             }
         }
     }
 
-    // Also send alert to DM owners
-    for id in &s.cfg.owners {
-        let mid = s.tg
-            .send_msg(
-                *id,
-                None,
-                &text,
-                Some(json!([[btn("show output", &format!("o:{pane}"))]])),
-            )
-            .await;
-        s.remember(*id, mid, pane).await;
+    // DM fallback only when topics aren't available (no forum / topic delivery failed)
+    if !delivered {
+        for id in &s.cfg.owners {
+            let mid = s.tg
+                .send_msg(
+                    *id,
+                    None,
+                    &text,
+                    Some(json!([[btn("show output", &format!("o:{pane}"))]])),
+                )
+                .await;
+            s.remember(*id, mid, pane).await;
+        }
     }
 }
