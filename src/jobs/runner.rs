@@ -73,6 +73,8 @@ pub async fn enqueue_prompt(
 async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut live_mid: Option<i64> = None;
     let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
+    // Everything the agent produced since the prompt — becomes the final card
+    let mut acc: Vec<String> = Vec::new();
 
     loop {
         if job.is_stopped() {
@@ -99,7 +101,7 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     {
                         continue;
                     }
-                    finalize(&s, &pane, &job, &agent.status, &mut live_mid).await;
+                    finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
                     break;
                 }
 
@@ -118,11 +120,16 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     continue;
                 }
                 let base = job.baseline.lock().await.clone();
-                let body = tail_fit(delta(&screen, &base), 3200);
-                if body.is_empty() {
+                let fresh: Vec<String> = delta(&screen, &base).to_vec();
+                if fresh.is_empty() {
                     continue;
                 }
-                let text = format!("🔄 working…\n\n{body}");
+                acc.extend(fresh);
+                if acc.len() > 400 {
+                    let drop = acc.len() - 400;
+                    acc.drain(..drop);
+                }
+                let text = format!("🔄 working…\n\n{}", tail_fit(&acc, 3200));
                 match live_mid {
                     Some(mid) => s.tg.edit_msg(chat, mid, &text, None).await,
                     None => live_mid = s.tg.send_msg(chat, th, &text, None).await,
@@ -139,26 +146,28 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     }
 }
 
-/// Turn the live message into the final result card; extra chunks follow it.
+/// Turn the live message into the final result card: the accumulated stream
+/// IS the agent's output. Screen-delta is only a fallback when nothing streamed.
 async fn finalize(
     s: &AppState,
     pane: &str,
     job: &Arc<Job>,
     settled: &str,
     live_mid: &mut Option<i64>,
+    acc: &mut Vec<String>,
 ) {
-    let screen = read_screen(&s.cfg.socket, pane, 2000).await;
-    if !job.baseline_ok() && !screen.is_empty() {
-        job.anchor_baseline(screen.clone()).await;
-        return; // never saw the pane during work — nothing to report
-    }
-    let base = job.baseline.lock().await.clone();
-    let body = join_trimmed(delta(&screen, &base));
-    *job.baseline.lock().await = screen;
+    let body = if acc.is_empty() {
+        // Nothing streamed (fast task / reads refused) — try one screen delta
+        let screen = read_screen(&s.cfg.socket, pane, 2000).await;
+        let base = job.baseline.lock().await.clone();
+        join_trimmed(delta(&screen, &base))
+    } else {
+        join_trimmed(acc)
+    };
 
     let header = format!("{} {settled}", emoji(settled));
     let parts: Vec<String> = if body.is_empty() {
-        vec![format!("{header}\n(no new output)")]
+        vec![format!("{header}\n(no captured output)")]
     } else {
         chunks(&format!("{header}\n\n{body}"), MAX_MSG_UNITS)
     };
