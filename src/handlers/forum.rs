@@ -53,11 +53,6 @@ async fn handle_topic_agent_message(
     };
     println!("[forum] got agent {}", agent.pane);
 
-    // Owner spoke in the topic → it's been read; drop the 📩 marker
-    if s.topics.mark_read(pane) {
-        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-        s.topics.update_topic_title(pane, &agent.kind, ws_label(&spaces, &agent.ws), &agent.status).await;
-    }
 
     if cmd == "/help" {
         s.tg.send_msg(chat, Some(thread_id), &topic_help_text(pane, &agent.kind), None).await;
@@ -154,7 +149,7 @@ async fn handle_general_forum_message(
         match spawn_agent(&s.cfg.socket, kind, ws).await {
             Ok(row) => {
                 let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, ws_label(&spaces, &row.ws), &row.status).await {
+                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, ws_label(&spaces, &row.ws)).await {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}] in topic #{topic_th}", row.kind, row.pane), None).await;
                 } else {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}]", row.kind, row.pane), None).await;

@@ -101,29 +101,6 @@ impl TopicStorage {
         self.store.lock().unwrap().topics.clone()
     }
 
-    pub fn is_unread(&self, pane: &str) -> bool {
-        self.store.lock().unwrap().unread.contains(pane)
-    }
-
-    /// Returns true if this transitioned the pane to unread.
-    pub fn mark_unread(&self, pane: &str) -> bool {
-        let mut s = self.store.lock().unwrap();
-        if s.unread.insert(pane.to_string()) {
-            self.save(&s);
-            return true;
-        }
-        false
-    }
-
-    /// Returns true if this transitioned the pane to read.
-    pub fn mark_read(&self, pane: &str) -> bool {
-        let mut s = self.store.lock().unwrap();
-        if s.unread.remove(pane) {
-            self.save(&s);
-            return true;
-        }
-        false
-    }
 }
 
 #[cfg(test)]
@@ -144,24 +121,14 @@ mod tests {
     }
 
     #[test]
-    fn test_unread_transitions() {
+    fn test_persistence_across_reopen() {
         let st = TopicStorage::at(PathBuf::from(format!(
             "/tmp/herdr-tg-test-topics-{}.json",
             std::process::id()
         )));
-        let probe = "test:pane";
-        assert!(!st.is_unread(probe));
-        assert!(st.mark_unread(probe));
-        assert!(!st.mark_unread(probe));
-        assert!(st.is_unread(probe));
-        assert!(st.mark_read(probe));
-        assert!(!st.mark_read(probe));
-        assert!(!st.is_unread(probe));
-
-        // persistence across reopen
-        st.mark_unread("w9:p9");
+        st.insert("w9:p9".into(), 77);
         let re = TopicStorage::at(st.file_path.clone());
-        assert!(re.is_unread("w9:p9"));
+        assert_eq!(re.get_thread("w9:p9"), Some(77));
         let _ = std::fs::remove_file(&st.file_path);
     }
 }

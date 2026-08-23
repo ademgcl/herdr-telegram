@@ -5,14 +5,6 @@ use crate::{
     ui::{btn, emoji, ws_label},
 };
 
-/// Force-refresh an agent's forum topic title to reflect `status`
-/// (used by the prompt pipeline for instant 🔄 / settled flips).
-pub async fn refresh_topic_title(s: &AppState, pane: &str, status: &str) {
-    let Ok(a) = get_agent(&s.cfg.socket, pane).await else { return };
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    s.topics.update_topic_title(pane, &a.kind, ws_label(&spaces, &a.ws), status).await;
-}
-
 pub async fn observe_status(
     s: &AppState,
     pane: &str,
@@ -81,12 +73,9 @@ pub async fn observe_status(
     // Alerts belong WHERE THE AGENT LIVES: its topic, as plain chat text.
     // Direct messages are only for non-forum setups. Never both.
     if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space, new_status).await {
+        if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space).await {
             let mid = s.tg.send_msg(forum, Some(thread), &text, None).await;
             s.remember(forum, mid, pane).await;
-            if mid.is_some() && s.topics.mark_unread(pane) {
-                s.topics.update_topic_title(pane, &kind, raw_space, new_status).await;
-            }
         }
     } else {
         for id in &s.cfg.owners {

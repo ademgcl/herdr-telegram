@@ -2,4 +2,4 @@ pub mod reconcile;
 pub mod status;
 
 pub use reconcile::reconcile;
-pub use status::{observe_status, refresh_topic_title};
+pub use status::observe_status;

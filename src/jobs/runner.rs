@@ -4,7 +4,7 @@ use tokio::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, read_screen, rpc_t},
     jobs::job::Job,
-    notifier::{observe_status, refresh_topic_title},
+    notifier::observe_status,
     state::AppState,
     types::{
         AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, LIVE_TICK_SECS, MAX_MSG_UNITS,
@@ -180,13 +180,6 @@ async fn finalize(
             _ => report(s, chat, th, pane, part).await,
         }
     }
-    if let Some(th) = th
-        && s.cfg.forum == Some(chat)
-        && s.topics.pane_of_thread(th).as_deref() == Some(pane)
-    {
-        s.topics.mark_unread(pane);
-    }
-    refresh_topic_title(s, pane, settled).await;
     *job.pending.lock().await = 0;
 
     // Nothing outstanding? Retire the watcher atomically.

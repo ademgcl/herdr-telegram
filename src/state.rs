@@ -35,7 +35,7 @@ impl State {
 
     pub fn new(cfg: Cfg) -> Res<AppState> {
         let tg = TelegramClient::new(cfg.token.clone())?;
-        let topics = TopicManager::new(cfg.forum, cfg.socket.clone(), tg.clone());
+        let topics = TopicManager::new(cfg.forum, tg.clone());
         // Survive restarts: routing target must not vanish on redeploy
         let file = Self::focus_file();
         let home = std::env::var("HOME").unwrap_or_default();

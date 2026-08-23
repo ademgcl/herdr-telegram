@@ -22,7 +22,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                 .find(|w| w.id == r.ws)
                 .map(|w| w.label.as_str())
                 .unwrap_or(&r.ws);
-            s.topics.ensure_topic(&r.pane, &r.kind, space_label, &r.status).await;
+            s.topics.ensure_topic(&r.pane, &r.kind, space_label).await;
         }
     }
 
@@ -31,7 +31,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         let stored = s.topics.all_mappings();
         for (pane, _) in stored {
             if !live_panes.contains(&pane) {
-                s.topics.close_topic(&pane, "agent", "done").await;
+                s.topics.close_topic(&pane).await;
                 s.topics.remove_mapping(&pane);
             }
         }

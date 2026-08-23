@@ -149,20 +149,6 @@ impl TelegramClient {
             .ok_or_else(|| "missing message_thread_id in createForumTopic response".into())
     }
 
-    pub async fn edit_forum_topic(&self, chat_id: i64, thread_id: i64, name: &str) -> Res<()> {
-        self.call(
-            "editForumTopic",
-            json!({
-                "chat_id": chat_id,
-                "message_thread_id": thread_id,
-                "name": name,
-            }),
-            Duration::from_secs(15),
-        )
-        .await?;
-        Ok(())
-    }
-
     pub async fn close_forum_topic(&self, chat_id: i64, thread_id: i64) -> Res<()> {
         self.call(
             "closeForumTopic",
