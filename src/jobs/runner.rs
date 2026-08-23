@@ -1,14 +1,19 @@
 use std::sync::Arc;
 use serde_json::json;
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, read_screen, rpc_t},
     jobs::job::Job,
     notifier::{observe_status, refresh_topic_title},
     state::AppState,
-    types::{AgentRow, PromptRequest, MAX_MSG_UNITS, WATCH_TIMEOUT_MS},
-    ui::{chunks, emoji},
+    types::{
+        AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, LIVE_TICK_SECS, MAX_MSG_UNITS,
+    },
+    ui::{chunks, emoji, tail_fit},
 };
+
+/// Terminal statuses that end a watch cycle.
+const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
 
 pub async fn enqueue_prompt(
     s: AppState,
@@ -62,88 +67,129 @@ pub async fn enqueue_prompt(
     println!("[jobs] enqueue done");
 }
 
-/// Watch the agent; report fresh output each time it settles.
-/// Silent while it works — no matter how many prompts stream in.
+/// Watch the agent: live-stream fresh output into one editable message,
+/// then finalize it into the result card when the agent settles.
 async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
+    let mut live_mid: Option<i64> = None;
+    let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
+
     loop {
         if job.is_stopped() {
+            let (chat, th) = *job.dest.lock().await;
+            edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
             break;
         }
 
-        let w = rpc_t(
-            &s.cfg.socket,
-            "agent.wait",
-            json!({"target": pane, "until": ["idle", "done", "blocked"], "timeout_ms": WATCH_TIMEOUT_MS}),
-            WATCH_TIMEOUT_MS / 1000 + 60,
-        );
-        let w = tokio::select! {
+        tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
                 let (chat, th) = *job.dest.lock().await;
-                report(&s, chat, th, &pane, "✋ cancelled").await;
+                edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                 break;
             }
-            w = w => w,
-        };
+            _ = tokio::time::sleep(Duration::from_secs(LIVE_TICK_SECS)) => {
+                let Ok(agent) = get_agent(&s.cfg.socket, &pane).await else { continue };
 
-        // Real failure (pane died / herdr unreachable) — say so and stop
-        if let Err(e) = &w
-            && !e.to_string().contains("timed out")
-        {
-            let (chat, th) = *job.dest.lock().await;
-            report(&s, chat, th, &pane, &format!("⚠️ error: {e}")).await;
-            break;
-        }
+                if SETTLED.contains(&agent.status.as_str()) {
+                    // Collapse done↔idle flapping before committing to a report
+                    tokio::time::sleep(Duration::from_millis(750)).await;
+                    if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
+                        && a.status == "working"
+                    {
+                        continue;
+                    }
+                    finalize(&s, &pane, &job, &agent.status, &mut live_mid).await;
+                    break;
+                }
 
-        let Ok(v) = w else { continue }; // round elapsed, still working — stay quiet
-        let settled = v["agent"]["agent_status"]
-            .as_str()
-            .or(v["agent_status"].as_str())
-            .unwrap_or("unknown");
-
-        // Collapse done↔idle flapping: re-check briefly before reporting
-        tokio::time::sleep(Duration::from_millis(750)).await;
-        if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
-            && a.status == "working"
-        {
-            continue;
-        }
-
-        // Report everything produced since the last settle
-        let screen = read_screen(&s.cfg.socket, &pane, 2000).await;
-        let base = job.baseline.lock().await.clone();
-        let body = join_trimmed(delta(&screen, &base));
-        *job.baseline.lock().await = screen;
-
-        let (chat, th) = *job.dest.lock().await;
-        if !body.is_empty() {
-            let msg = format!("{} {settled}\n\n{body}", emoji(settled));
-            for part in chunks(&msg, MAX_MSG_UNITS) {
-                report(&s, chat, th, &pane, &part).await;
+                // Still working — stream fresh output into the live message
+                if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {
+                    continue;
+                }
+                let screen = read_screen(&s.cfg.socket, &pane, 400).await;
+                let base = job.baseline.lock().await.clone();
+                let body = tail_fit(delta(&screen, &base), 3200);
+                if body.is_empty() {
+                    continue;
+                }
+                let (chat, th) = *job.dest.lock().await;
+                let text = format!("🔄 working…\n\n{body}");
+                match live_mid {
+                    Some(mid) => s.tg.edit_msg(chat, mid, &text, None).await,
+                    None => live_mid = s.tg.send_msg(chat, th, &text, None).await,
+                }
+                last_edit = Instant::now();
             }
-        }
-        observe_status(&s, &pane, settled, true, "job").await;
-        if let Some(th) = th
-            && s.cfg.forum == Some(chat)
-            && s.topics.pane_of_thread(th).as_deref() == Some(&pane)
-        {
-            s.topics.mark_unread(&pane);
-        }
-        refresh_topic_title(&s, &pane, settled).await;
-        *job.pending.lock().await = 0;
-
-        // Nothing outstanding? Retire the watcher atomically.
-        let mut map = s.jobs.lock().await;
-        if *job.pending.lock().await == 0
-            && map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false)
-        {
-            map.remove(&pane);
-            println!("[prompt] watcher retired: {pane}");
-            return;
         }
     }
 
-    s.jobs.lock().await.remove(&pane);
+    // Retire only if the map still points at THIS watcher (no newer job took over)
+    let mut map = s.jobs.lock().await;
+    if map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
+        map.remove(&pane);
+    }
+}
+
+/// Turn the live message into the final result card; extra chunks follow it.
+async fn finalize(
+    s: &AppState,
+    pane: &str,
+    job: &Arc<Job>,
+    settled: &str,
+    live_mid: &mut Option<i64>,
+) {
+    let screen = read_screen(&s.cfg.socket, pane, 2000).await;
+    let base = job.baseline.lock().await.clone();
+    let body = join_trimmed(delta(&screen, &base));
+    *job.baseline.lock().await = screen;
+
+    let header = format!("{} {settled}", emoji(settled));
+    let parts: Vec<String> = if body.is_empty() {
+        vec![format!("{header}\n(no new output)")]
+    } else {
+        chunks(&format!("{header}\n\n{body}"), MAX_MSG_UNITS)
+    };
+
+    observe_status(s, pane, settled, true, "job").await;
+    let (chat, th) = *job.dest.lock().await;
+    for (i, part) in parts.iter().enumerate() {
+        match (i, *live_mid) {
+            (0, Some(mid)) => s.tg.edit_msg(chat, mid, part, None).await,
+            _ => report(s, chat, th, pane, part).await,
+        }
+    }
+    if let Some(th) = th
+        && s.cfg.forum == Some(chat)
+        && s.topics.pane_of_thread(th).as_deref() == Some(pane)
+    {
+        s.topics.mark_unread(pane);
+    }
+    refresh_topic_title(s, pane, settled).await;
+    *job.pending.lock().await = 0;
+
+    // Nothing outstanding? Retire the watcher atomically.
+    let mut map = s.jobs.lock().await;
+    if *job.pending.lock().await == 0
+        && map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false)
+    {
+        map.remove(pane);
+        println!("[prompt] watcher retired: {pane}");
+    }
+}
+
+async fn edit_live(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    live_mid: &mut Option<i64>,
+    text: &str,
+) {
+    if let Some(mid) = live_mid.take() {
+        s.tg.edit_msg(chat_id, mid, text, None).await;
+    } else {
+        report(s, chat_id, thread_id, pane, text).await;
+    }
 }
 
 async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {

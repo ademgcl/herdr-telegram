@@ -94,10 +94,23 @@ impl TelegramClient {
         if let Some(kb) = keyboard {
             params["reply_markup"] = json!({"inline_keyboard": kb});
         }
-        if let Err(e) = self.call("editMessageText", params, Duration::from_secs(15)).await {
-            let msg = e.to_string();
-            if !msg.contains("message is not modified") {
-                eprintln!("editMessageText failed: {msg}");
+        for attempt in 0..3 {
+            match self.call("editMessageText", params.clone(), Duration::from_secs(15)).await {
+                Ok(_) => return,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("message is not modified") {
+                        return;
+                    }
+                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    if attempt == 2 {
+                        eprintln!("editMessageText failed: {msg}");
+                        return;
+                    }
+                }
             }
         }
     }

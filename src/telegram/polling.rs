@@ -1,6 +1,6 @@
 use std::time::Duration;
 use serde_json::{json, Value};
-use crate::{state::AppState, telegram::client::TelegramClient, types::Res};
+use crate::{telegram::client::TelegramClient, types::Res};
 
 pub async fn get_updates(tg: &TelegramClient, offset: u64, poll_secs: i64) -> Res<Vec<Value>> {
     let r = tg

@@ -135,6 +135,22 @@ pub fn build_agent_card_text(a: &AgentDetail) -> String {
     )
 }
 
+/// Last lines that fit within `max_units` — live progress tails read bottom-up.
+pub fn tail_fit(lines: &[String], max_units: usize) -> String {
+    let mut picked: Vec<&str> = Vec::new();
+    let mut units = 0;
+    for l in lines.iter().rev() {
+        let lu = l.encode_utf16().count() + 1;
+        if units + lu > max_units {
+            break;
+        }
+        units += lu;
+        picked.push(l);
+    }
+    picked.reverse();
+    picked.join("\n").trim().to_string()
+}
+
 pub fn help_text() -> &'static str {
     "/agents   control panel: spaces, agents, ➕ spawn\n\
      /read     recent output of focused agent\n\
