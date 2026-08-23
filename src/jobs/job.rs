@@ -1,25 +1,33 @@
 use std::{
-    collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
 use tokio::sync::{Mutex, Notify};
-use crate::types::PromptRequest;
 
+/// Per-pane prompt channel: submissions are delivered to the agent
+/// immediately (like typing in the pane); the watcher reports output
+/// whenever the agent settles.
 pub struct Job {
     pub cancel: Notify,
     pub stopped: AtomicBool,
-    pub queue: Mutex<VecDeque<PromptRequest>>,
+    /// Prompts submitted but not yet covered by a settle report.
+    pub pending: Mutex<usize>,
+    /// Pane screen at the last report — delta baseline.
+    pub baseline: Mutex<Vec<String>>,
+    /// Where the next report should be delivered (last submitter wins).
+    pub dest: Mutex<(i64, Option<i64>)>,
 }
 
 impl Job {
-    pub fn new() -> Arc<Self> {
+    pub fn new(baseline: Vec<String>, chat_id: i64, thread_id: Option<i64>) -> Arc<Self> {
         Arc::new(Self {
             cancel: Notify::new(),
             stopped: AtomicBool::new(false),
-            queue: Mutex::new(VecDeque::new()),
+            pending: Mutex::new(0),
+            baseline: Mutex::new(baseline),
+            dest: Mutex::new((chat_id, thread_id)),
         })
     }
 

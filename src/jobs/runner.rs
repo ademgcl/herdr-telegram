@@ -1,11 +1,12 @@
 use std::sync::Arc;
 use serde_json::json;
+use tokio::time::Duration;
 use crate::{
-    herdr::client::{read_agent_output, rpc_t},
+    herdr::client::{get_agent, read_screen, rpc_t},
     jobs::job::Job,
     notifier::{observe_status, refresh_topic_title},
     state::AppState,
-    types::{AgentRow, PromptRequest, MAX_MSG_UNITS, PROMPT_TIMEOUT_MS, WATCH_TIMEOUT_MS},
+    types::{AgentRow, PromptRequest, MAX_MSG_UNITS, WATCH_TIMEOUT_MS},
     ui::{chunks, emoji},
 };
 
@@ -21,150 +22,127 @@ pub async fn enqueue_prompt(
         message_thread_id: thread_id,
         text,
     };
+    let pane = row.pane.clone();
 
-    let existing = s.jobs.lock().await.get(&row.pane).cloned();
-    if let Some(job) = existing {
-        job.queue.lock().await.push_back(req);
-        let mid = s.tg.send_msg(chat_id, thread_id, "📨 queued — runs after the current task", None).await;
-        s.remember(chat_id, mid, &row.pane).await;
-        return;
+    let job = match s.jobs.lock().await.get(&pane).cloned() {
+        Some(j) => j,
+        None => {
+            let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+            let j = Job::new(baseline, chat_id, thread_id);
+            s.jobs.lock().await.insert(pane.clone(), j.clone());
+            tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
+            j
+        }
+    };
+
+    *job.dest.lock().await = (req.chat_id, req.message_thread_id);
+    *job.pending.lock().await += 1;
+
+    // Deliver immediately — interactive agents buffer input like a real terminal
+    if let Err(e) = rpc_t(
+        &s.cfg.socket,
+        "agent.prompt",
+        json!({"target": pane, "text": req.text}),
+        30,
+    )
+    .await
+    {
+        *job.pending.lock().await -= 1;
+        report(&s, req.chat_id, req.message_thread_id, &pane, &format!("⚠️ error: {e}")).await;
     }
-
-    let job = Job::new();
-    s.jobs.lock().await.insert(row.pane.clone(), job.clone());
-    tokio::spawn(run_job(s.clone(), req, row, job));
 }
 
-async fn run_job(s: AppState, first_req: PromptRequest, row: AgentRow, job: Arc<Job>) {
-    let pane = row.pane.clone();
-    let mut current = Some(first_req);
-
+/// Watch the agent; report fresh output each time it settles.
+/// Silent while it works — no matter how many prompts stream in.
+async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     loop {
-        let req = match current.take() {
-            Some(r) => r,
-            None => match job.queue.lock().await.pop_front() {
-                Some(r) => r,
-                None => break,
-            },
-        };
-
-        // No chat ack — the agent's topic title flips to 🔄 instead
-        refresh_topic_title(&s, &pane, "working").await;
-        s.set_focus(&pane).await;
-
-        process_prompt(&s, req.chat_id, req.message_thread_id, &pane, req.text, &job).await;
         if job.is_stopped() {
             break;
         }
-    }
 
-    println!("[prompt] job finished: {pane}");
-    s.jobs.lock().await.remove(&pane);
-}
-
-async fn process_prompt(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    text: String,
-    job: &Job,
-) {
-    println!("[prompt] -> {pane}: {}", text.chars().take(80).collect::<String>());
-    let baseline = pane_tail(s, pane, 400).await;
-    let fut = rpc_t(
-        &s.cfg.socket,
-        "agent.prompt",
-        json!({
-            "target": pane,
-            "text": text,
-            "wait": {"until": ["idle", "done", "blocked"], "timeout_ms": PROMPT_TIMEOUT_MS}
-        }),
-        PROMPT_TIMEOUT_MS / 1000 + 60,
-    );
-
-    let r = tokio::select! {
-        _ = job.cancel.notified() => {
-            job.mark_stopped();
-            report(s, chat_id, thread_id, pane, "✋ prompt cancelled").await;
-            return;
-        }
-        r = fut => r,
-    };
-
-    match r {
-        Ok(v) => {
-            let settled = v["agent"]["agent_status"]
-                .as_str()
-                .or(v["agent_status"].as_str())
-                .unwrap_or("unknown");
-            finish(s, chat_id, thread_id, pane, settled, &baseline).await;
-        }
-        // Agent still busy — covers BOTH our client-side timeout ("herdr agent.prompt
-        // timed out") and herdr's server-side wait timeout ("timed out waiting for
-        // agent status"). Stay silent; keep watching until it settles or dies.
-        Err(e) if e.to_string().contains("timed out") => {
-            watch(s, chat_id, thread_id, pane, job, &baseline).await;
-        }
-        Err(e) => {
-            report(s, chat_id, thread_id, pane, &format!("⚠️ error: {e}")).await;
-        }
-    }
-}
-
-/// Watch an agent until it settles — silently, for as long as it takes.
-/// Only speaks up on completion, cancellation, or a real failure.
-async fn watch(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    job: &Job,
-    baseline: &[String],
-) {
-    loop {
-        if job.is_stopped() { return; }
         let w = rpc_t(
             &s.cfg.socket,
             "agent.wait",
             json!({"target": pane, "until": ["idle", "done", "blocked"], "timeout_ms": WATCH_TIMEOUT_MS}),
             WATCH_TIMEOUT_MS / 1000 + 60,
         );
-        tokio::select! {
+        let w = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
-                report(s, chat_id, thread_id, pane, "✋ prompt cancelled").await;
-                return;
+                let (chat, th) = *job.dest.lock().await;
+                report(&s, chat, th, &pane, "✋ cancelled").await;
+                break;
             }
-            w = w => match w {
-                Ok(v) => {
-                    let settled = v["agent"]["agent_status"]
-                        .as_str()
-                        .or(v["agent_status"].as_str())
-                        .unwrap_or("unknown");
-                    if matches!(settled, "idle" | "done" | "blocked" | "exited" | "closed" | "dead") {
-                        finish(s, chat_id, thread_id, pane, settled, &baseline).await;
-                        return;
-                    }
-                }
-                Err(e) if !e.to_string().contains("timed out") => {
-                    report(s, chat_id, thread_id, pane, &format!("⚠️ error: {e}")).await;
-                    return;
-                }
-                // Round elapsed and the agent is still working — stay quiet
-                Err(_) => {}
-            },
+            w = w => w,
+        };
+
+        // Real failure (pane died / herdr unreachable) — say so and stop
+        if let Err(e) = &w
+            && !e.to_string().contains("timed out")
+        {
+            let (chat, th) = *job.dest.lock().await;
+            report(&s, chat, th, &pane, &format!("⚠️ error: {e}")).await;
+            break;
+        }
+
+        let Ok(v) = w else { continue }; // round elapsed, still working — stay quiet
+        let settled = v["agent"]["agent_status"]
+            .as_str()
+            .or(v["agent_status"].as_str())
+            .unwrap_or("unknown");
+
+        // Collapse done↔idle flapping: re-check briefly before reporting
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
+            && a.status == "working"
+        {
+            continue;
+        }
+
+        // Report everything produced since the last settle
+        let screen = read_screen(&s.cfg.socket, &pane, 2000).await;
+        let base = job.baseline.lock().await.clone();
+        let body = join_trimmed(delta(&screen, &base));
+        *job.baseline.lock().await = screen;
+
+        let (chat, th) = *job.dest.lock().await;
+        if !body.is_empty() {
+            let msg = format!("{} {settled}\n\n{body}", emoji(settled));
+            for part in chunks(&msg, MAX_MSG_UNITS) {
+                report(&s, chat, th, &pane, &part).await;
+            }
+        }
+        observe_status(&s, &pane, settled, true, "job").await;
+        if let Some(th) = th
+            && s.cfg.forum == Some(chat)
+            && s.topics.pane_of_thread(th).as_deref() == Some(&pane)
+        {
+            s.topics.mark_unread(&pane);
+        }
+        refresh_topic_title(&s, &pane, settled).await;
+        *job.pending.lock().await = 0;
+
+        // Nothing outstanding? Retire the watcher atomically.
+        let mut map = s.jobs.lock().await;
+        if *job.pending.lock().await == 0
+            && map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false)
+        {
+            map.remove(&pane);
+            println!("[prompt] watcher retired: {pane}");
+            return;
         }
     }
+
+    s.jobs.lock().await.remove(&pane);
 }
 
-async fn pane_tail(s: &AppState, pane: &str, lines: u32) -> Vec<String> {
-    let out = read_agent_output(&s.cfg.socket, pane, lines).await.unwrap_or_default();
-    out.lines().map(|l| l.trim_end().to_string()).collect()
+async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
+    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
+    s.remember(chat_id, mid, pane).await;
 }
 
 /// Output produced after `base` — strips pre-existing scrollback so replies
-/// contain only what happened since the prompt was sent.
+/// contain only what happened since the last report.
 fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     if base.is_empty() {
         return new;
@@ -186,41 +164,8 @@ fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     new
 }
 
-async fn finish(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    settled: &str,
-    baseline: &[String],
-) {
-    let screen = pane_tail(s, pane, 2000).await;
-    let body = delta(&screen, baseline).join("\n");
-    let body = body.trim();
-    let header = format!("{} {settled}", emoji(settled));
-    let parts: Vec<String> = if body.is_empty() {
-        vec![format!("{header}\n(no new output)")]
-    } else {
-        chunks(&format!("{header}\n\n{body}"), MAX_MSG_UNITS)
-    };
-    observe_status(s, pane, settled, true, "job").await;
-    // Result landed in the agent's own topic → mark unread (marker shows in title)
-    if let Some(th) = thread_id
-        && s.cfg.forum == Some(chat_id)
-        && s.topics.pane_of_thread(th).as_deref() == Some(pane)
-    {
-        s.topics.mark_unread(pane);
-    }
-    refresh_topic_title(s, pane, settled).await;
-    for part in &parts {
-        report(s, chat_id, thread_id, pane, part).await;
-    }
-    s.set_focus(pane).await;
-}
-
-async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
-    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
-    s.remember(chat_id, mid, pane).await;
+fn join_trimmed(lines: &[String]) -> String {
+    lines.join("\n").trim().to_string()
 }
 
 #[cfg(test)]
@@ -246,7 +191,6 @@ mod tests {
 
     #[test]
     fn test_delta_scrolled_off_fallback() {
-        // baseline no longer contiguous; last meaningful line still visible
         let base = v(&["marker", "tail"]);
         let new = v(&["junk", "marker", "new stuff"]);
         assert_eq!(delta(&new, &base), v(&["new stuff"]));
@@ -257,5 +201,10 @@ mod tests {
         let base = v(&["same"]);
         let new = v(&["same"]);
         assert!(delta(&new, &base).is_empty());
+    }
+
+    #[test]
+    fn test_join_trimmed() {
+        assert_eq!(join_trimmed(&v(&["", "hi there", ""])), "hi there");
     }
 }

@@ -88,6 +88,16 @@ pub async fn read_pane_output(socket: &str, pane: &str, lines: u32) -> Res<Strin
     Ok(r["read"]["text"].as_str().unwrap_or("").trim().to_string())
 }
 
+/// Terminal snapshot as trimmed lines (delta baseline / report source).
+pub async fn read_screen(socket: &str, pane: &str, lines: u32) -> Vec<String> {
+    read_agent_output(socket, pane, lines)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect()
+}
+
 pub async fn list_workspaces(socket: &str) -> Res<Vec<WorkspaceInfo>> {
     let r = rpc(socket, "workspace.list", json!({})).await?;
     let mut out = Vec::new();
