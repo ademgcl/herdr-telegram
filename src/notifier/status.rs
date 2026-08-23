@@ -75,7 +75,8 @@ pub async fn observe_status(
     }
     text.push_str(hint);
 
-    s.set_focus(pane).await;
+    // NOTE: deliberately NOT touching focus here — background alerts must never
+    // hijack where the owner's next plain-text message gets delivered.
 
     // Deliver the alert to the agent's forum topic; flag unread + show it in title
     let mut delivered = false;
