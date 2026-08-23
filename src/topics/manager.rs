@@ -54,10 +54,10 @@ impl TopicManager {
         self.storage.is_unread(pane)
     }
 
-    /// Titles are deliberately binary — busy or not — to avoid churn.
-    pub fn topic_name(kind: &str, space: &str, status: &str) -> String {
-        let icon = if status == "working" { "🔄" } else { "🟢" };
-        format!("{icon} {kind} · {space}")
+    /// Titles stay static (kind · space) to avoid churn; only the 📩 unread
+    /// marker ever toggles them.
+    pub fn topic_name(kind: &str, space: &str, _status: &str) -> String {
+        format!("{kind} · {space}")
     }
 
     fn titled_name(&self, pane: &str, kind: &str, space: &str, status: &str) -> String {

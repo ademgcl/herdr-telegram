@@ -115,6 +115,17 @@ impl TelegramClient {
         }
     }
 
+    /// "typing…" indicator — lasts ~5s, repeat to sustain. Zero clutter.
+    pub async fn typing(&self, chat_id: i64, thread_id: Option<i64>) {
+        let mut params = json!({"chat_id": chat_id, "action": "typing"});
+        if let Some(th) = thread_id {
+            params["message_thread_id"] = json!(th);
+        }
+        let _ = self
+            .call("sendChatAction", params, Duration::from_secs(10))
+            .await;
+    }
+
     pub async fn answer_callback(&self, cbq_id: &str) {
         let _ = self
             .call(

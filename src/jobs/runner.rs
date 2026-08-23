@@ -48,8 +48,7 @@ pub async fn enqueue_prompt(
 
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
     *job.pending.lock().await += 1;
-    s.set_focus(&pane).await;
-    println!("[jobs] submitting prompt…");
+    s.set_focus(&pane).await;    println!("[jobs] submitting prompt…");
 
     // Deliver immediately — interactive agents buffer input like a real terminal
     if let Err(e) = rpc_t(
@@ -102,7 +101,9 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     break;
                 }
 
-                // Still working — stream fresh output into the live message
+                // Still working — pulse the typing indicator, stream output tail
+                let (chat, th) = *job.dest.lock().await;
+                s.tg.typing(chat, th).await;
                 if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {
                     continue;
                 }
@@ -112,7 +113,6 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 if body.is_empty() {
                     continue;
                 }
-                let (chat, th) = *job.dest.lock().await;
                 let text = format!("🔄 working…\n\n{body}");
                 match live_mid {
                     Some(mid) => s.tg.edit_msg(chat, mid, &text, None).await,
