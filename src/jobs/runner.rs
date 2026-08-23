@@ -4,7 +4,7 @@ use tokio::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, read_screen, rpc_t},
     jobs::job::Job,
-    jobs::stream::{chrome_filtered, delta, join_trimmed, EvStream, WatchEvent},
+    jobs::stream::{chrome_filtered, delta, is_chrome, join_trimmed, EvStream, WatchEvent},
     notifier::observe_status,
     state::AppState,
     types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, MAX_MSG_UNITS},
@@ -181,9 +181,15 @@ async fn finalize(
     let body = if !acc.is_empty() {
         join_trimmed(acc)
     } else {
-        let screen = read_screen(&s.cfg.socket, pane, 2000).await;
-        let base = job.baseline.lock().await.clone();
-        join_trimmed(&chrome_filtered(delta(&screen, &base)))
+        // Fast task: nothing streamed. Show what the settled screen displays
+        // (the reply sits above the input box) instead of diffing a mutating TUI.
+        let screen = read_screen(&s.cfg.socket, pane, 80).await;
+        let mut lines = chrome_filtered(&screen);
+        while lines.last().map(|l| is_chrome(l)).unwrap_or(false) {
+            lines.pop();
+        }
+        let start = lines.len().saturating_sub(30);
+        lines[start..].join("\n").trim().to_string()
     };
 
     let header = format!("{} {settled}", emoji(settled));
