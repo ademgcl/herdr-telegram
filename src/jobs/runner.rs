@@ -71,6 +71,7 @@ async fn process_prompt(
     job: &Job,
 ) {
     println!("[prompt] -> {pane}: {}", text.chars().take(80).collect::<String>());
+    let baseline = pane_tail(s, pane, 400).await;
     let fut = rpc_t(
         &s.cfg.socket,
         "agent.prompt",
@@ -97,13 +98,13 @@ async fn process_prompt(
                 .as_str()
                 .or(v["agent_status"].as_str())
                 .unwrap_or("unknown");
-            finish(s, chat_id, thread_id, pane, settled).await;
+            finish(s, chat_id, thread_id, pane, settled, &baseline).await;
         }
         // Agent still busy — covers BOTH our client-side timeout ("herdr agent.prompt
         // timed out") and herdr's server-side wait timeout ("timed out waiting for
         // agent status"). Stay silent; keep watching until it settles or dies.
         Err(e) if e.to_string().contains("timed out") => {
-            watch(s, chat_id, thread_id, pane, job).await;
+            watch(s, chat_id, thread_id, pane, job, &baseline).await;
         }
         Err(e) => {
             report(s, chat_id, thread_id, pane, &format!("⚠️ error: {e}")).await;
@@ -113,7 +114,14 @@ async fn process_prompt(
 
 /// Watch an agent until it settles — silently, for as long as it takes.
 /// Only speaks up on completion, cancellation, or a real failure.
-async fn watch(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, job: &Job) {
+async fn watch(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    job: &Job,
+    baseline: &[String],
+) {
     loop {
         if job.is_stopped() { return; }
         let w = rpc_t(
@@ -135,7 +143,7 @@ async fn watch(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, j
                         .or(v["agent_status"].as_str())
                         .unwrap_or("unknown");
                     if matches!(settled, "idle" | "done" | "blocked" | "exited" | "closed" | "dead") {
-                        finish(s, chat_id, thread_id, pane, settled).await;
+                        finish(s, chat_id, thread_id, pane, settled, &baseline).await;
                         return;
                     }
                 }
@@ -150,13 +158,50 @@ async fn watch(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, j
     }
 }
 
-async fn finish(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, settled: &str) {
-    let out = read_agent_output(&s.cfg.socket, pane, 2000).await.unwrap_or_default();
+async fn pane_tail(s: &AppState, pane: &str, lines: u32) -> Vec<String> {
+    let out = read_agent_output(&s.cfg.socket, pane, lines).await.unwrap_or_default();
+    out.lines().map(|l| l.trim_end().to_string()).collect()
+}
+
+/// Output produced after `base` — strips pre-existing scrollback so replies
+/// contain only what happened since the prompt was sent.
+fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
+    if base.is_empty() {
+        return new;
+    }
+    for i in 0..new.len() {
+        if new[i..].len() >= base.len() && new[i..i + base.len()] == *base {
+            return &new[i + base.len()..];
+        }
+    }
+    // Baseline scrolled off — cut after the newest baseline line still visible
+    for b in base.iter().rev() {
+        if b.trim().is_empty() {
+            continue;
+        }
+        if let Some(pos) = new.iter().rposition(|l| l == b) {
+            return &new[pos + 1..];
+        }
+    }
+    new
+}
+
+async fn finish(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    settled: &str,
+    baseline: &[String],
+) {
+    let screen = pane_tail(s, pane, 2000).await;
+    let body = delta(&screen, baseline).join("\n");
+    let body = body.trim();
     let header = format!("{} {settled}", emoji(settled));
-    let parts: Vec<String> = if out.is_empty() {
-        vec![format!("{header}\n(no readable output)")]
+    let parts: Vec<String> = if body.is_empty() {
+        vec![format!("{header}\n(no new output)")]
     } else {
-        chunks(&format!("{header}\n\n{out}"), MAX_MSG_UNITS)
+        chunks(&format!("{header}\n\n{body}"), MAX_MSG_UNITS)
     };
     observe_status(s, pane, settled, true, "job").await;
     // Result landed in the agent's own topic → mark unread (marker shows in title)
@@ -176,4 +221,41 @@ async fn finish(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, 
 async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
     let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
     s.remember(chat_id, mid, pane).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_delta_strips_baseline() {
+        let base = v(&["old line 1", "old line 2"]);
+        let new = v(&["old line 1", "old line 2", "fresh reply", "done"]);
+        assert_eq!(delta(&new, &base), v(&["fresh reply", "done"]));
+    }
+
+    #[test]
+    fn test_delta_no_baseline() {
+        let new = v(&["a", "b"]);
+        assert_eq!(delta(&new, &[]), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn test_delta_scrolled_off_fallback() {
+        // baseline no longer contiguous; last meaningful line still visible
+        let base = v(&["marker", "tail"]);
+        let new = v(&["junk", "marker", "new stuff"]);
+        assert_eq!(delta(&new, &base), v(&["new stuff"]));
+    }
+
+    #[test]
+    fn test_delta_nothing_new() {
+        let base = v(&["same"]);
+        let new = v(&["same"]);
+        assert!(delta(&new, &base).is_empty());
+    }
 }
