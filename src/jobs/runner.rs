@@ -23,14 +23,20 @@ pub async fn enqueue_prompt(
         text,
     };
     let pane = row.pane.clone();
+    println!("[jobs] enqueue for {pane}");
 
-    let job = match s.jobs.lock().await.get(&pane).cloned() {
+    let existing = s.jobs.lock().await.get(&pane).cloned();
+    println!("[jobs] jobs-map checked");
+    let job = match existing {
         Some(j) => j,
         None => {
+            println!("[jobs] reading baseline…");
             let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+            println!("[jobs] baseline {} lines", baseline.len());
             let j = Job::new(baseline, chat_id, thread_id);
             s.jobs.lock().await.insert(pane.clone(), j.clone());
             tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
+            println!("[jobs] watcher spawned");
             j
         }
     };
@@ -38,6 +44,7 @@ pub async fn enqueue_prompt(
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
     *job.pending.lock().await += 1;
     s.set_focus(&pane).await;
+    println!("[jobs] submitting prompt…");
 
     // Deliver immediately — interactive agents buffer input like a real terminal
     if let Err(e) = rpc_t(
@@ -48,9 +55,11 @@ pub async fn enqueue_prompt(
     )
     .await
     {
+        println!("[jobs] submit error: {e}");
         *job.pending.lock().await -= 1;
         report(&s, req.chat_id, req.message_thread_id, &pane, &format!("⚠️ error: {e}")).await;
     }
+    println!("[jobs] enqueue done");
 }
 
 /// Watch the agent; report fresh output each time it settles.

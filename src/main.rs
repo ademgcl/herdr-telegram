@@ -51,6 +51,7 @@ async fn main() -> Res<()> {
 
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
+    println!("[main] seed done, entering loop");
 
     // NOTE: no backlog discard — messages sent while the bot was down are
     // still delivered; router's stale filter (>10 min) drops only true relics.
@@ -71,6 +72,7 @@ async fn main() -> Res<()> {
             } => {
                 match updates {
                     Ok(list) => {
+                        println!("[tg] poll ok: {} update(s)", list.len());
                         for u in list {
                             let id = u["update_id"].as_u64().unwrap_or(0);
                             {

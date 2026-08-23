@@ -7,6 +7,14 @@ use crate::{
 };
 
 pub async fn handle_update(s: AppState, u: &Value) {
+    let kind = if u.get("callback_query").is_some() {
+        "callback"
+    } else if u.get("my_chat_member").is_some() {
+        "my_chat_member"
+    } else {
+        "message"
+    };
+    println!("[tg] update {kind}");
     if u.get("callback_query").is_some() {
         handle_callback(s, &u["callback_query"]).await;
         return;

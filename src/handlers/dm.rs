@@ -16,6 +16,7 @@ use crate::{
 pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     let text = msg["text"].as_str().unwrap_or("").trim();
     if text.is_empty() { return; }
+    println!("[dm] from {chat}: {}", text.chars().take(40).collect::<String>());
 
     let (cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
