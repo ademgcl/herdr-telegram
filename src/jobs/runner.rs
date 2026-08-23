@@ -37,6 +37,7 @@ pub async fn enqueue_prompt(
 
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
     *job.pending.lock().await += 1;
+    s.set_focus(&pane).await;
 
     // Deliver immediately — interactive agents buffer input like a real terminal
     if let Err(e) = rpc_t(

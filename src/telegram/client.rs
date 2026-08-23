@@ -27,6 +27,17 @@ impl TelegramClient {
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     }
 
+    /// Telegram flood-wait: "Too Many Requests: retry after N" — honor it
+    /// instead of silently dropping the message.
+    fn retry_after(e: &str) -> Option<Duration> {
+        let tail = e.rsplit("retry after").next()?.trim();
+        tail.split(|c: char| !c.is_ascii_digit())
+            .next()?
+            .parse::<u64>()
+            .ok()
+            .map(|s| Duration::from_secs(s + 1))
+    }
+
     pub async fn send_msg(
         &self,
         chat_id: i64,
@@ -43,16 +54,21 @@ impl TelegramClient {
             params["reply_markup"] = json!({"inline_keyboard": kb});
         }
 
-        for attempt in 0..2 {
+        for attempt in 0..3 {
             match self.call("sendMessage", params.clone(), Duration::from_secs(15)).await {
                 Ok(v) => return v["message_id"].as_i64(),
                 Err(e) => {
-                    eprintln!("sendMessage failed (attempt {}): {e}", attempt + 1);
+                    let msg = e.to_string();
+                    eprintln!("sendMessage failed (attempt {}): {msg}", attempt + 1);
+                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
                     let retryable = e
                         .downcast_ref::<reqwest::Error>()
                         .map(|re| re.is_connect())
                         .unwrap_or(false);
-                    if !retryable {
+                    if !retryable || attempt == 2 {
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    path::PathBuf,
     sync::Arc,
 };
 use tokio::sync::Mutex;
@@ -28,9 +29,19 @@ pub struct State {
 pub type AppState = Arc<State>;
 
 impl State {
+    fn focus_file() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_default();
+        PathBuf::from(format!("{home}/.local/share/herdr-telegram/focus"))
+    }
+
     pub fn new(cfg: Cfg) -> Res<AppState> {
         let tg = TelegramClient::new(cfg.token.clone())?;
         let topics = TopicManager::new(cfg.forum, cfg.socket.clone(), tg.clone());
+        // Survive restarts: routing target must not vanish on redeploy
+        let focus = std::fs::read_to_string(Self::focus_file())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         Ok(Arc::new(Self {
             cfg,
             tg,
@@ -40,7 +51,7 @@ impl State {
             jobs: Mutex::new(HashMap::new()),
             targets: Mutex::new(HashMap::new()),
             torder: Mutex::new(VecDeque::new()),
-            focus: Mutex::new(None),
+            focus: Mutex::new(focus),
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
         }))
@@ -64,6 +75,7 @@ impl State {
     }
 
     pub async fn set_focus(&self, pane: &str) {
+        let _ = std::fs::write(Self::focus_file(), pane);
         *self.focus.lock().await = Some(pane.to_string());
     }
 
