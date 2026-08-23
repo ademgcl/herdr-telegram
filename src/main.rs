@@ -15,7 +15,7 @@ use crate::{
     herdr::{event_task, ping},
     notifier::reconcile,
     state::State,
-    telegram::{discard_backlog, get_updates, handle_update},
+    telegram::{get_updates, handle_update},
     types::{Res, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
 };
 
@@ -52,8 +52,8 @@ async fn main() -> Res<()> {
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
 
-    // Discard any update backlog to prevent replaying stale commands
-    let _ = discard_backlog(&s).await;
+    // NOTE: no backlog discard — messages sent while the bot was down are
+    // still delivered; router's stale filter (>10 min) drops only true relics.
 
     // Spawn background Herdr event stream task
     tokio::spawn(event_task(s.clone()));
