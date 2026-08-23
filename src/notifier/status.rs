@@ -78,17 +78,27 @@ pub async fn observe_status(
     // NOTE: deliberately NOT touching focus here — background alerts must never
     // hijack where the owner's next plain-text message gets delivered.
 
-    // Alert cards are DM-only: agent topics stay pure chat text
-    // (prompts, live stream, final results).
-    for id in &s.cfg.owners {
-        let mid = s.tg
-            .send_msg(
-                *id,
-                None,
-                &text,
-                Some(json!([[btn("show output", &format!("o:{pane}"))]])),
-            )
-            .await;
-        s.remember(*id, mid, pane).await;
+    // Alerts belong WHERE THE AGENT LIVES: its topic, as plain chat text.
+    // Direct messages are only for non-forum setups. Never both.
+    if let Some(forum) = s.cfg.forum {
+        if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space, new_status).await {
+            let mid = s.tg.send_msg(forum, Some(thread), &text, None).await;
+            s.remember(forum, mid, pane).await;
+            if mid.is_some() && s.topics.mark_unread(pane) {
+                s.topics.update_topic_title(pane, &kind, raw_space, new_status).await;
+            }
+        }
+    } else {
+        for id in &s.cfg.owners {
+            let mid = s.tg
+                .send_msg(
+                    *id,
+                    None,
+                    &text,
+                    Some(json!([[btn("show output", &format!("o:{pane}"))]])),
+                )
+                .await;
+            s.remember(*id, mid, pane).await;
+        }
     }
 }
