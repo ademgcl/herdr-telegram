@@ -16,7 +16,7 @@ const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"
 /// Busy alternate-screen panes reject large reads — read a small visible tail.
 const LIVE_READ_LINES: u32 = 40;
 /// Safety-net tick in case herdr events are unavailable.
-const FALLBACK_TICK_SECS: u64 = 10;
+const FALLBACK_TICK_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
@@ -89,7 +89,8 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Output activity → stream; status change → maybe finalize.
         // The fallback tick guarantees progress even without events.
-        let event = tokio::select! {
+        // Events (when they fire) simply trigger an earlier wake-up
+        let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
                 let (chat, th) = *job.dest.lock().await;
@@ -108,19 +109,19 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             },
         };
 
-        if matches!(event, WatchEvent::Status) {
-            let Ok(agent) = get_agent(&s.cfg.socket, &pane).await else { continue };
-            if SETTLED.contains(&agent.status.as_str()) {
-                // Collapse done↔idle flapping before committing to a report
-                tokio::time::sleep(Duration::from_millis(750)).await;
-                if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
-                    && a.status == "working"
-                {
-                    continue;
-                }
-                finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
-                break;
+        // Every wake-up: check settle first (never depend on herdr events),
+        // then stream whatever output is new.
+        let Ok(agent) = get_agent(&s.cfg.socket, &pane).await else { continue };
+        if SETTLED.contains(&agent.status.as_str()) {
+            // Collapse done↔idle flapping before committing to a report
+            tokio::time::sleep(Duration::from_millis(750)).await;
+            if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
+                && a.status == "working"
+            {
+                continue;
             }
+            finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
+            break;
         }
 
         // Stream whatever is new into the live message
