@@ -4,7 +4,6 @@ use crate::{
     herdr::client::{get_agent, list_workspaces},
     telegram::client::TelegramClient,
     topics::storage::TopicStorage,
-    ui::emoji::emoji,
 };
 
 pub struct TopicManager {
@@ -55,8 +54,10 @@ impl TopicManager {
         self.storage.is_unread(pane)
     }
 
+    /// Titles are deliberately binary — busy or not — to avoid churn.
     pub fn topic_name(kind: &str, space: &str, status: &str) -> String {
-        format!("{} {kind} · {space}", emoji(status))
+        let icon = if status == "working" { "🔄" } else { "🟢" };
+        format!("{icon} {kind} · {space}")
     }
 
     fn titled_name(&self, pane: &str, kind: &str, space: &str, status: &str) -> String {
