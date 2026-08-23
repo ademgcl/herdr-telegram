@@ -14,8 +14,6 @@ use crate::herdr::client::read_screen_adaptive;
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
-/// Busy alternate-screen panes reject large reads — read a small visible tail.
-const LIVE_READ_LINES: u32 = 40;
 /// Safety-net tick in case herdr events are unavailable.
 const FALLBACK_TICK_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
@@ -40,11 +38,7 @@ pub async fn enqueue_prompt(
         Some(j) => j,
         None => {
             let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-            let accepted_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let j = Job::new(baseline, chat_id, thread_id, accepted_ms);
+            let j = Job::new(baseline, chat_id, thread_id);
             s.jobs.lock().await.insert(pane.clone(), j.clone());
             tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
             j
