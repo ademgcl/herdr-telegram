@@ -10,10 +10,10 @@ fn db_path() -> Option<std::path::PathBuf> {
     p.exists().then_some(p)
 }
 
-/// The agent's latest COMPLETED assistant reply for a project directory,
+/// Assistant reply text produced AFTER `since_ms` for a project directory,
 /// read straight from opencode's structured session store.
-/// Returns None when opencode isn't present or has no reply yet.
-pub fn final_reply(cwd: &str) -> Option<String> {
+/// Only completed messages count (must contain a step-finish part).
+pub fn final_reply(cwd: &str, since_ms: u64) -> Option<String> {
     let db = db_path()?;
     let sql = "SELECT coalesce(json_extract(p.data,'$.text'),'') AS txt \
         FROM part p \
@@ -22,19 +22,16 @@ pub fn final_reply(cwd: &str) -> Option<String> {
         WHERE json_extract(m.data,'$.role')='assistant' \
           AND json_extract(p.data,'$.type')='text' \
           AND s.directory=?1 \
-          AND p.message_id=( \
-            SELECT m2.id FROM message m2 \
-            JOIN part pf ON pf.message_id=m2.id \
-              AND json_extract(pf.data,'$.type')='step-finish' \
-            WHERE m2.session_id=m.session_id \
-              AND json_extract(m2.data,'$.role')='assistant' \
-            ORDER BY m2.time_created DESC LIMIT 1) \
+          AND p.time_created>=?2 \
+          AND EXISTS(SELECT 1 FROM part pf WHERE pf.message_id=m.id \
+              AND json_extract(pf.data,'$.type')='step-finish') \
         ORDER BY p.time_created ASC;";
     let out = Command::new("sqlite3")
         .arg("-json")
         .arg(&db)
         .arg(sql)
         .arg(cwd)
+        .arg(since_ms.to_string())
         .output()
         .ok()?;
     if !out.status.success() {

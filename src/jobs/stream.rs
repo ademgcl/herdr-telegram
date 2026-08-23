@@ -84,6 +84,23 @@ pub fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     new
 }
 
+const CHROME_MARKERS: &[&str] = &[
+    "esc interrupt", "ctrl+p", "OpenCode ", "\u{25d4}", "\u{2588}\u{2588}\u{2588}",
+];
+
+/// Drop TUI chrome (spinners, footers, borders) so streams carry meaning.
+pub fn chrome_filtered<'a>(lines: &'a [String]) -> Vec<&'a str> {
+    lines
+        .iter()
+        .map(|l| l.as_str())
+        .filter(|l| !CHROME_MARKERS.iter().any(|m| l.contains(m)))
+        .filter(|l| {
+            let visible = l.chars().filter(|c| !c.is_whitespace()).count();
+            visible > 0 && visible * 3 >= l.chars().count()
+        })
+        .collect()
+}
+
 pub fn join_trimmed(lines: &[String]) -> String {
     lines.join("\n").trim().to_string()
 }

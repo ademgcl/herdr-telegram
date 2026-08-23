@@ -20,10 +20,17 @@ pub struct Job {
     pub baseline_ok: AtomicBool,
     /// Where the next report should be delivered (last submitter wins).
     pub dest: Mutex<(i64, Option<i64>)>,
+    /// Wall-clock ms when the first prompt of this job was accepted.
+    pub accepted_ms: u64,
 }
 
 impl Job {
-    pub fn new(baseline: Vec<String>, chat_id: i64, thread_id: Option<i64>) -> Arc<Self> {
+    pub fn new(
+        baseline: Vec<String>,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        accepted_ms: u64,
+    ) -> Arc<Self> {
         let ok = !baseline.is_empty();
         Arc::new(Self {
             cancel: Notify::new(),
@@ -32,6 +39,7 @@ impl Job {
             baseline: Mutex::new(baseline),
             baseline_ok: AtomicBool::new(ok),
             dest: Mutex::new((chat_id, thread_id)),
+            accepted_ms,
         })
     }
 

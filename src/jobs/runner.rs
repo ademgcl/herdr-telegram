@@ -4,7 +4,7 @@ use tokio::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, read_screen, rpc_t},
     jobs::job::Job,
-    jobs::stream::{delta, join_trimmed, EvStream, WatchEvent},
+    jobs::stream::{chrome_filtered, delta, join_trimmed, EvStream, WatchEvent},
     notifier::observe_status,
     state::AppState,
     types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, MAX_MSG_UNITS},
@@ -39,7 +39,11 @@ pub async fn enqueue_prompt(
         Some(j) => j,
         None => {
             let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-            let j = Job::new(baseline, chat_id, thread_id);
+            let accepted_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let j = Job::new(baseline, chat_id, thread_id, accepted_ms);
             s.jobs.lock().await.insert(pane.clone(), j.clone());
             tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
             j
@@ -137,7 +141,10 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             continue;
         }
         let base = job.baseline.lock().await.clone();
-        let fresh: Vec<String> = delta(&screen, &base).to_vec();
+        let fresh: Vec<String> = chrome_filtered(delta(&screen, &base))
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
         if fresh.is_empty() {
             continue;
         }
@@ -177,11 +184,17 @@ async fn finalize(
     live_mid: &mut Option<i64>,
     acc: &mut Vec<String>,
 ) {
-    let cwd = get_agent(&s.cfg.socket, pane)
-        .await
-        .ok()
-        .map(|a| a.cwd);
-    let body = match cwd.as_deref().and_then(crate::opencode::final_reply) {
+    let cwd = get_agent(&s.cfg.socket, pane).await.ok().map(|a| a.cwd);
+    // Give opencode a moment to flush the finished message to its store
+    let mut stored = None;
+    if let Some(dir) = cwd.as_deref() {
+        for _ in 0..3 {
+            stored = crate::opencode::final_reply(dir, job.accepted_ms);
+            if stored.is_some() { break; }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+    let body = match stored {
         Some(reply) if !reply.trim().is_empty() => reply,
         _ if !acc.is_empty() => join_trimmed(acc),
         _ => {
