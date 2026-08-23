@@ -22,10 +22,17 @@ pub struct TopicStorage {
 
 impl TopicStorage {
     pub fn new() -> Self {
+        // Keep state self-contained next to the bot; migrate legacy XDG file once
+        let path = PathBuf::from("topics.state");
         let home = env::var("HOME").unwrap_or_default();
-        Self::at(PathBuf::from(format!(
-            "{home}/.local/share/herdr-telegram/topics.json"
-        )))
+        let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/topics.json"));
+        if !path.exists()
+            && legacy.exists()
+            && std::fs::copy(&legacy, &path).is_ok()
+        {
+            println!("[topics] migrated {} → topics.state", legacy.display());
+        }
+        Self::at(path)
     }
 
     pub(crate) fn at(file_path: PathBuf) -> Self {
