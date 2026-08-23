@@ -65,6 +65,15 @@ pub async fn observe_status(
         let short: String = title.chars().take(60).collect();
         text.push_str(&format!("\n{short}"));
     }
+    // Carry substance: recent output tail (crucial when no watcher is attached)
+    let tail = crate::herdr::client::read_agent_output(&s.cfg.socket, pane, 12)
+        .await
+        .unwrap_or_default();
+    if !tail.is_empty() {
+        let chars: Vec<char> = tail.chars().collect();
+        let start = chars.len().saturating_sub(400);
+        text.push_str(&format!("\n\n{}", chars[start..].iter().collect::<String>()));
+    }
     text.push_str(hint);
 
     // NOTE: deliberately NOT touching focus here — background alerts must never

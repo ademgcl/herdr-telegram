@@ -174,6 +174,7 @@ async fn finalize(
 
     observe_status(s, pane, settled, true, "job").await;
     let (chat, th) = *job.dest.lock().await;
+    println!("[prompt] finalize {pane}: {} part(s), body {} chars", parts.len(), body.len());
     for (i, part) in parts.iter().enumerate() {
         match (i, *live_mid) {
             (0, Some(mid)) => s.tg.edit_msg(chat, mid, part, None).await,
