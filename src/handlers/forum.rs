@@ -25,7 +25,7 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     // If inside an agent topic thread:
     if let Some(th) = thread_id {
         if let Some(pane) = s.topics.pane_of_thread(th) {
-            println!("[forum] topic msg for {pane}");
+            println!("[forum] topic msg for {pane}: {}", text.chars().take(40).collect::<String>());
             handle_topic_agent_message(s, chat, th, &pane, text).await;
             return;
         }
@@ -51,7 +51,7 @@ async fn handle_topic_agent_message(
         s.tg.send_msg(chat, Some(thread_id), "⚠️ agent is not active or pane closed", None).await;
         return;
     };
-    println!("[forum] got agent {}", agent.pane);
+    println!("[forum] got agent {} cmd={arg:?}...", agent.pane, arg = &text.chars().take(30).collect::<String>());
 
 
     if cmd == "/help" {

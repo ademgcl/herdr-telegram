@@ -17,6 +17,8 @@ const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"
 const LIVE_READ_LINES: u32 = 40;
 /// Safety-net tick in case herdr events are unavailable.
 const FALLBACK_TICK_SECS: u64 = 10;
+/// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
+const REOPEN_COOLDOWN_SECS: u64 = 5;
 
 pub async fn enqueue_prompt(
     s: AppState,
@@ -70,11 +72,19 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
     // Everything the agent produced since the prompt — becomes the final card
     let mut acc: Vec<String> = Vec::new();
-    let mut ev = EvStream::open(&s.cfg.socket, &pane).await.ok();
+    let mut ev = None;
+    let mut last_open = Instant::now() - Duration::from_secs(REOPEN_COOLDOWN_SECS);
+    println!("[watcher] start {pane}");
 
     loop {
         if job.is_stopped() {
             break;
+        }
+
+        // Reconnect the event stream lazily — never in a hot loop
+        if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
+            last_open = Instant::now();
+            ev = EvStream::open(&s.cfg.socket, &pane).await.ok();
         }
 
         // Output activity → stream; status change → maybe finalize.
@@ -94,7 +104,7 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 }
             } => match e {
                 Some(w) => w,
-                None => { ev = EvStream::open(&s.cfg.socket, &pane).await.ok(); continue; }
+                None => { ev = None; continue; }
             },
         };
 
