@@ -10,6 +10,7 @@ use crate::{
     types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, MAX_MSG_UNITS},
     ui::{chunks, emoji, tail_fit},
 };
+use crate::herdr::client::read_screen_adaptive;
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
@@ -132,19 +133,16 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {
             continue;
         }
-        let screen = read_screen(&s.cfg.socket, &pane, LIVE_READ_LINES).await;
+        let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
         if screen.is_empty() {
-            continue; // busy pane still refusing reads — try next event
+            continue; // nothing readable yet — try next wake-up
         }
         if !job.baseline_ok() {
             job.anchor_baseline(screen).await;
             continue;
         }
         let base = job.baseline.lock().await.clone();
-        let fresh: Vec<String> = chrome_filtered(delta(&screen, &base))
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let fresh: Vec<String> = chrome_filtered(delta(&screen, &base));
         if fresh.is_empty() {
             continue;
         }
@@ -184,24 +182,14 @@ async fn finalize(
     live_mid: &mut Option<i64>,
     acc: &mut Vec<String>,
 ) {
-    let cwd = get_agent(&s.cfg.socket, pane).await.ok().map(|a| a.cwd);
-    // Give opencode a moment to flush the finished message to its store
-    let mut stored = None;
-    if let Some(dir) = cwd.as_deref() {
-        for _ in 0..3 {
-            stored = crate::opencode::final_reply(dir, job.accepted_ms);
-            if stored.is_some() { break; }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
-    let body = match stored {
-        Some(reply) if !reply.trim().is_empty() => reply,
-        _ if !acc.is_empty() => join_trimmed(acc),
-        _ => {
-            let screen = read_screen(&s.cfg.socket, pane, 2000).await;
-            let base = job.baseline.lock().await.clone();
-            join_trimmed(delta(&screen, &base))
-        }
+    // Primary: everything the agent produced since the prompt (works for
+    // every herdr-supported agent). Fallback: one filtered screen-delta.
+    let body = if !acc.is_empty() {
+        join_trimmed(acc)
+    } else {
+        let screen = read_screen(&s.cfg.socket, pane, 2000).await;
+        let base = job.baseline.lock().await.clone();
+        join_trimmed(&chrome_filtered(delta(&screen, &base)))
     };
 
     let header = format!("{} {settled}", emoji(settled));

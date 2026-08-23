@@ -89,7 +89,7 @@ const CHROME_MARKERS: &[&str] = &[
 ];
 
 /// Drop TUI chrome (spinners, footers, borders) so streams carry meaning.
-pub fn chrome_filtered<'a>(lines: &'a [String]) -> Vec<&'a str> {
+pub fn chrome_filtered(lines: &[String]) -> Vec<String> {
     lines
         .iter()
         .map(|l| l.as_str())
@@ -98,6 +98,7 @@ pub fn chrome_filtered<'a>(lines: &'a [String]) -> Vec<&'a str> {
             let visible = l.chars().filter(|c| !c.is_whitespace()).count();
             visible > 0 && visible * 3 >= l.chars().count()
         })
+        .map(|l| l.to_string())
         .collect()
 }
 
