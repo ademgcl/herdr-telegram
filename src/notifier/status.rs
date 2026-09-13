@@ -2,7 +2,7 @@ use std::time::Duration;
 use serde_json::json;
 use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output},
-    jobs::filter::final_block,
+    jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
     state::AppState,
     types::MAX_MSG_UNITS,

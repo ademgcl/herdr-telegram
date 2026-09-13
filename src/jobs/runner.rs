@@ -3,8 +3,8 @@ use serde_json::json;
 use tokio::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, read_screen, rpc_t},
-    jobs::filter::final_block,
     jobs::job::Job,
+    jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed, EvStream, WatchEvent},
     notifier::observe_status,
     state::AppState,
@@ -72,7 +72,7 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut live_mid: Option<i64> = None;
     let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
     // Raw output since the prompt — the fresh reply is extracted from
-    // this at display time (last segment only, see filter::final_block)
+    // this at display time (last segment only, see segment::final_block)
     let mut acc: Vec<String> = Vec::new();
     let mut ev = None;
     let mut last_open = Instant::now() - Duration::from_secs(REOPEN_COOLDOWN_SECS);
@@ -143,8 +143,8 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if fresh.is_empty() {
             continue;
         }
-        // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
-        // are resolved at display time so only the fresh reply is shown.
+    // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
+    // are resolved at display time so only the fresh reply is shown.
         acc.extend(fresh.iter().cloned());
         if acc.len() > 400 {
             let drop = acc.len() - 400;
