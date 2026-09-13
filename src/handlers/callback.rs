@@ -86,11 +86,11 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.remember(chat, mid, pane).await;
             s.set_focus(pane).await;
         }
-        // Blocked-pane answers: B:<action>:<pane> — keys or type-mode.
+        // Blocked-pane answers: B:<action>:<pane> — the tapped card is
+        // updated in place (a turned-over dialog swaps question+buttons).
         ("B", Some(r)) => {
             if let Some((action, pane)) = r.split_once(':') {
-                let ack = super::interactive::press(&s, chat, pane, action).await;
-                s.tg.send_msg(chat, thread, &ack, None).await;
+                super::tap::answer_tap(&s, chat, msg_id, thread, pane, action).await;
             }
         }
         // Model picker: M:<idx>:<pane> free-Zen taps, M:list:<pane> card.

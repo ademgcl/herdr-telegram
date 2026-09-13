@@ -45,6 +45,19 @@ pub struct State {
     /// When each pane last entered a settled state — drives the
     /// done→idle display decay (herdr parks agents at done indefinitely).
     pub settled_at: Mutex<HashMap<String, std::time::Instant>>,
+    /// Last rate-limit episode alerted per pane: (kind, alerted_at).
+    /// Watchdog-owned (prompt watchers dedupe locally): entries are
+    /// cleared when the pattern leaves the screen so the next episode
+    /// re-alerts, and re-reminded after a long stall.
+    pub limit_alert: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// Last displayed blocked-dialog signature per pane (question +
+    /// options). Consecutive dialogs often arrive with NO status change
+    /// (blocked→blocked), so content — not just transitions — decides
+    /// whether a card is due. Cleared when the pane leaves blocked.
+    pub blocked_sig: Mutex<HashMap<String, String>>,
+    /// Panes with a button-tap in flight — observations skip posting
+    /// while set (the tap owns the card update when it lands).
+    pub blockop: Mutex<HashSet<String>>,
 }
 
 pub type AppState = Arc<State>;
@@ -87,6 +100,9 @@ impl State {
             debounce: Mutex::new(HashMap::new()),
             modelop: Mutex::new(HashSet::new()),
             settled_at: Mutex::new(HashMap::new()),
+            limit_alert: Mutex::new(HashMap::new()),
+            blocked_sig: Mutex::new(HashMap::new()),
+            blockop: Mutex::new(HashSet::new()),
         }))
     }
 

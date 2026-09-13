@@ -94,7 +94,7 @@ async fn handle_topic_agent_message(
 
     // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
     if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
-        match super::interactive::type_text(&s, &wpane, text).await {
+        match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => { s.tg.send_msg(chat, Some(thread_id), &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
             Err(e) => { s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None).await; }
         }
@@ -153,9 +153,9 @@ async fn handle_topic_agent_message(
     // so type straight into the waiting prompt instead — no dead job.
     if agent.status == "blocked" {
         s.set_focus(pane).await;
-        match super::interactive::type_text(&s, pane, text).await {
+        match super::tap::type_text(&s, pane, text).await {
             Ok(()) => { s.tg.send_msg(chat, Some(thread_id), &format!("⌨️ typed into {pane} + ⏎"), None).await; }
-            Err(_) => { super::interactive::send_blocked_card(&s, chat, Some(thread_id), pane).await; }
+            Err(_) => { super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await; }
         }
         return;
     }

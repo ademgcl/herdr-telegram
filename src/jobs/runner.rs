@@ -2,7 +2,7 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::time::{Duration, Instant};
 use crate::{
-    handlers::interactive::send_blocked_card,
+    handlers::dialog::send_blocked_card,
     herdr::client::{get_agent, read_screen, rpc_t},
     jobs::finalize::{edit_live, finalize, report},
     jobs::job::Job,
@@ -13,6 +13,7 @@ use crate::{
     ui::tail_fit,
 };
 use crate::herdr::client::read_screen_adaptive;
+use crate::jobs::notices::{detect_limit, limit_card_text};
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
@@ -94,6 +95,10 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut acc: Vec<String> = Vec::new();
     let mut ev = None;
     let mut last_open = Instant::now() - Duration::from_secs(REOPEN_COOLDOWN_SECS);
+    // Rate-limit episode already buzzed about (kind, not excerpt: retry
+    // countdowns change every second and must not re-alert). Cleared
+    // when the banner leaves the screen so the next episode re-alerts.
+    let mut limit_kind: Option<String> = None;
     println!("[watcher] start {pane}");
 
     loop {
@@ -144,11 +149,29 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             break;
         }
 
+        // Rate-limit stall watch: opencode retries internally while herdr
+        // keeps reporting `working` — no settle, no notifier event, and
+        // live-message edits never buzz. Scan the raw screen every tick
+        // and post one NEW (buzzing) card per episode.
+        // (Runs on the raw screen, before chrome filtering, and outside
+        // the edit cooldown so stalls surface even when nothing streams.)
+        let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
+        if let Some(hit) = detect_limit(&screen) {
+            if limit_kind.as_deref() != Some(hit.kind) {
+                limit_kind = Some(hit.kind.to_string());
+                let (chat, th) = *job.dest.lock().await;
+                let text = limit_card_text(&pane, &hit);
+                report(&s, chat, th, &pane, &text).await;
+                println!("[prompt] limit alert {pane}: {}", hit.kind);
+            }
+        } else {
+            limit_kind = None;
+        }
+
         // Stream whatever is new into the live message
         if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {
             continue;
         }
-        let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
         if screen.is_empty() {
             continue; // nothing readable yet — try next wake-up
         }

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 use serde_json::json;
 use crate::{
-    handlers::interactive::send_blocked_card,
+    handlers::dialog::{refresh_blocked_card, send_blocked_card},
     herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
@@ -55,6 +55,11 @@ pub async fn observe_status(
             .await
             .insert(pane.to_string(), std::time::Instant::now());
     }
+    // Leaving blocked behind — its dialog sig dies with the episode so
+    // the next block episode always posts.
+    if old.as_deref() == Some("blocked") && new_status != "blocked" {
+        s.blocked_sig.lock().await.remove(pane);
+    }
 
     // Agent identity once per observation — shared by pins, cards and
     // alerts below.
@@ -107,6 +112,20 @@ pub async fn observe_status(
         return;
     }
     if old.as_deref() == Some(new_status) {
+        // Same status twice — except blocked: consecutive dialogs turn
+        // over with NO transition (allow → confirm), so content, not the
+        // transition, decides whether a card is due.
+        if new_status == "blocked" && !s.jobs.lock().await.contains_key(pane) {
+            refresh_blocked_card(s, pane).await;
+        }
+        return;
+    }
+
+    // A prompt job owns this pane — covered by its watcher (kept here too
+    // for the transition path below, mirroring the repeat path above).
+    let job_owned = s.jobs.lock().await.contains_key(pane);
+    if new_status == "blocked" && !job_owned {
+        refresh_blocked_card(s, pane).await;
         return;
     }
 
@@ -163,24 +182,14 @@ pub async fn observe_status(
 
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
 
-    // DM mode has no topics — legacy immediate pushes, but blocked always
-    // gets the answer card (buttons work in DMs too).
+    // DM mode has no topics — legacy immediate pushes.
     if s.cfg.forum.is_none() {
         s.seen.lock().await.insert(pane.to_string(), screen);
-        if new_status == "blocked" {
-            for id in &s.cfg.owners {
-                send_blocked_card(&s, *id, None, pane).await;
-            }
-            return;
-        }
         if !fresh_body.is_empty() {
             post_spontaneous_card(&s, pane, &kind, raw_space, new_status, &fresh_body).await;
             return;
         }
-        let hint = match new_status {
-            "blocked" => "\n↩️ reply or type in topic to answer",
-            _ => "",
-        };
+        let hint = "";
         let verb = if new_status == "idle" { "ready" } else { new_status };
         let mut text = format!("{} {}: {kind} @ {space_label}", emoji(new_status), verb);
         if !title.is_empty() {
@@ -202,18 +211,9 @@ pub async fn observe_status(
         return;
     }
 
-    // Forum mode: blocked needs input NOW — always post its answer card
-    // (exactly one per block episode: repeats return early on old==new).
-    // done/idle arm the debounce: the push waits to confirm the settle
-    // isn't mid-task flicker.
-    if new_status == "blocked" {
-        s.seen.lock().await.insert(pane.to_string(), screen);
-        if let Some(forum) = s.cfg.forum {
-            let thread = s.topics.all_mappings().get(pane).copied();
-            send_blocked_card(&s, forum, thread, pane).await;
-        }
-        return;
-    }
+    // Forum mode: blocked cards are handled up front (content-addressed,
+    // so turned-over dialogs surface). done/idle arm the debounce: the
+    // push waits to confirm the settle isn't mid-task flicker.
     let at = Instant::now();
     s.debounce
         .lock()

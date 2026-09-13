@@ -3,7 +3,7 @@
 /// `finalize` on settle; `enqueue_prompt` reports submit errors.
 use std::sync::Arc;
 use crate::{
-    handlers::interactive::send_blocked_card,
+    handlers::dialog::send_blocked_card,
     herdr::client::read_screen,
     jobs::job::Job,
     jobs::segment::final_block,

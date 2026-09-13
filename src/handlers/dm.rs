@@ -185,7 +185,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
     // Checked before routing: the next message belongs to the waiter.
     if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
-        match super::interactive::type_text(&s, &wpane, text).await {
+        match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
             Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await; }
         }
@@ -215,9 +215,9 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     // Blocked panes reject text prompts — type into the waiting prompt.
     if row.status == "blocked" {
         s.set_focus(&row.pane).await;
-        match super::interactive::type_text(&s, &row.pane, &prompt_text).await {
+        match super::tap::type_text(&s, &row.pane, &prompt_text).await {
             Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {} + ⏎", row.pane), None).await; }
-            Err(_) => { super::interactive::send_blocked_card(&s, chat, None, &row.pane).await; }
+            Err(_) => { super::dialog::send_blocked_card(&s, chat, None, &row.pane).await; }
         }
         return;
     }
