@@ -1,15 +1,14 @@
-use std::time::Duration;
-use serde_json::{json, Value};
+use serde_json::Value;
 use crate::{
     herdr::client::{
         list_agents, list_workspaces,
-        read_agent_output, read_pane_output, rpc_t, send_agent_keys, send_pane_text,
+        read_agent_output, send_agent_keys,
     },
     jobs::enqueue_prompt,
     state::AppState,
     types::AgentRow,
     ui::{
-        build_menu_text, help_text, main_menu_kb, pane_output_kb,
+        build_menu_text, help_text, main_menu_kb,
     },
 };
 
@@ -43,7 +42,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if let Some(ws) = s.runwait.lock().await.remove(&chat) {
-        handle_run_command(&s, chat, &ws, text).await;
+        super::shell::handle_run_command(&s, chat, &ws, text).await;
         return;
     }
 
@@ -108,18 +107,28 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd == "/quit" {
-        // Explicit target or focus (focus may be a rowless shell pane —
-        // quit_to_shell reports that case itself).
-        let pane = match resolve_target(&rows, Some(arg)) {
-            Some(r) => Some(r.pane),
-            None if arg.is_empty() => s.get_focus().await,
-            _ => None,
-        };
-        let Some(pane) = pane else {
+        let Some(pane) = dm_pane(&s, &rows, arg).await else {
             s.tg.send_msg(chat, None, "who? `/quit <pane>` or tap an agent in /agents", None).await;
             return;
         };
         super::shell::quit_to_shell(&s, chat, None, &pane).await;
+        return;
+    }
+
+    if cmd == "/kill" {
+        let Some(pane) = dm_pane(&s, &rows, arg).await else {
+            s.tg.send_msg(chat, None, "who? `/kill <pane>` or tap an agent in /agents", None).await;
+            return;
+        };
+        super::kill::ask_kill(&s, chat, None, &pane).await;
+        return;
+    }
+
+    if cmd == "/shell" {
+        // No arg: shell next to the focused agent, else the tg space.
+        let focus_ws = s.get_focus().await.and_then(|p| rows.iter().find(|r| r.pane == p).map(|r| r.ws.clone()));
+        let ws = if arg.is_empty() { focus_ws } else { Some(arg.to_string()) };
+        super::shell::open_shell(&s, chat, None, ws.as_deref()).await;
         return;
     }
 
@@ -228,26 +237,14 @@ pub fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow>
     }
 }
 
-async fn handle_run_command(s: &AppState, chat: i64, ws: &str, cmd: &str) {
-    let tab = match rpc_t(&s.cfg.socket, "tab.create", json!({"workspace_id": ws}), 30).await {
-        Ok(t) => t,
-        Err(e) => {
-            s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
-            return;
-        }
-    };
-    let pane = tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string();
-    let cmd = cmd.trim();
-    s.tg.send_msg(chat, None, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
-    if let Err(e) = send_pane_text(&s.cfg.socket, &pane, cmd).await {
-        s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
-        return;
+/// DM pane target: explicit pane/kind, else focus (which may be a rowless
+/// shell pane — callers report that case themselves).
+async fn dm_pane(s: &AppState, rows: &[AgentRow], arg: &str) -> Option<String> {
+    match resolve_target(rows, Some(arg)) {
+        Some(r) => Some(r.pane),
+        None if arg.is_empty() => s.get_focus().await,
+        _ => None,
     }
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let out = read_pane_output(&s.cfg.socket, &pane, 40).await.unwrap_or_default();
-    let body = if out.is_empty() { "(no output yet)".into() } else { out };
-    let mid = s.tg.send_msg(chat, None, &body, Some(pane_output_kb(&pane))).await;
-    s.remember(chat, mid, &pane).await;
 }
 
 #[cfg(test)]

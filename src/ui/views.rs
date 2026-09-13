@@ -155,6 +155,8 @@ pub fn help_text() -> &'static str {
     "/agents   control panel: spaces, agents, ➕ spawn\n\
      /model    current model + free-Zen picker (opencode)\n\
      /quit     drop the agent to a shell (idle only)\n\
+     /kill     close the pane completely (confirms first)\n\
+     /shell    open a fresh shell pane\n\
      /read     recent output of focused agent\n\
      /cancel   abort prompts / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
@@ -170,6 +172,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • `/read` or `/output` — fetch recent terminal output\n\
          • `/model` — current model + free-Zen picker (opencode)\n\
          • `/quit` — drop the agent to a shell (idle only)\n\
+         • `/kill` — close this pane completely (confirms first)\n\
          • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
          • `/status` — refresh agent status card"
@@ -184,6 +187,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • `opencode` — re-enter the agent\n\
          • `/read` — recent shell output\n\
          • `/keys y enter` — send keystrokes\n\
+         • `/kill` — close this pane completely (confirms first)\n\
          • `/status` — shell card"
     )
 }

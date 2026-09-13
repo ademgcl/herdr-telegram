@@ -80,6 +80,18 @@ async fn handle_topic_agent_message(
         return;
     }
 
+    if cmd == "/kill" {
+        super::kill::ask_kill(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
+
+    if cmd == "/shell" {
+        // No arg: shell next to this agent (same workspace).
+        let ws = if arg.is_empty() { agent.ws.as_str() } else { arg };
+        super::shell::open_shell(&s, chat, Some(thread_id), Some(ws)).await;
+        return;
+    }
+
     // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
     if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
         match super::interactive::type_text(&s, &wpane, text).await {
@@ -167,6 +179,7 @@ async fn handle_general_forum_message(
         let msg = "🤖 **Herdr Telegram Bot**\n\n\
                    • `/agents` — open spaces & agents control panel\n\
                    • `/spawn <kind> [workspace]` — spawn a new agent & topic\n\
+                   • `/shell [space]` — open a fresh shell pane & topic\n\
                    • `/newspace <name>` — create a new workspace\n\
                    • `/model` — inside an agent topic: model picker\n\
                    • `/cancel` — abort pending jobs\n\n\
@@ -225,6 +238,11 @@ async fn handle_general_forum_message(
 
     if cmd == "/model" {
         s.tg.send_msg(chat, thread_id, "open an agent's topic and run `/model` there — each topic is one agent.", None).await;
+        return;
+    }
+
+    if cmd == "/shell" {
+        super::shell::open_shell(&s, chat, thread_id, if arg.is_empty() { None } else { Some(arg) }).await;
         return;
     }
 

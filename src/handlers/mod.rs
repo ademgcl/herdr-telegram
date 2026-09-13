@@ -2,6 +2,7 @@ pub mod callback;
 pub mod dm;
 pub mod forum;
 pub mod interactive;
+pub mod kill;
 pub mod model;
 pub mod model_parse;
 pub mod model_scan;

@@ -95,6 +95,12 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         }
         // Model picker: M:<idx>:<pane> free-Zen taps, M:list:<pane> card.
         ("M", Some(r)) => handle_model_tap(&s, chat, msg_id, thread, r).await,
+        // Pane kill confirm: X:<kill|keep>:<pane> — stateless buttons.
+        ("X", Some(r)) => {
+            if let Some((action, pane)) = r.split_once(':') {
+                super::kill::handle_kill_action(&s, chat, msg_id, action, pane).await;
+            }
+        }
         _ => {}
     }
 }

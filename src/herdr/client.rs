@@ -251,3 +251,15 @@ pub async fn type_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
     rpc_t(socket, "pane.send_text", json!({"pane_id": pane, "text": text}), 30).await?;
     Ok(())
 }
+
+/// Close a pane completely (agent or shell — herdr ends both).
+pub async fn close_pane(socket: &str, pane: &str) -> Res<()> {
+    rpc(socket, "pane.close", json!({"pane_id": pane})).await?;
+    Ok(())
+}
+
+/// Fresh tab in `ws`, returning its root (shell) pane id.
+pub async fn create_tab(socket: &str, ws: &str) -> Res<String> {
+    let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
+    Ok(tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string())
+}

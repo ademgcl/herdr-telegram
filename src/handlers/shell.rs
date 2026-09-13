@@ -8,11 +8,12 @@ use tokio::time::{Duration, sleep};
 use crate::{
     handlers::forum::bare_cmd,
     herdr::client::{
-        get_agent, list_panes, read_shell_output, send_agent_keys, send_pane_keys,
+        create_tab, ensure_tg_space, get_agent, list_panes, list_workspaces,
+        read_shell_output, send_agent_keys, send_pane_keys,
         send_pane_text,
     },
     state::AppState,
-    ui::{shell_help_text, tail_fit},
+    ui::{pane_output_kb, shell_help_text, tail_fit, ws_label},
 };
 
 /// Pure reply body so tests cover the shape without I/O.
@@ -25,20 +26,48 @@ pub fn format_shell_reply(cmd: &str, output: &str) -> String {
     format!("$ {cmd}\n{body}")
 }
 
-/// Run one shell line in `pane` and report its tail. Shells echo + execute
-/// fast; 2.5s covers the common case — longer jobs are re-read with /read.
+/// Read one shell snapshot (best effort).
+async fn shell_snapshot(s: &AppState, pane: &str) -> String {
+    read_shell_output(&s.cfg.socket, pane, 60).await.unwrap_or_default()
+}
+
+/// Wait for the shell to settle after submitting: poll until two
+/// consecutive reads agree AND differ from the pre-send screen (or ~10s).
+/// A fixed sleep races slow shell startups (pyenv rehash etc.) and slow
+/// commands — the read then catches the typed echo with no output yet.
+async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> String {
+    let mut last = String::new();
+    let mut stable = 0u32;
+    let mut cur = String::new();
+    for _ in 0..10 {
+        sleep(Duration::from_secs(1)).await;
+        cur = shell_snapshot(s, pane).await;
+        if cur != before && cur == last {
+            stable += 1;
+            if stable >= 2 {
+                break;
+            }
+        } else {
+            stable = 0;
+        }
+        last = cur.clone();
+    }
+    cur
+}
+
+/// Run one shell line in `pane` and report its tail once the shell
+/// settles (see `await_shell_settle`).
 pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, cmd: &str) {
     s.set_focus(pane).await;
+    let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_text(&s.cfg.socket, pane, cmd).await {
         s.tg
             .send_msg(chat, thread, &format!("⚠️ pane gone or unreachable: {e}"), None)
             .await;
         return;
     }
-    sleep(Duration::from_millis(2500)).await;
-    let lines = read_shell_output(&s.cfg.socket, pane, 60)
-        .await
-        .unwrap_or_default()
+    let out = await_shell_settle(s, pane, &before).await;
+    let lines = out
         .lines()
         .map(|l| l.trim_end().to_string())
         .collect::<Vec<_>>();
@@ -124,8 +153,62 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
     }
 }
 
+/// Open a fresh shell pane: new tab in `ws` (or the tg space), topic
+/// badged shell, ready for commands. `ws` is a workspace id.
+pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option<&str>) {
+    let ws_id = match ws {
+        Some(w) if !w.is_empty() => w.to_string(),
+        _ => match ensure_tg_space(&s.cfg.socket).await {
+            Ok(id) => id,
+            Err(e) => {
+                s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+                return;
+            }
+        },
+    };
+    let pane = match create_tab(&s.cfg.socket, &ws_id).await {
+        Ok(p) => p,
+        Err(e) => {
+            s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+            return;
+        }
+    };
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let space = ws_label(&spaces, &ws_id).to_string();
+    // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
+    s.topics.sync_topic(&pane, "shell", &space, "shell").await;
+    s.status.lock().await.insert(pane.clone(), "shell".to_string());
+    let mid = s.tg.send_msg(chat, thread, &shell_card_text(&pane), None).await;
+    s.remember(chat, mid, &pane).await;
+    s.set_focus(&pane).await;
+}
+
 pub fn shell_card_text(pane: &str) -> String {
     format!("💲 shell [{pane}]\ntype any shell command — or `opencode` to return.")
+}
+
+/// Workspace shell-run (⌨️ run cmd button): fresh tab in `ws`, run one
+/// command, report output with a refresh button.
+pub async fn handle_run_command(s: &AppState, chat: i64, ws: &str, cmd: &str) {
+    let pane = match create_tab(&s.cfg.socket, ws).await {
+        Ok(p) => p,
+        Err(e) => {
+            s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+            return;
+        }
+    };
+    // Fresh shells start slow (rc files, version managers) — settle first.
+    let before = shell_snapshot(s, &pane).await;
+    let cmd = cmd.trim();
+    s.tg.send_msg(chat, None, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
+    if let Err(e) = send_pane_text(&s.cfg.socket, &pane, cmd).await {
+        s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+        return;
+    }
+    let out = await_shell_settle(s, &pane, &before).await;
+    let body = if out.trim().is_empty() { "(no output yet)".into() } else { out };
+    let mid = s.tg.send_msg(chat, None, &body, Some(pane_output_kb(&pane))).await;
+    s.remember(chat, mid, &pane).await;
 }
 
 /// Message routing for agentless-topic panes: shell command set.
@@ -143,6 +226,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     if cmd == "/quit" {
         s.tg.send_msg(chat, Some(thread_id), "already in shell — type any command.", None).await;
+        return;
+    }
+    if cmd == "/kill" {
+        super::kill::ask_kill(&s, chat, Some(thread_id), pane).await;
         return;
     }
     if cmd == "/cancel" {

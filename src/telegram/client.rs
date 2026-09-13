@@ -209,6 +209,8 @@ impl TelegramClient {
                     {"command": "agents", "description": "open control panel (spaces + agents)"},
                     {"command": "model", "description": "current model + free-Zen picker"},
                     {"command": "quit", "description": "drop the agent to a shell"},
+                    {"command": "kill", "description": "close the pane completely"},
+                    {"command": "shell", "description": "open a fresh shell pane"},
                     {"command": "read", "description": "recent output of focused agent"},
                     {"command": "cancel", "description": "abort pending prompts / keys-mode"},
                     {"command": "keys", "description": "/keys <pane> y enter — send raw keys"},
