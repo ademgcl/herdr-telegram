@@ -1,9 +1,13 @@
+use std::time::Duration;
 use serde_json::json;
 use crate::{
     herdr::client::{get_agent, list_workspaces},
     state::AppState,
     ui::{btn, emoji, ws_label},
 };
+
+/// How long after a prompt's final card an idle/done alert is redundant.
+const POST_PROMPT_QUIET_SECS: u64 = 45;
 
 pub async fn observe_status(
     s: &AppState,
@@ -34,8 +38,19 @@ pub async fn observe_status(
         return;
     }
 
-    // Suppress parallel alert if active prompt job is running
+    // Suppress parallel alert if active prompt job is running —
+    // the watcher's live message / final card already covers this pane.
     if s.jobs.lock().await.contains_key(pane) {
+        return;
+    }
+
+    // Suppress the redundant idle/done echo right after a prompt's final
+    // card (provider-agnostic: every agent settles after answering).
+    if matches!(new_status, "idle" | "done" | "blocked")
+        && let Some(t) = s.last_done.lock().await.get(pane)
+        && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
+    {
+        println!("[alert] suppressed post-prompt {new_status} for {pane} ({src})");
         return;
     }
 
@@ -65,15 +80,10 @@ pub async fn observe_status(
         let short: String = title.chars().take(60).collect();
         text.push_str(&format!("\n{short}"));
     }
-    // Carry substance: recent output tail (crucial when no watcher is attached)
-    let tail = crate::herdr::client::read_agent_output(&s.cfg.socket, pane, 12)
-        .await
-        .unwrap_or_default();
-    if !tail.is_empty() {
-        let chars: Vec<char> = tail.chars().collect();
-        let start = chars.len().saturating_sub(400);
-        text.push_str(&format!("\n\n{}", chars[start..].iter().collect::<String>()));
-    }
+    // NOTE: deliberately NO screen tail here. herdr only exposes raw TUI
+    // text (box-drawing footers, Thought headers, tool echoes) for every
+    // provider — dumping it as an alert is pure boilerplate. The final
+    // prompt card carries the answer; `/read` shows raw output on demand.
     text.push_str(hint);
 
     // NOTE: deliberately NOT touching focus here — background alerts must never

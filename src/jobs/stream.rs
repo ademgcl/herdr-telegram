@@ -84,29 +84,6 @@ pub fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     new
 }
 
-const CHROME_MARKERS: &[&str] = &[
-    "esc interrupt", "ctrl+p", "OpenCode ", "\u{25d4}", "\u{2588}\u{2588}\u{2588}",
-];
-
-/// A line of pure interface (spinner frames, footers, borders, blank padding).
-pub fn is_chrome(line: &str) -> bool {
-    if CHROME_MARKERS.iter().any(|m| line.contains(m)) {
-        return true;
-    }
-    let visible = line.chars().filter(|c| !c.is_whitespace()).count();
-    visible == 0 || visible * 3 < line.chars().count()
-}
-
-/// Drop TUI chrome (spinners, footers, borders) so streams carry meaning.
-pub fn chrome_filtered(lines: &[String]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|l| l.as_str())
-        .filter(|l| !is_chrome(l))
-        .map(|l| l.to_string())
-        .collect()
-}
-
 pub fn join_trimmed(lines: &[String]) -> String {
     lines.join("\n").trim().to_string()
 }

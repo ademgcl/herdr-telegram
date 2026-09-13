@@ -24,6 +24,9 @@ pub struct State {
     pub focus: Mutex<Option<String>>,
     pub keywait: Mutex<HashMap<i64, String>>,
     pub runwait: Mutex<HashMap<i64, String>>,
+    /// When a prompt watcher last reported a pane — status alerts inside
+    /// this window are redundant (the final card already covered them).
+    pub last_done: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 pub type AppState = Arc<State>;
@@ -59,6 +62,7 @@ impl State {
             focus: Mutex::new(focus),
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
+            last_done: Mutex::new(HashMap::new()),
         }))
     }
 

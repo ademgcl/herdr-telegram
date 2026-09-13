@@ -20,6 +20,9 @@ pub struct Job {
     pub baseline_ok: AtomicBool,
     /// Where the next report should be delivered (last submitter wins).
     pub dest: Mutex<(i64, Option<i64>)>,
+    /// Latest prompt text (last submitter wins) — echo boundary so the
+    /// fresh reply can be cut out of multi-turn scrollback.
+    pub prompt: Mutex<String>,
 }
 
 impl Job {
@@ -32,6 +35,7 @@ impl Job {
             baseline: Mutex::new(baseline),
             baseline_ok: AtomicBool::new(ok),
             dest: Mutex::new((chat_id, thread_id)),
+            prompt: Mutex::new(String::new()),
         })
     }
 

@@ -3,8 +3,9 @@ use serde_json::json;
 use tokio::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, read_screen, rpc_t},
+    jobs::filter::final_block,
     jobs::job::Job,
-    jobs::stream::{chrome_filtered, delta, is_chrome, join_trimmed, EvStream, WatchEvent},
+    jobs::stream::{delta, join_trimmed, EvStream, WatchEvent},
     notifier::observe_status,
     state::AppState,
     types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, MAX_MSG_UNITS},
@@ -46,6 +47,7 @@ pub async fn enqueue_prompt(
     };
 
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
+    *job.prompt.lock().await = req.text.clone();
     *job.pending.lock().await += 1;
     s.set_focus(&pane).await;
 
@@ -69,7 +71,8 @@ pub async fn enqueue_prompt(
 async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut live_mid: Option<i64> = None;
     let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
-    // Everything the agent produced since the prompt — becomes the final card
+    // Raw output since the prompt — the fresh reply is extracted from
+    // this at display time (last segment only, see filter::final_block)
     let mut acc: Vec<String> = Vec::new();
     let mut ev = None;
     let mut last_open = Instant::now() - Duration::from_secs(REOPEN_COOLDOWN_SECS);
@@ -136,20 +139,27 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             continue;
         }
         let base = job.baseline.lock().await.clone();
-        let fresh: Vec<String> = chrome_filtered(delta(&screen, &base));
+        let fresh = delta(&screen, &base);
         if fresh.is_empty() {
             continue;
         }
-        acc.extend(fresh);
+        // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
+        // are resolved at display time so only the fresh reply is shown.
+        acc.extend(fresh.iter().cloned());
         if acc.len() > 400 {
             let drop = acc.len() - 400;
             acc.drain(..drop);
         }
         *job.baseline.lock().await = screen;
 
+        let prompt = job.prompt.lock().await.clone();
+        let seg = final_block(&acc, &prompt);
+        if seg.is_empty() {
+            continue; // chrome-only so far — nothing worth showing yet
+        }
         let (chat, th) = *job.dest.lock().await;
         s.tg.typing(chat, th).await;
-        let text = format!("🔄 working…\n\n{}", tail_fit(&acc, 3200));
+        let text = format!("🔄 working…\n\n{}", tail_fit(&seg, 3200));
         match live_mid {
             Some(mid) => s.tg.edit_msg(chat, mid, &text, None).await,
             None => live_mid = s.tg.send_msg(chat, th, &text, None).await,
@@ -164,10 +174,11 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     }
 }
 
-/// Turn the live message into the final result card. Preference order:
-/// 1. opencode's structured store — the agent's literal final reply
-/// 2. the accumulated live stream
-/// 3. one screen-delta (fast tasks where nothing streamed)
+/// Turn the live message into the final result card from the generic,
+/// provider-agnostic screen stream: accumulated deltas first, then one
+/// cleaned settled-screen fallback for fast tasks where nothing streamed.
+/// (herdr exposes only raw TUI text for every provider — no clean-text
+/// API — so answers ride on the chrome-filtered stream, never raw tails.)
 async fn finalize(
     s: &AppState,
     pane: &str,
@@ -176,20 +187,17 @@ async fn finalize(
     live_mid: &mut Option<i64>,
     acc: &mut Vec<String>,
 ) {
-    // Primary: everything the agent produced since the prompt (works for
-    // every herdr-supported agent). Fallback: one filtered screen-delta.
-    let body = if !acc.is_empty() {
-        join_trimmed(acc)
+    // Fresh reply only: the last segment after tool calls, reasoning
+    // headers and the prompt echo — earlier turns and intermediate work
+    // are dropped. Falls back to the settled screen for fast tasks where
+    // nothing streamed.
+    let prompt = job.prompt.lock().await.clone();
+    let seg = final_block(acc, &prompt);
+    let body = if !seg.is_empty() {
+        join_trimmed(&seg)
     } else {
-        // Fast task: nothing streamed. Show what the settled screen displays
-        // (the reply sits above the input box) instead of diffing a mutating TUI.
         let screen = read_screen(&s.cfg.socket, pane, 80).await;
-        let mut lines = chrome_filtered(&screen);
-        while lines.last().map(|l| is_chrome(l)).unwrap_or(false) {
-            lines.pop();
-        }
-        let start = lines.len().saturating_sub(30);
-        lines[start..].join("\n").trim().to_string()
+        join_trimmed(&final_block(&screen, &prompt))
     };
 
     let header = format!("{} {settled}", emoji(settled));
@@ -200,6 +208,12 @@ async fn finalize(
     };
 
     observe_status(s, pane, settled, true, "job").await;
+    // Stamp the prompt completion so the notifier can suppress the
+    // redundant post-prompt idle/done echo (the card already answered).
+    s.last_done
+        .lock()
+        .await
+        .insert(pane.to_string(), std::time::Instant::now());
     let (chat, th) = *job.dest.lock().await;
     println!("[prompt] finalize {pane}: {} part(s), body {} chars", parts.len(), body.len());
     for (i, part) in parts.iter().enumerate() {

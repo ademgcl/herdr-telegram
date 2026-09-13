@@ -1,3 +1,4 @@
+pub mod filter;
 pub mod job;
 pub mod runner;
 pub mod stream;
