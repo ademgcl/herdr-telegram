@@ -69,7 +69,9 @@ When `TELEGRAM_FORUM_CHAT_ID` is set:
    chars), e.g. `o2 · herdr-telegram`. Pure text, set once. Live state
    shows on the topic **icon** (💻 working · ☕️ idle · ✅ done · ❗️ blocked
    · 🏁 closed · ❓ unknown), synced silently on every transition — icon
-   swaps never notify. Tags persist in `topics.state`, so restarts never
+   swaps never notify. Fresh completions show done; quiet-for-15-min ones
+   relax to idle (herdr parks agents at done, so without decay idle would
+   almost never show). Tags persist in `topics.state`, so restarts never
    reshuffle names.
 3. **Push Discipline**: Only answers and `blocked` (needs-input) buzz.
    `done`/`idle` settles wait out a short debounce and post only if still

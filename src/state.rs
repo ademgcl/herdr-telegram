@@ -37,6 +37,9 @@ pub struct State {
     /// Armed settle debounce per pane: (status, armed_at). A newer settle
     /// supersedes; the task posts only if still current when it fires.
     pub debounce: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// When each pane last entered a settled state — drives the
+    /// done→idle display decay (herdr parks agents at done indefinitely).
+    pub settled_at: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 pub type AppState = Arc<State>;
@@ -76,6 +79,7 @@ impl State {
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
             debounce: Mutex::new(HashMap::new()),
+            settled_at: Mutex::new(HashMap::new()),
         }))
     }
 

@@ -61,6 +61,22 @@ pub fn assign(existing: &[String], kind: &str) -> String {
 /// Short, unique forum-topic titles: `{tag} · {space}` e.g.
 /// `o2 · herdr-telegram`. Pure text, set once — state lives on the topic
 /// ICON (see `icon_emoji_id`), never in the title.
+
+/// Quiet horizon: a `done` older than this displays as idle (available
+/// again). herdr parks agents at done indefinitely, so without decay the
+/// idle badge would almost never show.
+pub const DONE_IDLE_AFTER_SECS: u64 = 15 * 60;
+
+/// Display status for the icon: fresh completions show done; long-quiet
+/// ones relax to idle. herdr-truth (`done`) is preserved everywhere else —
+/// only the badge decays.
+pub fn display_status(status: &str, settled_secs: u64) -> &str {
+    if status == "done" && settled_secs >= DONE_IDLE_AFTER_SECS {
+        "idle"
+    } else {
+        status
+    }
+}
 pub fn title(tag: &str, space: &str) -> String {
     let short: String = space.chars().take(20).collect();
     format!("{tag} · {short}")
@@ -131,7 +147,6 @@ mod tests {
             "o1 · a-very-long-workspac"
         );
     }
-
     #[test]
     fn test_icon_mapping() {
         assert_eq!(icon_emoji_id("working"), "5350554349074391003");
@@ -140,5 +155,17 @@ mod tests {
         assert_eq!(icon_emoji_id("blocked"), "5379748062124056162");
         assert_eq!(icon_emoji_id("exited"), "5408906741125490282");
         assert_eq!(icon_emoji_id("whatever"), "5377316857231450742");
+    }
+
+    #[test]
+    fn test_display_status_decay() {
+        assert_eq!(display_status("done", 0), "done");
+        assert_eq!(display_status("done", 14 * 60), "done");
+        assert_eq!(display_status("done", 15 * 60), "idle");
+        assert_eq!(display_status("done", 3600), "idle");
+        // Only done decays — everything else passes through.
+        assert_eq!(display_status("working", 3600), "working");
+        assert_eq!(display_status("blocked", 3600), "blocked");
+        assert_eq!(display_status("idle", 0), "idle");
     }
 }

@@ -4,9 +4,9 @@ use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
+    notifier::cards::post_spontaneous_card,
     state::AppState,
-    types::MAX_MSG_UNITS,
-    ui::{btn, chunks, emoji, ws_label},
+    ui::{btn, emoji, ws_label},
 };
 
 /// How long after a prompt's final card an idle/done alert is redundant.
@@ -14,10 +14,6 @@ const POST_PROMPT_QUIET_SECS: u64 = 45;
 /// done↔idle bounces closer than this are flap (collapsed); slower ones
 /// are legitimate sampled completions.
 const FLAP_WINDOW_SECS: u64 = 15;
-/// A settle must hold this long before a spontaneous answer pushes —
-/// micro-settle flicker mid-task stays on the pin instead of buzzing.
-/// Blocked (needs input) always pushes immediately.
-const SETTLE_DEBOUNCE_SECS: u64 = 15;
 
 pub async fn observe_status(
     s: &AppState,
@@ -35,6 +31,30 @@ pub async fn observe_status(
         m.insert(pane.to_string(), std::time::Instant::now())
     };
 
+    // Collapse rapid done <-> idle flap up front — before any fetch or
+    // icon touch, so oscillation neither costs RPCs nor discoes the icon.
+    // Slow sampled bounces are legitimate completions: the agent did work
+    // between observations, so they flow through.
+    if ((old.as_deref() == Some("done") && new_status == "idle")
+        || (old.as_deref() == Some("idle") && new_status == "done"))
+        && prev_change
+            .map(|t| t.elapsed() < Duration::from_secs(FLAP_WINDOW_SECS))
+            .unwrap_or(false)
+    {
+        println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
+        return;
+    }
+
+    // Fresh settles restart the done→idle display decay clock.
+    if old.as_deref() != Some(new_status)
+        && matches!(new_status, "idle" | "done" | "blocked")
+    {
+        s.settled_at
+            .lock()
+            .await
+            .insert(pane.to_string(), std::time::Instant::now());
+    }
+
     // Agent identity once per observation — shared by pins, cards and
     // alerts below.
     let info = get_agent(&s.cfg.socket, pane).await.ok();
@@ -50,11 +70,20 @@ pub async fn observe_status(
         .map(|w| format!("#{} {}", w.number, w.label))
         .unwrap_or_else(|| ws_id.clone());
 
-    // The pane's topic exists and its state icon tracks status — silent,
-    // instant, zero clutter. Edits and icon swaps never notify; only
-    // pushed messages buzz.
+    // The pane's topic exists and its state icon tracks the DISPLAY
+    // status — long-quiet completions show idle (available again) while
+    // herdr-truth stays done everywhere else. Silent, instant, zero
+    // clutter: edits and icon swaps never notify, only pushes buzz.
+    let settled_age = s
+        .settled_at
+        .lock()
+        .await
+        .get(pane)
+        .map(|t| t.elapsed().as_secs())
+        .unwrap_or(0);
+    let display = crate::topics::names::display_status(new_status, settled_age);
     s.topics
-        .sync_topic(pane, &kind, raw_space, new_status)
+        .sync_topic(pane, &kind, raw_space, display)
         .await;
 
     if silent || old.as_deref() == Some(new_status) {
@@ -83,21 +112,9 @@ pub async fn observe_status(
     };
     let fresh_body = join_trimmed(&final_block(&source, ""));
 
-    // Collapse rapid done <-> idle flap — but only when genuinely rapid.
-    if ((old.as_deref() == Some("done") && new_status == "idle")
-        || (old.as_deref() == Some("idle") && new_status == "done"))
-        && prev_change
-            .map(|t| t.elapsed() < Duration::from_secs(FLAP_WINDOW_SECS))
-            .unwrap_or(false)
-    {
-        println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
-        s.seen.lock().await.insert(pane.to_string(), screen);
-        return;
-    }
-
     // A prompt job owns this pane — the watcher's live message / final
-    // card covers it. (Pin already refreshed above; seen is anchored by
-    // the job's finalize, so don't consume here.)
+    // card covers it. (Seen is anchored by the job's finalize, so don't
+    // consume here.)
     if s.jobs.lock().await.contains_key(pane) {
         return;
     }
@@ -170,113 +187,6 @@ pub async fn observe_status(
     let pane2 = pane.to_string();
     let st2 = new_status.to_string();
     tokio::spawn(async move {
-        settle_check(s2, pane2, st2, at).await;
+        crate::notifier::cards::settle_check(s2, pane2, st2, at).await;
     });
-}
-
-/// Debounced spontaneous push: posts the fresh reply only if this settle
-/// is still current (no newer transition, no prompt takeover, no newer
-/// card) after the grace period. Baseline is consumed either way.
-async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Instant) {
-    tokio::time::sleep(Duration::from_secs(SETTLE_DEBOUNCE_SECS)).await;
-    let current = s.debounce.lock().await.get(&pane).cloned();
-    if current
-        .map(|(st, at)| st != settled || at != armed_at)
-        .unwrap_or(true)
-    {
-        return;
-    }
-    s.debounce.lock().await.remove(&pane);
-    if s.jobs.lock().await.contains_key(&pane) {
-        return;
-    }
-    if s.status
-        .lock()
-        .await
-        .get(&pane)
-        .map(|st| st != &settled)
-        .unwrap_or(true)
-    {
-        return;
-    }
-    if s.last_done
-        .lock()
-        .await
-        .get(&pane)
-        .map(|t| *t > armed_at)
-        .unwrap_or(false)
-    {
-        return;
-    }
-    let screen: Vec<String> = read_agent_output(&s.cfg.socket, &pane, 80)
-        .await
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim_end().to_string())
-        .collect();
-    let base = s.seen.lock().await.get(&pane).cloned().unwrap_or_default();
-    let source: Vec<String> = if base.is_empty() {
-        screen.clone()
-    } else {
-        delta(&screen, &base).to_vec()
-    };
-    let body = join_trimmed(&final_block(&source, ""));
-    s.seen.lock().await.insert(pane.clone(), screen);
-    let info = get_agent(&s.cfg.socket, &pane).await.ok();
-    let (kind, ws_id) = match &info {
-        Some(a) => (a.kind.clone(), a.ws.clone()),
-        None => ("?".into(), "?".into()),
-    };
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let raw_space = ws_label(&spaces, &ws_id);
-    // Settle confirmed: icon follows now (even with no fresh body).
-    s.topics.sync_topic(&pane, &kind, raw_space, &settled).await;
-    if body.is_empty() {
-        return;
-    }
-    post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await;
-}
-
-/// Answer push: the body alone (never a status-word lead), plus the reply
-/// affordance when input is needed. Blocked keeps a ⛔ prefix for urgency.
-async fn post_spontaneous_card(
-    s: &AppState,
-    pane: &str,
-    kind: &str,
-    space: &str,
-    settled: &str,
-    body: &str,
-) {
-    // NOTE: deliberately NOT touching focus here — background pushes must
-    // never hijack where the owner's next plain-text message gets delivered.
-    let text = match settled {
-        "blocked" => format!("{} {body}\n↩️ reply or type in topic to answer", emoji("blocked")),
-        _ => body.to_string(),
-    };
-    let parts = chunks(&text, MAX_MSG_UNITS);
-    println!(
-        "[alert] spontaneous card {pane}: {} part(s), body {} chars",
-        parts.len(),
-        body.len()
-    );
-    s.last_done
-        .lock()
-        .await
-        .insert(pane.to_string(), std::time::Instant::now());
-
-    if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.sync_topic(pane, kind, space, settled).await {
-            for part in &parts {
-                let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
-                s.remember(forum, mid, pane).await;
-            }
-        }
-    } else {
-        for id in &s.cfg.owners {
-            for part in &parts {
-                let mid = s.tg.send_msg(*id, None, part, None).await;
-                s.remember(*id, mid, pane).await;
-            }
-        }
-    }
 }
