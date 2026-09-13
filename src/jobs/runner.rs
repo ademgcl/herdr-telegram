@@ -212,12 +212,6 @@ async fn finalize(
     };
     let parts = chunks(&text, MAX_MSG_UNITS);
 
-    if !body.is_empty() {
-        s.last_reply
-            .lock()
-            .await
-            .insert(pane.to_string(), body.clone());
-    }
     observe_status(s, pane, settled, true, "job").await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),

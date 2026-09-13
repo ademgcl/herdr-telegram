@@ -1,4 +1,3 @@
-pub mod pin;
 pub mod reconcile;
 pub mod status;
 

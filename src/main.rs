@@ -51,6 +51,8 @@ async fn main() -> Res<()> {
 
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
+    // One-time cleanup of the retired pinned-status era (no-op when clean)
+    s.topics.retire_pins().await;
     println!("[main] seed done, entering loop");
 
     // NOTE: no backlog discard — messages sent while the bot was down are

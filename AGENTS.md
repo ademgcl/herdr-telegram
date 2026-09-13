@@ -64,12 +64,16 @@ src/
 
 When `TELEGRAM_FORUM_CHAT_ID` is set:
 1. **One Topic Per Agent**: Every active Herdr agent has a dedicated Telegram forum topic.
-2. **Static Topic Titles**: Titles are set once at creation as `{tag} · {space}` —
-   short kind code + stable per-kind counter + workspace label (usually the
-   project folder, capped at 20 chars), e.g. `o2 · herdr-telegram`.
-   Titles never change per message (status lives in cards/alerts, not the
-   topic name). Tags persist in `topics.state`, so restarts never reshuffle
-   names.
+2. **Topic Titles**: `{emoji} {tag} · {space}` — short kind code + stable
+   per-kind counter + workspace label (usually the project folder, capped
+   at 20 chars), e.g. `🔄 o2 · herdr-telegram`. The badge tracks status
+   (green idle · yellow working · blue done · rose blocked): `working` and
+   `blocked` rename immediately, settles follow once debounce confirms them
+   (~15s) — fast yet flicker-free. Renames never notify. Tags persist in
+   `topics.state`, so restarts never reshuffle names.
+3. **Push Discipline**: Only answers and `blocked` (needs-input) buzz.
+   `done`/`idle` settles wait out a short debounce and post only if still
+   settled with fresh output; empty settles stay silent.
 3. **Direct In-Topic Prompts**: Any message posted inside an agent's topic is dispatched directly to that agent as a prompt.
 4. **Contextual Commands**: `/read`, `/keys`, `/cancel`, and `/status` run in the context of the topic's agent.
 5. **General Topic**: Serves as the dashboard with `/agents`, `/spawn`, `/spaces`, `/newspace`, and `/help`.

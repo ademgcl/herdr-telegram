@@ -122,21 +122,15 @@ impl TopicStorage {
         tag
     }
 
-    pub fn get_pin(&self, pane: &str) -> Option<i64> {
-        self.store.lock().unwrap().pins.get(pane).copied()
-    }
-
-    pub fn set_pin(&self, pane: String, msg_id: i64) {
+    /// Drain all pinned-status leftovers (retired era) — persisted so the
+    /// cleanup runs exactly once across restarts.
+    pub fn take_pins(&self) -> HashMap<String, i64> {
         let mut s = self.store.lock().unwrap();
-        s.pins.insert(pane, msg_id);
-        self.save(&s);
-    }
-
-    pub fn clear_pin(&self, pane: &str) {
-        let mut s = self.store.lock().unwrap();
-        if s.pins.remove(pane).is_some() {
+        let pins = std::mem::take(&mut s.pins);
+        if !pins.is_empty() {
             self.save(&s);
         }
+        pins
     }
 
     pub fn all_mappings(&self) -> HashMap<String, i64> {

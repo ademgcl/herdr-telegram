@@ -45,28 +45,6 @@ impl TelegramClient {
         text: &str,
         keyboard: Option<Value>,
     ) -> Option<i64> {
-        self.send_inner(chat_id, thread_id, text, keyboard, false)
-            .await
-    }
-
-    /// Silent send (no notification buzz) — for pinned status scaffolding.
-    pub async fn send_quiet(
-        &self,
-        chat_id: i64,
-        thread_id: Option<i64>,
-        text: &str,
-    ) -> Option<i64> {
-        self.send_inner(chat_id, thread_id, text, None, true).await
-    }
-
-    async fn send_inner(
-        &self,
-        chat_id: i64,
-        thread_id: Option<i64>,
-        text: &str,
-        keyboard: Option<Value>,
-        quiet: bool,
-    ) -> Option<i64> {
         let body = fit_msg(text);
         let mut params = json!({"chat_id": chat_id, "text": body});
         if let Some(th) = thread_id {
@@ -74,9 +52,6 @@ impl TelegramClient {
         }
         if let Some(kb) = keyboard {
             params["reply_markup"] = json!({"inline_keyboard": kb});
-        }
-        if quiet {
-            params["disable_notification"] = json!(true);
         }
 
         for attempt in 0..3 {
@@ -194,17 +169,17 @@ impl TelegramClient {
         Ok(())
     }
 
-    /// Pin silently (no notification) — status pins must never buzz.
-    pub async fn pin_msg(&self, chat_id: i64, message_id: i64) {
+    /// Unpin a message (one-time cleanup helper).
+    pub async fn unpin_msg(&self, chat_id: i64, message_id: i64) {
         if let Err(e) = self
             .call(
-                "pinChatMessage",
-                json!({"chat_id": chat_id, "message_id": message_id, "disable_notification": true}),
+                "unpinChatMessage",
+                json!({"chat_id": chat_id, "message_id": message_id}),
                 Duration::from_secs(15),
             )
             .await
         {
-            eprintln!("pinChatMessage failed: {e}");
+            eprintln!("unpinChatMessage failed: {e}");
         }
     }
 

@@ -58,13 +58,14 @@ pub fn assign(existing: &[String], kind: &str) -> String {
     }
 }
 
-/// Full topic title: `o2 · herdr-telegram`. Static identity — set once at
-/// creation, never per message. The space label (usually the project
-/// folder) is capped so titles stay scannable. (No status emoji: a badge
-/// that isn't updated on every flip would just go stale and lie.)
-pub fn title(tag: &str, space: &str) -> String {
+/// Full topic title: `🔄 o2 · herdr-telegram` — emoji status + stable tag.
+/// Titles update on genuine transitions only (gated in manager), never per
+/// message flicker. NOTE: Telegram accepts `icon_color` solely on topic
+/// *creation* — on edit it returns ok:true while changing nothing (verified
+/// live), so emoji text is the only working state signal. Don't retry that.
+pub fn title(status: &str, tag: &str, space: &str) -> String {
     let short: String = space.chars().take(20).collect();
-    format!("{tag} · {short}")
+    format!("{} {tag} · {short}", crate::ui::emoji(status))
 }
 
 #[cfg(test)]
@@ -110,13 +111,13 @@ mod tests {
 
     #[test]
     fn test_title_format() {
-        assert_eq!(title("o2", "herdr-telegram"), "o2 · herdr-telegram");
-        assert_eq!(title("c1", "ajnow"), "c1 · ajnow");
-        assert_eq!(title("a1", "my-project"), "a1 · my-project");
+        assert_eq!(title("idle", "o2", "herdr-telegram"), "🟢 o2 · herdr-telegram");
+        assert_eq!(title("working", "c1", "ajnow"), "🔄 c1 · ajnow");
+        assert_eq!(title("blocked", "a1", "my-project"), "⛔️ a1 · my-project");
         // Long labels are capped at 20 chars.
         assert_eq!(
-            title("o1", "a-very-long-workspace-label-here"),
-            "o1 · a-very-long-workspac"
+            title("done", "o1", "a-very-long-workspace-label-here"),
+            "✅️ o1 · a-very-long-workspac"
         );
     }
 }

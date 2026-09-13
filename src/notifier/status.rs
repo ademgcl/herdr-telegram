@@ -4,7 +4,6 @@ use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
-    notifier::pin::refresh_pin,
     state::AppState,
     types::MAX_MSG_UNITS,
     ui::{btn, chunks, emoji, ws_label},
@@ -51,11 +50,22 @@ pub async fn observe_status(
         .map(|w| format!("#{} {}", w.number, w.label))
         .unwrap_or_else(|| ws_id.clone());
 
-    // The pane's topic exists (static `{tag} · {space}` title, set once).
-    s.topics.ensure_topic(pane, &kind, raw_space).await;
-    // The pinned card always tracks status — even seeds and working
-    // transitions. Silent, in-place, zero message cost.
-    refresh_pin(s, pane, new_status).await;
+    // The pane's topic exists (created on first sight).
+    s.topics
+        .ensure_topic(pane, &kind, raw_space, new_status)
+        .await;
+    // Title tracking — silent, renames never notify:
+    // - working/blocked rename immediately;
+    // - silent observations (seed, job finalize) always sync. This settles
+    //   prompt-path titles: their live settle event is swallowed by the
+    //   jobs guard below, so without this the badge would stick at 🔄.
+    // Spontaneous settles take the debounce path further down instead.
+    // ("?" kinds never mint tags — see ensure_topic.)
+    if kind != "?" && (silent || matches!(new_status, "working" | "blocked")) {
+        let title =
+            crate::topics::names::title(new_status, &s.topics.tag(pane, &kind), raw_space);
+        s.topics.rename_to(pane, &title).await;
+    }
 
     if silent || old.as_deref() == Some(new_status) {
         return;
@@ -82,13 +92,6 @@ pub async fn observe_status(
         delta(&screen, &base).to_vec()
     };
     let fresh_body = join_trimmed(&final_block(&source, ""));
-    if !fresh_body.is_empty() {
-        s.last_reply
-            .lock()
-            .await
-            .insert(pane.to_string(), fresh_body.clone());
-        refresh_pin(s, pane, new_status).await;
-    }
 
     // Collapse rapid done <-> idle flap — but only when genuinely rapid.
     if ((old.as_deref() == Some("done") && new_status == "idle")
@@ -229,9 +232,6 @@ async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Inst
     };
     let body = join_trimmed(&final_block(&source, ""));
     s.seen.lock().await.insert(pane.clone(), screen);
-    if body.is_empty() {
-        return;
-    }
     let info = get_agent(&s.cfg.socket, &pane).await.ok();
     let (kind, ws_id) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone()),
@@ -239,6 +239,15 @@ async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Inst
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
+    // Settle confirmed: title follows now (even with no fresh body).
+    if kind != "?" {
+        let title =
+            crate::topics::names::title(&settled, &s.topics.tag(&pane, &kind), raw_space);
+        s.topics.rename_to(&pane, &title).await;
+    }
+    if body.is_empty() {
+        return;
+    }
     post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await;
 }
 
@@ -255,7 +264,7 @@ async fn post_spontaneous_card(
     // NOTE: deliberately NOT touching focus here — background pushes must
     // never hijack where the owner's next plain-text message gets delivered.
     let text = match settled {
-        "blocked" => format!("⛔ {body}\n↩️ reply or type in topic to answer"),
+        "blocked" => format!("{} {body}\n↩️ reply or type in topic to answer", emoji("blocked")),
         _ => body.to_string(),
     };
     let parts = chunks(&text, MAX_MSG_UNITS);
@@ -264,18 +273,13 @@ async fn post_spontaneous_card(
         parts.len(),
         body.len()
     );
-    s.last_reply
-        .lock()
-        .await
-        .insert(pane.to_string(), body.to_string());
     s.last_done
         .lock()
         .await
         .insert(pane.to_string(), std::time::Instant::now());
-    refresh_pin(s, pane, settled).await;
 
     if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.ensure_topic(pane, kind, space).await {
+        if let Some(thread) = s.topics.ensure_topic(pane, kind, space, settled).await {
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 s.remember(forum, mid, pane).await;

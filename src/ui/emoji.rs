@@ -1,10 +1,14 @@
+/// NOTE: ✅/⛔/⚪ default to *text* presentation (U+2705 etc. bare) and
+/// Telegram's topic-name comparison drops them — state badges using them
+/// silently never apply. The explicit \u{fe0f} (VS16) forces real emoji.
+/// 🔄/🟢 are emoji-presentation by default and need nothing.
 pub fn emoji(status: &str) -> &'static str {
     match status {
         "working" => "🔄",
         "idle" => "🟢",
-        "blocked" => "⛔",
-        "done" => "✅",
-        "closed" | "dead" | "exited" => "⚪",
+        "blocked" => "⛔\u{fe0f}",
+        "done" => "✅\u{fe0f}",
+        "closed" | "dead" | "exited" => "⚪\u{fe0f}",
         _ => "❔",
     }
 }
@@ -19,7 +23,7 @@ where
 
     for s in statuses {
         if s == "blocked" {
-            return "⛔";
+            return "⛔\u{fe0f}";
         }
         if s == "working" {
             has_working = true;
@@ -33,7 +37,7 @@ where
     if has_working {
         "🔄"
     } else if has_done {
-        "✅"
+        "✅\u{fe0f}"
     } else if has_idle {
         "🟢"
     } else {
@@ -49,17 +53,17 @@ mod tests {
     fn test_emoji_mapping() {
         assert_eq!(emoji("working"), "🔄");
         assert_eq!(emoji("idle"), "🟢");
-        assert_eq!(emoji("blocked"), "⛔");
-        assert_eq!(emoji("done"), "✅");
-        assert_eq!(emoji("exited"), "⚪");
+        assert_eq!(emoji("blocked"), "⛔\u{fe0f}");
+        assert_eq!(emoji("done"), "✅\u{fe0f}");
+        assert_eq!(emoji("exited"), "⚪\u{fe0f}");
         assert_eq!(emoji("other"), "❔");
     }
 
     #[test]
     fn test_worst_status() {
-        assert_eq!(worst_status(vec!["idle", "working", "blocked"]), "⛔");
+        assert_eq!(worst_status(vec!["idle", "working", "blocked"]), "⛔\u{fe0f}");
         assert_eq!(worst_status(vec!["idle", "working"]), "🔄");
-        assert_eq!(worst_status(vec!["idle", "done"]), "✅");
+        assert_eq!(worst_status(vec!["idle", "done"]), "✅\u{fe0f}");
         assert_eq!(worst_status(vec!["idle"]), "🟢");
         assert_eq!(worst_status(vec![]), "▫️");
     }
