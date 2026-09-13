@@ -60,9 +60,12 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
             return Ok("connection closed");
         }
         let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else { continue };
-        if ev["event"].as_str() == Some("pane_agent_status_changed")
+        // NOTE: wire name is dotted ("pane.agent_status_changed", same as
+        // the subscription type) — NOT underscored.
+        if ev["event"].as_str() == Some("pane.agent_status_changed")
             && let Some(pane) = ev["data"]["pane_id"].as_str()
         {
+            println!("[events] {pane} status event");
             let status = match get_agent(&s.cfg.socket, pane).await {
                 Ok(a) => a.status,
                 Err(e) => {

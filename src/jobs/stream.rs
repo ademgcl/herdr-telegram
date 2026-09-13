@@ -52,9 +52,10 @@ impl EvStream {
                 return None;
             }
             let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else { continue };
+            // NOTE: wire names are dotted (same as subscription types).
             match ev["event"].as_str() {
-                Some("pane_scroll_changed") => return Some(WatchEvent::Output),
-                Some("pane_agent_status_changed") => return Some(WatchEvent::Status),
+                Some("pane.scroll_changed") => return Some(WatchEvent::Output),
+                Some("pane.agent_status_changed") => return Some(WatchEvent::Status),
                 _ => continue,
             }
         }

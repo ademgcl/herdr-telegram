@@ -27,6 +27,13 @@ pub struct State {
     /// When a prompt watcher last reported a pane — status alerts inside
     /// this window are redundant (the final card already covered them).
     pub last_done: Mutex<HashMap<String, std::time::Instant>>,
+    /// Last screen snapshot per pane — baseline for spontaneous output:
+    /// settles with no fresh delta repost nothing (idempotent).
+    pub seen: Mutex<HashMap<String, Vec<String>>>,
+    /// When each pane's status last changed — done↔idle flap is only
+    /// collapsed when genuinely rapid (push events), never for slow
+    /// watchdog-sampled settles which are legitimate completions.
+    pub last_change: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 pub type AppState = Arc<State>;
@@ -63,6 +70,8 @@ impl State {
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
             last_done: Mutex::new(HashMap::new()),
+            seen: Mutex::new(HashMap::new()),
+            last_change: Mutex::new(HashMap::new()),
         }))
     }
 

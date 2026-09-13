@@ -1,13 +1,19 @@
 use std::time::Duration;
 use serde_json::json;
 use crate::{
-    herdr::client::{get_agent, list_workspaces},
+    herdr::client::{get_agent, list_workspaces, read_agent_output},
+    jobs::filter::final_block,
+    jobs::stream::{delta, join_trimmed},
     state::AppState,
-    ui::{btn, emoji, ws_label},
+    types::MAX_MSG_UNITS,
+    ui::{btn, chunks, emoji, ws_label},
 };
 
 /// How long after a prompt's final card an idle/done alert is redundant.
 const POST_PROMPT_QUIET_SECS: u64 = 45;
+/// done↔idle bounces closer than this are flap (collapsed); slower ones
+/// are legitimate sampled completions (posted).
+const FLAP_WINDOW_SECS: u64 = 15;
 
 pub async fn observe_status(
     s: &AppState,
@@ -20,6 +26,10 @@ pub async fn observe_status(
         let mut m = s.status.lock().await;
         m.insert(pane.to_string(), new_status.to_string())
     };
+    let prev_change = {
+        let mut m = s.last_change.lock().await;
+        m.insert(pane.to_string(), std::time::Instant::now())
+    };
 
     if silent || old.as_deref() == Some(new_status) {
         return;
@@ -30,9 +40,14 @@ pub async fn observe_status(
         return;
     }
 
-    // Collapse rapid done <-> idle flap
-    if (old.as_deref() == Some("done") && new_status == "idle")
-        || (old.as_deref() == Some("idle") && new_status == "done")
+    // Collapse rapid done <-> idle flap — but only when genuinely rapid.
+    // Slow sampled bounces (watchdog) are legitimate completions: the
+    // agent did work between observations, so they must post.
+    if ((old.as_deref() == Some("done") && new_status == "idle")
+        || (old.as_deref() == Some("idle") && new_status == "done"))
+        && prev_change
+            .map(|t| t.elapsed() < Duration::from_secs(FLAP_WINDOW_SECS))
+            .unwrap_or(false)
     {
         println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
         return;
@@ -45,8 +60,12 @@ pub async fn observe_status(
     }
 
     // Suppress the redundant idle/done echo right after a prompt's final
-    // card (provider-agnostic: every agent settles after answering).
-    if matches!(new_status, "idle" | "done" | "blocked")
+    // card — but ONLY for settle→settle bounces with no fresh work. A new
+    // work cycle (old == working) or a first sighting always posts, so a
+    // local reply right after a Telegram card is never swallowed.
+    let fresh_work = matches!(old.as_deref(), None | Some("working"));
+    if !fresh_work
+        && matches!(new_status, "idle" | "done" | "blocked")
         && let Some(t) = s.last_done.lock().await.get(pane)
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
     {
@@ -55,6 +74,41 @@ pub async fn observe_status(
     }
 
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
+
+    // Spontaneous output (no Telegram job prompted this pane — e.g. the
+    // owner typed directly in the terminal): forward the fresh reply to
+    // the agent's topic with the same extractor as prompt cards, so both
+    // directions land in Telegram. Idempotent via the seen baseline:
+    // settles with no fresh delta fall through to the short alert.
+    // First sight only anchors the baseline — never posts stale scrollback.
+    let screen: Vec<String> = read_agent_output(&s.cfg.socket, pane, 80)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    let mut seen = s.seen.lock().await;
+    let base = seen.get(pane).cloned().unwrap_or_default();
+    // First sight has no baseline: extract from the whole screen. This
+    // only runs on a real transition, so the last segment is fresh work
+    // that completed while the bot was up — never stale scrollback.
+    let source: Vec<String> = if base.is_empty() {
+        screen.clone()
+    } else {
+        delta(&screen, &base).to_vec()
+    };
+    let fresh_body = join_trimmed(&final_block(&source, ""));
+    seen.insert(pane.to_string(), screen);
+    drop(seen);
+
+    if !fresh_body.is_empty() {
+        post_spontaneous_card(&s, pane, new_status, &fresh_body).await;
+        s.last_done
+            .lock()
+            .await
+            .insert(pane.to_string(), std::time::Instant::now());
+        return;
+    }
 
     let info = get_agent(&s.cfg.socket, pane).await.ok();
     let (kind, ws_id, title) = match &info {
@@ -107,6 +161,43 @@ pub async fn observe_status(
                 )
                 .await;
             s.remember(*id, mid, pane).await;
+        }
+    }
+}
+
+/// Spontaneous settle card: same shape as a prompt final card, for output
+/// the bot didn't ask for (local typing, background work). Routes to the
+/// agent's topic — never hijacks focus.
+async fn post_spontaneous_card(s: &AppState, pane: &str, settled: &str, body: &str) {
+    let info = get_agent(&s.cfg.socket, pane).await.ok();
+    let (kind, ws_id) = match &info {
+        Some(a) => (a.kind.clone(), a.ws.clone()),
+        None => ("?".into(), "?".into()),
+    };
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let raw_space = ws_label(&spaces, &ws_id);
+
+    let hint = match settled {
+        "blocked" => "\n↩️ reply or type in topic to answer",
+        _ => "",
+    };
+    let header = format!("{} {settled}", emoji(settled));
+    let parts = chunks(&format!("{header}\n\n{body}{hint}"), MAX_MSG_UNITS);
+    println!("[alert] spontaneous card {pane}: {} part(s), body {} chars", parts.len(), body.len());
+
+    if let Some(forum) = s.cfg.forum {
+        if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space).await {
+            for part in &parts {
+                let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
+                s.remember(forum, mid, pane).await;
+            }
+        }
+    } else {
+        for id in &s.cfg.owners {
+            for part in &parts {
+                let mid = s.tg.send_msg(*id, None, part, None).await;
+                s.remember(*id, mid, pane).await;
+            }
         }
     }
 }

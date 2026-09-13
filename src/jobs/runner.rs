@@ -193,11 +193,12 @@ async fn finalize(
     // nothing streamed.
     let prompt = job.prompt.lock().await.clone();
     let seg = final_block(acc, &prompt);
-    let body = if !seg.is_empty() {
-        join_trimmed(&seg)
+    let (body, snapshot) = if !seg.is_empty() {
+        (join_trimmed(&seg), None)
     } else {
         let screen = read_screen(&s.cfg.socket, pane, 80).await;
-        join_trimmed(&final_block(&screen, &prompt))
+        let body = join_trimmed(&final_block(&screen, &prompt));
+        (body, Some(screen))
     };
 
     let header = format!("{} {settled}", emoji(settled));
@@ -209,11 +210,17 @@ async fn finalize(
 
     observe_status(s, pane, settled, true, "job").await;
     // Stamp the prompt completion so the notifier can suppress the
-    // redundant post-prompt idle/done echo (the card already answered).
+    // redundant post-prompt idle/done echo (the card already answered),
+    // and anchor the spontaneous baseline so this card is never reposted.
     s.last_done
         .lock()
         .await
         .insert(pane.to_string(), std::time::Instant::now());
+    let snap = match snapshot {
+        Some(snap) => snap,
+        None => read_screen(&s.cfg.socket, pane, 80).await,
+    };
+    s.seen.lock().await.insert(pane.to_string(), snap);
     let (chat, th) = *job.dest.lock().await;
     println!("[prompt] finalize {pane}: {} part(s), body {} chars", parts.len(), body.len());
     for (i, part) in parts.iter().enumerate() {
