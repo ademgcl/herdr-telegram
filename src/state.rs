@@ -34,6 +34,13 @@ pub struct State {
     /// collapsed when genuinely rapid (push events), never for slow
     /// watchdog-sampled settles which are legitimate completions.
     pub last_change: Mutex<HashMap<String, std::time::Instant>>,
+    /// Latest answer excerpt per pane — feeds the pinned status card.
+    pub last_reply: Mutex<HashMap<String, String>>,
+    /// Last pinned-card text per pane — identical refreshes skip the edit.
+    pub pin_text: Mutex<HashMap<String, String>>,
+    /// Armed settle debounce per pane: (status, armed_at). A newer settle
+    /// supersedes; the task posts only if still current when it fires.
+    pub debounce: Mutex<HashMap<String, (String, std::time::Instant)>>,
 }
 
 pub type AppState = Arc<State>;
@@ -72,6 +79,9 @@ impl State {
             last_done: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
+            last_reply: Mutex::new(HashMap::new()),
+            pin_text: Mutex::new(HashMap::new()),
+            debounce: Mutex::new(HashMap::new()),
         }))
     }
 

@@ -9,7 +9,7 @@ use crate::{
     notifier::observe_status,
     state::AppState,
     types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, MAX_MSG_UNITS},
-    ui::{chunks, emoji, tail_fit},
+    ui::{chunks, tail_fit},
 };
 use crate::herdr::client::read_screen_adaptive;
 
@@ -201,13 +201,23 @@ async fn finalize(
         (body, Some(screen))
     };
 
-    let header = format!("{} {settled}", emoji(settled));
-    let parts: Vec<String> = if body.is_empty() {
-        vec![format!("{header}\n(no captured output)")]
+    // The card is the answer itself — never a status-word lead. Blocked
+    // keeps the reply affordance.
+    let text = if body.is_empty() {
+        "(no captured output)".to_string()
+    } else if settled == "blocked" {
+        format!("{body}\n↩️ reply or type in topic to answer")
     } else {
-        chunks(&format!("{header}\n\n{body}"), MAX_MSG_UNITS)
+        body.clone()
     };
+    let parts = chunks(&text, MAX_MSG_UNITS);
 
+    if !body.is_empty() {
+        s.last_reply
+            .lock()
+            .await
+            .insert(pane.to_string(), body.clone());
+    }
     observe_status(s, pane, settled, true, "job").await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),

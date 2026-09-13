@@ -1,9 +1,10 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use serde_json::json;
 use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
+    notifier::pin::refresh_pin,
     state::AppState,
     types::MAX_MSG_UNITS,
     ui::{btn, chunks, emoji, ws_label},
@@ -12,8 +13,12 @@ use crate::{
 /// How long after a prompt's final card an idle/done alert is redundant.
 const POST_PROMPT_QUIET_SECS: u64 = 45;
 /// done↔idle bounces closer than this are flap (collapsed); slower ones
-/// are legitimate sampled completions (posted).
+/// are legitimate sampled completions.
 const FLAP_WINDOW_SECS: u64 = 15;
+/// A settle must hold this long before a spontaneous answer pushes —
+/// micro-settle flicker mid-task stays on the pin instead of buzzing.
+/// Blocked (needs input) always pushes immediately.
+const SETTLE_DEBOUNCE_SECS: u64 = 15;
 
 pub async fn observe_status(
     s: &AppState,
@@ -31,6 +36,27 @@ pub async fn observe_status(
         m.insert(pane.to_string(), std::time::Instant::now())
     };
 
+    // Agent identity once per observation — shared by pins, cards and
+    // alerts below.
+    let info = get_agent(&s.cfg.socket, pane).await.ok();
+    let (kind, ws_id, title) = match &info {
+        Some(a) => (a.kind.clone(), a.ws.clone(), a.title.clone()),
+        None => ("?".into(), "?".into(), String::new()),
+    };
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let raw_space = ws_label(&spaces, &ws_id);
+    let space_label = spaces
+        .iter()
+        .find(|w| w.id == ws_id)
+        .map(|w| format!("#{} {}", w.number, w.label))
+        .unwrap_or_else(|| ws_id.clone());
+
+    // The pane's topic exists (static `{tag} · {space}` title, set once).
+    s.topics.ensure_topic(pane, &kind, raw_space).await;
+    // The pinned card always tracks status — even seeds and working
+    // transitions. Silent, in-place, zero message cost.
+    refresh_pin(s, pane, new_status).await;
+
     if silent || old.as_deref() == Some(new_status) {
         return;
     }
@@ -40,9 +66,31 @@ pub async fn observe_status(
         return;
     }
 
+    // Fresh screen vs the seen baseline. First sight extracts from the
+    // whole screen — this only runs on a real transition, so the last
+    // segment is freshly completed work.
+    let screen: Vec<String> = read_agent_output(&s.cfg.socket, pane, 80)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    let base = s.seen.lock().await.get(pane).cloned().unwrap_or_default();
+    let source: Vec<String> = if base.is_empty() {
+        screen.clone()
+    } else {
+        delta(&screen, &base).to_vec()
+    };
+    let fresh_body = join_trimmed(&final_block(&source, ""));
+    if !fresh_body.is_empty() {
+        s.last_reply
+            .lock()
+            .await
+            .insert(pane.to_string(), fresh_body.clone());
+        refresh_pin(s, pane, new_status).await;
+    }
+
     // Collapse rapid done <-> idle flap — but only when genuinely rapid.
-    // Slow sampled bounces (watchdog) are legitimate completions: the
-    // agent did work between observations, so they must post.
     if ((old.as_deref() == Some("done") && new_status == "idle")
         || (old.as_deref() == Some("idle") && new_status == "done"))
         && prev_change
@@ -50,19 +98,19 @@ pub async fn observe_status(
             .unwrap_or(false)
     {
         println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
+        s.seen.lock().await.insert(pane.to_string(), screen);
         return;
     }
 
-    // Suppress parallel alert if active prompt job is running —
-    // the watcher's live message / final card already covers this pane.
+    // A prompt job owns this pane — the watcher's live message / final
+    // card covers it. (Pin already refreshed above; seen is anchored by
+    // the job's finalize, so don't consume here.)
     if s.jobs.lock().await.contains_key(pane) {
         return;
     }
 
-    // Suppress the redundant idle/done echo right after a prompt's final
-    // card — but ONLY for settle→settle bounces with no fresh work. A new
-    // work cycle (old == working) or a first sighting always posts, so a
-    // local reply right after a Telegram card is never swallowed.
+    // Settle→settle bounce right after a prompt's final card carries no
+    // fresh work — consume the baseline and stay quiet.
     let fresh_work = matches!(old.as_deref(), None | Some("working"));
     if !fresh_work
         && matches!(new_status, "idle" | "done" | "blocked")
@@ -70,87 +118,31 @@ pub async fn observe_status(
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
     {
         println!("[alert] suppressed post-prompt {new_status} for {pane} ({src})");
+        s.seen.lock().await.insert(pane.to_string(), screen);
         return;
     }
 
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
 
-    // Spontaneous output (no Telegram job prompted this pane — e.g. the
-    // owner typed directly in the terminal): forward the fresh reply to
-    // the agent's topic with the same extractor as prompt cards, so both
-    // directions land in Telegram. Idempotent via the seen baseline:
-    // settles with no fresh delta fall through to the short alert.
-    // First sight only anchors the baseline — never posts stale scrollback.
-    let screen: Vec<String> = read_agent_output(&s.cfg.socket, pane, 80)
-        .await
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim_end().to_string())
-        .collect();
-    let mut seen = s.seen.lock().await;
-    let base = seen.get(pane).cloned().unwrap_or_default();
-    // First sight has no baseline: extract from the whole screen. This
-    // only runs on a real transition, so the last segment is fresh work
-    // that completed while the bot was up — never stale scrollback.
-    let source: Vec<String> = if base.is_empty() {
-        screen.clone()
-    } else {
-        delta(&screen, &base).to_vec()
-    };
-    let fresh_body = join_trimmed(&final_block(&source, ""));
-    seen.insert(pane.to_string(), screen);
-    drop(seen);
-
-    if !fresh_body.is_empty() {
-        post_spontaneous_card(&s, pane, new_status, &fresh_body).await;
-        s.last_done
-            .lock()
-            .await
-            .insert(pane.to_string(), std::time::Instant::now());
-        return;
-    }
-
-    let info = get_agent(&s.cfg.socket, pane).await.ok();
-    let (kind, ws_id, title) = match &info {
-        Some(a) => (a.kind.clone(), a.ws.clone(), a.title.clone()),
-        None => ("?".into(), "?".into(), String::new()),
-    };
-
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let raw_space = ws_label(&spaces, &ws_id);
-    let space_label = spaces
-        .iter()
-        .find(|w| w.id == ws_id)
-        .map(|w| format!("#{} {}", w.number, w.label))
-        .unwrap_or_else(|| ws_id.clone());
-
-    let hint = match new_status {
-        "blocked" => "\n↩️ reply or type in topic to answer",
-        _ => "",
-    };
-    let verb = if new_status == "idle" { "ready" } else { new_status };
-    let mut text = format!("{} {}: {kind} @ {space_label}", emoji(new_status), verb);
-    if !title.is_empty() {
-        let short: String = title.chars().take(60).collect();
-        text.push_str(&format!("\n{short}"));
-    }
-    // NOTE: deliberately NO screen tail here. herdr only exposes raw TUI
-    // text (box-drawing footers, Thought headers, tool echoes) for every
-    // provider — dumping it as an alert is pure boilerplate. The final
-    // prompt card carries the answer; `/read` shows raw output on demand.
-    text.push_str(hint);
-
-    // NOTE: deliberately NOT touching focus here — background alerts must never
-    // hijack where the owner's next plain-text message gets delivered.
-
-    // Alerts belong WHERE THE AGENT LIVES: its topic, as plain chat text.
-    // Direct messages are only for non-forum setups. Never both.
-    if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space).await {
-            let mid = s.tg.send_msg(forum, Some(thread), &text, None).await;
-            s.remember(forum, mid, pane).await;
+    // DM mode has no topics or pins — legacy immediate pushes.
+    if s.cfg.forum.is_none() {
+        if !fresh_body.is_empty() {
+            s.seen.lock().await.insert(pane.to_string(), screen);
+            post_spontaneous_card(&s, pane, &kind, raw_space, new_status, &fresh_body).await;
+            return;
         }
-    } else {
+        s.seen.lock().await.insert(pane.to_string(), screen);
+        let hint = match new_status {
+            "blocked" => "\n↩️ reply or type in topic to answer",
+            _ => "",
+        };
+        let verb = if new_status == "idle" { "ready" } else { new_status };
+        let mut text = format!("{} {}: {kind} @ {space_label}", emoji(new_status), verb);
+        if !title.is_empty() {
+            let short: String = title.chars().take(60).collect();
+            text.push_str(&format!("\n{short}"));
+        }
+        text.push_str(hint);
         for id in &s.cfg.owners {
             let mid = s.tg
                 .send_msg(
@@ -162,31 +154,128 @@ pub async fn observe_status(
                 .await;
             s.remember(*id, mid, pane).await;
         }
+        return;
     }
+
+    // Forum mode: blocked needs input NOW — push immediately. done/idle
+    // arm the debounce: the pin already shows state, the push waits to
+    // confirm the settle isn't mid-task flicker.
+    if new_status == "blocked" {
+        s.seen.lock().await.insert(pane.to_string(), screen);
+        if !fresh_body.is_empty() {
+            post_spontaneous_card(&s, pane, &kind, raw_space, new_status, &fresh_body).await;
+        }
+        return;
+    }
+    let at = Instant::now();
+    s.debounce
+        .lock()
+        .await
+        .insert(pane.to_string(), (new_status.to_string(), at));
+    println!("[alert] armed debounce {pane} → {new_status}");
+    let s2 = s.clone();
+    let pane2 = pane.to_string();
+    let st2 = new_status.to_string();
+    tokio::spawn(async move {
+        settle_check(s2, pane2, st2, at).await;
+    });
 }
 
-/// Spontaneous settle card: same shape as a prompt final card, for output
-/// the bot didn't ask for (local typing, background work). Routes to the
-/// agent's topic — never hijacks focus.
-async fn post_spontaneous_card(s: &AppState, pane: &str, settled: &str, body: &str) {
-    let info = get_agent(&s.cfg.socket, pane).await.ok();
+/// Debounced spontaneous push: posts the fresh reply only if this settle
+/// is still current (no newer transition, no prompt takeover, no newer
+/// card) after the grace period. Baseline is consumed either way.
+async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Instant) {
+    tokio::time::sleep(Duration::from_secs(SETTLE_DEBOUNCE_SECS)).await;
+    let current = s.debounce.lock().await.get(&pane).cloned();
+    if current
+        .map(|(st, at)| st != settled || at != armed_at)
+        .unwrap_or(true)
+    {
+        return;
+    }
+    s.debounce.lock().await.remove(&pane);
+    if s.jobs.lock().await.contains_key(&pane) {
+        return;
+    }
+    if s.status
+        .lock()
+        .await
+        .get(&pane)
+        .map(|st| st != &settled)
+        .unwrap_or(true)
+    {
+        return;
+    }
+    if s.last_done
+        .lock()
+        .await
+        .get(&pane)
+        .map(|t| *t > armed_at)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let screen: Vec<String> = read_agent_output(&s.cfg.socket, &pane, 80)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    let base = s.seen.lock().await.get(&pane).cloned().unwrap_or_default();
+    let source: Vec<String> = if base.is_empty() {
+        screen.clone()
+    } else {
+        delta(&screen, &base).to_vec()
+    };
+    let body = join_trimmed(&final_block(&source, ""));
+    s.seen.lock().await.insert(pane.clone(), screen);
+    if body.is_empty() {
+        return;
+    }
+    let info = get_agent(&s.cfg.socket, &pane).await.ok();
     let (kind, ws_id) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone()),
         None => ("?".into(), "?".into()),
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
+    post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await;
+}
 
-    let hint = match settled {
-        "blocked" => "\n↩️ reply or type in topic to answer",
-        _ => "",
+/// Answer push: the body alone (never a status-word lead), plus the reply
+/// affordance when input is needed. Blocked keeps a ⛔ prefix for urgency.
+async fn post_spontaneous_card(
+    s: &AppState,
+    pane: &str,
+    kind: &str,
+    space: &str,
+    settled: &str,
+    body: &str,
+) {
+    // NOTE: deliberately NOT touching focus here — background pushes must
+    // never hijack where the owner's next plain-text message gets delivered.
+    let text = match settled {
+        "blocked" => format!("⛔ {body}\n↩️ reply or type in topic to answer"),
+        _ => body.to_string(),
     };
-    let header = format!("{} {settled}", emoji(settled));
-    let parts = chunks(&format!("{header}\n\n{body}{hint}"), MAX_MSG_UNITS);
-    println!("[alert] spontaneous card {pane}: {} part(s), body {} chars", parts.len(), body.len());
+    let parts = chunks(&text, MAX_MSG_UNITS);
+    println!(
+        "[alert] spontaneous card {pane}: {} part(s), body {} chars",
+        parts.len(),
+        body.len()
+    );
+    s.last_reply
+        .lock()
+        .await
+        .insert(pane.to_string(), body.to_string());
+    s.last_done
+        .lock()
+        .await
+        .insert(pane.to_string(), std::time::Instant::now());
+    refresh_pin(s, pane, settled).await;
 
     if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.ensure_topic(pane, &kind, raw_space).await {
+        if let Some(thread) = s.topics.ensure_topic(pane, kind, space).await {
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 s.remember(forum, mid, pane).await;

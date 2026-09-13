@@ -149,7 +149,8 @@ async fn handle_general_forum_message(
         match spawn_agent(&s.cfg.socket, kind, ws).await {
             Ok(row) => {
                 let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, ws_label(&spaces, &row.ws)).await {
+                let space = ws_label(&spaces, &row.ws);
+                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, space).await {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}] in topic #{topic_th}", row.kind, row.pane), None).await;
                 } else {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}]", row.kind, row.pane), None).await;

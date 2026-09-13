@@ -1,12 +1,16 @@
+use std::{collections::HashSet, sync::Mutex};
 use crate::{
     telegram::client::TelegramClient,
-    topics::storage::TopicStorage,
+    topics::{names, storage::TopicStorage},
 };
 
 pub struct TopicManager {
     forum_id: Option<i64>,
     storage: TopicStorage,
     tg: TelegramClient,
+    /// Panes whose inherited live-status title was already stripped this
+    /// process (one-time migration — steady state renames nothing, ever).
+    migrated: Mutex<HashSet<String>>,
 }
 
 impl TopicManager {
@@ -15,6 +19,7 @@ impl TopicManager {
             forum_id,
             storage: TopicStorage::new(),
             tg,
+            migrated: Mutex::new(HashSet::new()),
         }
     }
 
@@ -22,34 +27,71 @@ impl TopicManager {
         self.storage.get_pane(thread)
     }
 
+    pub fn get_thread(&self, pane: &str) -> Option<i64> {
+        self.storage.get_thread(pane)
+    }
+
+    pub fn get_pin(&self, pane: &str) -> Option<i64> {
+        self.storage.get_pin(pane)
+    }
+
+    pub fn set_pin(&self, pane: &str, msg_id: i64) {
+        self.storage.set_pin(pane.to_string(), msg_id);
+    }
+
+    pub fn clear_pin(&self, pane: &str) {
+        self.storage.clear_pin(pane);
+    }
+
     pub fn all_mappings(&self) -> std::collections::HashMap<String, i64> {
         self.storage.all_mappings()
     }
 
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
+        self.migrated.lock().unwrap().remove(pane);
         self.storage.remove(pane)
     }
 
-    /// Topics are created once and NEVER renamed.
-    pub fn topic_name(kind: &str, space: &str) -> String {
-        format!("{kind} · {space}")
-    }
-
+    /// Ensure the pane's topic exists (`{tag} · {space}`, e.g.
+    /// `o2 · herdr-telegram`) and return its thread. Titles are static
+    /// identity set once at creation — never touched per message. Topics
+    /// inherited with a live-status title are stripped exactly once.
     pub async fn ensure_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
-        if let Some(t) = self.storage.get_thread(pane) {
-            return Some(t);
-        }
         let forum = self.forum_id?;
-        let name = Self::topic_name(kind, space);
-        match self.tg.create_forum_topic(forum, &name).await {
-            Ok(thread) => {
-                println!("[topics] created topic #{thread} for {pane} ({name})");
-                self.storage.insert(pane.to_string(), thread);
-                Some(thread)
+        // Unknown kind (agent vanished mid-flight): never mint "?n" tags —
+        // just route to the existing thread, if any.
+        if kind == "?" {
+            return self.storage.get_thread(pane);
+        }
+        let tag = self.storage.assign_tag(pane, kind);
+        match self.storage.get_thread(pane) {
+            Some(t) => {
+                let first_sight = self.migrated.lock().unwrap().insert(pane.to_string());
+                if first_sight {
+                    let name = names::title(&tag, space);
+                    match self.tg.rename_forum_topic(forum, t, &name).await {
+                        Ok(()) => {}
+                        // Already static — the common case after migration.
+                        Err(e) if e.to_string().contains("TOPIC_NOT_MODIFIED") => {}
+                        Err(e) => eprintln!("[topics] rename #{t} ({pane}) failed: {e}"),
+                    }
+                }
+                Some(t)
             }
-            Err(e) => {
-                eprintln!("[topics] failed to create topic for {pane}: {e}");
-                None
+            None => {
+                let name = names::title(&tag, space);
+                match self.tg.create_forum_topic(forum, &name).await {
+                    Ok(thread) => {
+                        println!("[topics] created topic #{thread} for {pane} ({name})");
+                        self.storage.insert(pane.to_string(), thread);
+                        self.migrated.lock().unwrap().insert(pane.to_string());
+                        Some(thread)
+                    }
+                    Err(e) => {
+                        eprintln!("[topics] failed to create topic for {pane}: {e}");
+                        None
+                    }
+                }
             }
         }
     }

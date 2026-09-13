@@ -13,6 +13,13 @@ struct Store {
     topics: HashMap<String, i64>,
     #[serde(default)]
     unread: HashSet<String>,
+    /// Stable short tags per pane ("o2") — survive restarts so topic
+    /// names never reshuffle. Missing in old files → default empty.
+    #[serde(default)]
+    tags: HashMap<String, String>,
+    /// Pinned live-status message per pane (pane → message id).
+    #[serde(default)]
+    pins: HashMap<String, i64>,
 }
 
 pub struct TopicStorage {
@@ -54,6 +61,8 @@ impl TopicStorage {
             .map(|topics| Store {
                 topics,
                 unread: HashSet::new(),
+                tags: HashMap::new(),
+                pins: HashMap::new(),
             })
             .unwrap_or_default()
     }
@@ -91,10 +100,43 @@ impl TopicStorage {
         let mut s = self.store.lock().unwrap();
         let prev = s.topics.remove(pane);
         s.unread.remove(pane);
-        if prev.is_some() {
+        let untagged = s.tags.remove(pane);
+        let unpinned = s.pins.remove(pane);
+        if prev.is_some() || untagged.is_some() || unpinned.is_some() {
             self.save(&s);
         }
         prev
+    }
+
+    /// Get-or-assign this pane's stable tag, atomically under one lock so
+    /// concurrent topic creations never hand out the same tag twice.
+    pub fn assign_tag(&self, pane: &str, kind: &str) -> String {
+        let mut s = self.store.lock().unwrap();
+        if let Some(t) = s.tags.get(pane) {
+            return t.clone();
+        }
+        let taken: Vec<String> = s.tags.values().cloned().collect();
+        let tag = super::names::assign(&taken, kind);
+        s.tags.insert(pane.to_string(), tag.clone());
+        self.save(&s);
+        tag
+    }
+
+    pub fn get_pin(&self, pane: &str) -> Option<i64> {
+        self.store.lock().unwrap().pins.get(pane).copied()
+    }
+
+    pub fn set_pin(&self, pane: String, msg_id: i64) {
+        let mut s = self.store.lock().unwrap();
+        s.pins.insert(pane, msg_id);
+        self.save(&s);
+    }
+
+    pub fn clear_pin(&self, pane: &str) {
+        let mut s = self.store.lock().unwrap();
+        if s.pins.remove(pane).is_some() {
+            self.save(&s);
+        }
     }
 
     pub fn all_mappings(&self) -> HashMap<String, i64> {
@@ -111,7 +153,7 @@ mod tests {
     fn test_store_roundtrip_and_migration() {
         let legacy = r#"{"w1:p1": 42}"#;
         let migrated: Store = serde_json::from_str(legacy)
-            .or_else(|_| serde_json::from_str::<HashMap<String, i64>>(legacy).map(|m| Store { topics: m, unread: HashSet::new() }))
+            .or_else(|_| serde_json::from_str::<HashMap<String, i64>>(legacy).map(|m| Store { topics: m, unread: HashSet::new(), tags: HashMap::new(), pins: HashMap::new() }))
             .unwrap();
         assert_eq!(migrated.topics.get("w1:p1"), Some(&42));
         assert!(migrated.unread.is_empty());
@@ -129,6 +171,24 @@ mod tests {
         st.insert("w9:p9".into(), 77);
         let re = TopicStorage::at(st.file_path.clone());
         assert_eq!(re.get_thread("w9:p9"), Some(77));
+        let _ = std::fs::remove_file(&st.file_path);
+    }
+
+    #[test]
+    fn test_tags_stable_and_reassigned() {
+        let st = TopicStorage::at(PathBuf::from(format!(
+            "/tmp/herdr-tg-test-tags-{}.json",
+            std::process::id()
+        )));
+        assert_eq!(st.assign_tag("w1:p1", "opencode"), "o1");
+        assert_eq!(st.assign_tag("w1:p1", "opencode"), "o1");
+        assert_eq!(st.assign_tag("w1:p2", "opencode"), "o2");
+        assert_eq!(st.assign_tag("w2:p1", "claude"), "c1");
+        // Persisted across reopen; freed tags are refilled.
+        let re = TopicStorage::at(st.file_path.clone());
+        assert_eq!(re.assign_tag("w1:p2", "opencode"), "o2");
+        re.remove("w1:p1");
+        assert_eq!(re.assign_tag("w3:p9", "opencode"), "o1");
         let _ = std::fs::remove_file(&st.file_path);
     }
 }

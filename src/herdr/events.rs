@@ -5,7 +5,7 @@ use tokio::{
     net::UnixStream,
 };
 use crate::{
-    herdr::client::{get_agent, list_agents},
+    herdr::client::list_agents,
     notifier::{observe_status, reconcile},
     state::AppState,
     types::Res,
@@ -63,17 +63,49 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
         // NOTE: wire name is dotted ("pane.agent_status_changed", same as
         // the subscription type) — NOT underscored.
         if ev["event"].as_str() == Some("pane.agent_status_changed")
-            && let Some(pane) = ev["data"]["pane_id"].as_str()
+            && let Some((pane, status)) = parse_status_event(&ev)
         {
-            println!("[events] {pane} status event");
-            let status = match get_agent(&s.cfg.socket, pane).await {
-                Ok(a) => a.status,
-                Err(e) => {
-                    eprintln!("[events] agent.get failed for {pane}: {e}");
-                    continue;
-                }
-            };
-            observe_status(s, pane, &status, false, "event").await;
+            println!("[events] {pane} → {status}");
+            observe_status(s, pane, status, false, "event").await;
         }
+    }
+}
+
+/// (pane, status) straight from the event payload. The event IS the
+/// transition — re-fetching via agent.get here races herdr's own state
+/// machine and records wrong/superseded statuses (stuck 🔄, invisible
+/// working bursts), so the reported status is trusted as-is.
+fn parse_status_event(ev: &Value) -> Option<(&str, &str)> {
+    let pane = ev["data"]["pane_id"].as_str()?;
+    let status = ev["data"]["agent_status"].as_str()?;
+    Some((pane, status))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_status_event_wire_shape() {
+        let ev: Value = serde_json::from_str(
+            r#"{"data":{"agent":"opencode","agent_status":"working","pane_id":"wG:p2","workspace_id":"wG"},"event":"pane.agent_status_changed"}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_status_event(&ev), Some(("wG:p2", "working")));
+    }
+
+    #[test]
+    fn test_parse_status_event_rejects_malformed() {
+        let missing: Value = serde_json::from_str(
+            r#"{"data":{"pane_id":"wG:p2"},"event":"pane.agent_status_changed"}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_status_event(&missing), None);
+        let wrong_name: Value = serde_json::from_str(
+            r#"{"data":{"agent_status":"idle","pane_id":"wG:p2"},"event":"pane_agent_status_changed"}"#,
+        )
+        .unwrap();
+        // Caller matches the dotted name first; parser only reads data.
+        assert_eq!(parse_status_event(&wrong_name), Some(("wG:p2", "idle")));
     }
 }
