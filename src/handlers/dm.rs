@@ -107,6 +107,22 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/quit" {
+        // Explicit target or focus (focus may be a rowless shell pane —
+        // quit_to_shell reports that case itself).
+        let pane = match resolve_target(&rows, Some(arg)) {
+            Some(r) => Some(r.pane),
+            None if arg.is_empty() => s.get_focus().await,
+            _ => None,
+        };
+        let Some(pane) = pane else {
+            s.tg.send_msg(chat, None, "who? `/quit <pane>` or tap an agent in /agents", None).await;
+            return;
+        };
+        super::shell::quit_to_shell(&s, chat, None, &pane).await;
+        return;
+    }
+
     if cmd == "/model" {
         // `/model [target] [search]` — first token is a target only when it
         // resolves to a pane/kind; otherwise the whole arg is the search.
@@ -157,6 +173,16 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
+    // Checked before routing: the next message belongs to the waiter.
+    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+        match super::interactive::type_text(&s, &wpane, text).await {
+            Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
+            Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await; }
+        }
+        return;
+    }
+
     // Bare text prompt routing
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let explicit = if rest.is_empty() { None } else { resolve_target(&rows, Some(head)).map(|r| (r, rest.to_string())) };
@@ -172,19 +198,11 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     } else if let Some(r) = resolve_target(&rows, Some("")) {
         (r, text.to_string())
     } else {
-        s.tg.send_msg(chat, None, "who? tap an agent in /agents, or reply to its last message", None).await;
+        // Reply/focus may point at a shell pane (invisible to agent.list).
+        super::shell::run_shell_fallback(&s, chat, reply_pane.clone(), text).await;
         return;
     };
 
-    if prompt_text.trim().is_empty() { return; }
-    // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
-    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
-        match super::interactive::type_text(&s, &wpane, &prompt_text).await {
-            Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
-            Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await; }
-        }
-        return;
-    }
     // Blocked panes reject text prompts — type into the waiting prompt.
     if row.status == "blocked" {
         s.set_focus(&row.pane).await;

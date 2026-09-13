@@ -14,7 +14,7 @@ use crate::{
 
 /// Strip a `@BotName` mention suffix from a command (`/model@MyBot` → `/model`).
 /// Group clients append it when only one bot is present; plain commands pass through.
-fn bare_cmd(cmd: &str) -> &str {
+pub(crate) fn bare_cmd(cmd: &str) -> &str {
     cmd.split('@').next().unwrap_or(cmd)
 }
 
@@ -55,7 +55,9 @@ async fn handle_topic_agent_message(
     let cmd = bare_cmd(raw_cmd);
 
     let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
-        s.tg.send_msg(chat, Some(thread_id), "⚠️ agent is not active or pane closed", None).await;
+        // No agent in this pane: shell CLI mode (or a lingering dead pane,
+        // which the shell side reports as gone).
+        super::shell::handle_shell_topic(s, chat, thread_id, pane, text).await;
         return;
     };
     println!("[forum] got agent {} cmd={arg:?}...", agent.pane, arg = &text.chars().take(30).collect::<String>());
@@ -70,6 +72,11 @@ async fn handle_topic_agent_message(
         s.typewait.lock().await.remove(&chat);
         let count = s.cancel_all_jobs().await;
         s.tg.send_msg(chat, Some(thread_id), &format!("✋ cancelled {count} prompt(s)"), None).await;
+        return;
+    }
+
+    if cmd == "/quit" {
+        super::shell::quit_to_shell(&s, chat, Some(thread_id), pane).await;
         return;
     }
 

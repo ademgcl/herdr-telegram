@@ -116,8 +116,20 @@ impl State {
         self.focus.lock().await.clone()
     }
 
-    pub async fn cancel_all_jobs(&self) -> usize {
-        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
+    /// Retire one pane's watcher (used by /quit: no agent left to watch).
+    pub async fn cancel_jobs_for(&self, pane: &str) -> bool {
+        let job = self.jobs.lock().await.remove(pane);
+        match job {
+            Some(job) => {
+                job.mark_stopped();
+                job.cancel.notify_waiters();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub async fn cancel_all_jobs(&self) -> usize {        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
         let count = jobs.len();
         for job in jobs.values() {
             job.mark_stopped();

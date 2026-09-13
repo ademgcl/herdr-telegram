@@ -5,6 +5,7 @@ pub mod interactive;
 pub mod model;
 pub mod model_parse;
 pub mod model_scan;
+pub mod shell;
 
 pub use callback::handle_callback;
 pub use dm::handle_dm_message;

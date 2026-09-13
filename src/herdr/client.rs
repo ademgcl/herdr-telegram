@@ -208,6 +208,43 @@ pub async fn send_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
     Ok(())
 }
 
+/// Raw keys to a pane (no agent needed) — shell-mode `/keys`, quit flows.
+pub async fn send_pane_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> {
+    rpc(socket, "pane.send_keys", json!({"pane_id": pane, "keys": keys})).await?;
+    Ok(())
+}
+
+/// Shell output: line-based panes serve recent_unwrapped; fall back to
+/// the visible viewport when they don't.
+pub async fn read_shell_output(socket: &str, pane: &str, lines: u32) -> Res<String> {
+    match read_pane_output(socket, pane, lines).await {
+        Ok(out) => Ok(out),
+        Err(_) => {
+            let r = rpc(
+                socket,
+                "pane.read",
+                json!({"pane_id": pane, "source": "visible", "lines": lines}),
+            )
+            .await?;
+            Ok(r["read"]["text"].as_str().unwrap_or("").trim().to_string())
+        }
+    }
+}
+
+/// Every live pane id — includes agentless shells that `agent.list` hides.
+/// Drives the shell-vs-dead decision in reconcile (keep shell topics, close
+/// dead ones).
+pub async fn list_panes(socket: &str) -> Res<Vec<String>> {
+    let r = rpc(socket, "pane.list", json!({})).await?;
+    let mut out = Vec::new();
+    for p in r["panes"].as_array().cloned().unwrap_or_default() {
+        if let Some(id) = p["pane_id"].as_str() {
+            out.push(id.to_string());
+        }
+    }
+    Ok(out)
+}
+
 /// Type text WITHOUT submitting — for TUI pickers/filters where Enter
 /// means "confirm selection", not "send".
 pub async fn type_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {

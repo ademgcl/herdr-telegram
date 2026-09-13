@@ -154,6 +154,7 @@ pub fn tail_fit(lines: &[String], max_units: usize) -> String {
 pub fn help_text() -> &'static str {
     "/agents   control panel: spaces, agents, ➕ spawn\n\
      /model    current model + free-Zen picker (opencode)\n\
+     /quit     drop the agent to a shell (idle only)\n\
      /read     recent output of focused agent\n\
      /cancel   abort prompts / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
@@ -168,9 +169,22 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • Plain text sends a prompt to this agent\n\
          • `/read` or `/output` — fetch recent terminal output\n\
          • `/model` — current model + free-Zen picker (opencode)\n\
+         • `/quit` — drop the agent to a shell (idle only)\n\
          • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
          • `/status` — refresh agent status card"
+    )
+}
+
+/// Help for a shell-pane topic: the pane is a terminal now.
+pub fn shell_help_text(pane: &str) -> String {
+    format!(
+        "💲 shell topic [{pane}]\n\n\
+         • Plain text runs as a shell command\n\
+         • `opencode` — re-enter the agent\n\
+         • `/read` — recent shell output\n\
+         • `/keys y enter` — send keystrokes\n\
+         • `/status` — shell card"
     )
 }
 
@@ -197,5 +211,8 @@ mod tests {
         let help = topic_help_text("w1:p1", "claude");
         assert!(help.contains("claude"));
         assert!(help.contains("w1:p1"));
+        let shell = shell_help_text("w1:p1");
+        assert!(shell.contains("w1:p1"));
+        assert!(shell.contains("opencode"));
     }
 }

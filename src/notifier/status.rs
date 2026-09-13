@@ -132,6 +132,14 @@ pub async fn observe_status(
     };
     let fresh_body = join_trimmed(&final_block(&source, ""));
 
+    // Re-entered an agent in a shelled pane: the user did it by hand in
+    // the topic, so it needs no announcement. Blocked still surfaces.
+    if old.as_deref() == Some("shell") && matches!(new_status, "idle" | "done") {
+        println!("[alert] suppressed re-enter {new_status} for {pane} ({src})");
+        s.seen.lock().await.insert(pane.to_string(), screen);
+        return;
+    }
+
     // A prompt job owns this pane — the watcher's live message / final
     // card covers it. (Seen is anchored by the job's finalize, so don't
     // consume here.)

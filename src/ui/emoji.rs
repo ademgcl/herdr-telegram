@@ -7,6 +7,7 @@ pub fn emoji(status: &str) -> &'static str {
     match status {
         "working" => "🔄",
         "idle" => "🟢",
+        "shell" => "💲",
         "blocked" => "🛑",
         "done" => "🏆",
         "closed" | "dead" | "exited" => "💀",
@@ -54,6 +55,7 @@ mod tests {
     fn test_emoji_mapping() {
         assert_eq!(emoji("working"), "🔄");
         assert_eq!(emoji("idle"), "🟢");
+        assert_eq!(emoji("shell"), "💲");
         assert_eq!(emoji("blocked"), "🛑");
         assert_eq!(emoji("done"), "🏆");
         assert_eq!(emoji("exited"), "💀");

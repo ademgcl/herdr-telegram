@@ -116,6 +116,12 @@ impl TopicManager {
         Some(thread)
     }
 
+    /// Badge a live-but-agentless pane as shell: no title touch (tags
+    /// stay stable for re-entry), just the shell icon. Silent, idempotent.
+    pub async fn mark_shell(&self, pane: &str) {
+        self.sync_topic(pane, "?", "?", "shell").await;
+    }
+
     /// One-time cleanup of the retired pinned-status era: unpin leftovers.
     /// No-op once storage is clean.
     pub async fn retire_pins(&self) {
