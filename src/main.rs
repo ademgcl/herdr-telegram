@@ -16,7 +16,7 @@ use crate::{
     notifier::reconcile,
     state::State,
     telegram::{get_updates, handle_update},
-    types::{Res, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
+    types::{Res, HERDR_PROTOCOL, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
 };
 
 #[tokio::main]
@@ -33,10 +33,10 @@ async fn main() -> Res<()> {
     // Verify Herdr connectivity and protocol
     let pong = ping(&s.cfg.socket).await?;
     println!(
-        "[herdr] server v{}, protocol {} (bot built against protocol 20)",
+        "[herdr] server v{}, protocol {} (bot built against protocol {HERDR_PROTOCOL})",
         pong["version"], pong["protocol"]
     );
-    if pong["protocol"].as_u64() != Some(20) {
+    if pong["protocol"].as_u64() != Some(HERDR_PROTOCOL) {
         eprintln!("[herdr] WARNING: unexpected protocol version — commands may fail");
     }
 

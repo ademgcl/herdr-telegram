@@ -1,5 +1,7 @@
 .env
 target/
 *.state
+*.bak
 bot.log
 bot.pid
+.DS_Store

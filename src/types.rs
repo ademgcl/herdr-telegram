@@ -5,6 +5,8 @@ pub const STALE_SECS: u64 = 600;
 pub const LIVE_EDIT_COOLDOWN_SECS: u64 = 4;
 pub const MAX_MSG_UNITS: usize = 3900;
 pub const SINGLE_INSTANCE_PORT: u16 = 47319;
+/// Herdr socket protocol this bot is built against (see `herdr api schema`).
+pub const HERDR_PROTOCOL: u64 = 22;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentRow {
