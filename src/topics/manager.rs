@@ -1,7 +1,6 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Mutex,
-    time::Instant,
 };
 use crate::{
     telegram::client::TelegramClient,
@@ -12,9 +11,11 @@ pub struct TopicManager {
     forum_id: Option<i64>,
     storage: TopicStorage,
     tg: TelegramClient,
-    /// Last title set per pane (+when) — renames fire only on real change,
-    /// never redundantly.
-    last_title: Mutex<HashMap<String, (String, Instant)>>,
+    /// Panes already stripped to text titles this process (one-time
+    /// migration away from the emoji-title era).
+    migrated: Mutex<HashSet<String>>,
+    /// Last icon set per pane — recolors fire only on real change.
+    last_icon: Mutex<HashMap<String, String>>,
 }
 
 impl TopicManager {
@@ -23,7 +24,8 @@ impl TopicManager {
             forum_id,
             storage: TopicStorage::new(),
             tg,
-            last_title: Mutex::new(HashMap::new()),
+            migrated: Mutex::new(HashSet::new()),
+            last_icon: Mutex::new(HashMap::new()),
         }
     }
 
@@ -41,21 +43,14 @@ impl TopicManager {
     }
 
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
-        self.last_title.lock().unwrap().remove(pane);
+        self.migrated.lock().unwrap().remove(pane);
+        self.last_icon.lock().unwrap().remove(pane);
         self.storage.remove(pane)
     }
 
-    /// Ensure the pane's topic exists (`{emoji} {tag} · {space}`, e.g.
-    /// `🔄 o2 · herdr-telegram`) and return its thread. Creation only —
-    /// later title tracking goes through `rename_to`, driven by genuine
-    /// transitions (immediate) and debounce-confirmed settles.
-    pub async fn ensure_topic(
-        &self,
-        pane: &str,
-        kind: &str,
-        space: &str,
-        status: &str,
-    ) -> Option<i64> {
+    /// Ensure the pane's topic exists (`{tag} · {space}`, pure text) and
+    /// return its thread. Titles never carry state — see `sync_topic`.
+    pub async fn ensure_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         let forum = self.forum_id?;
         // Unknown kind (agent vanished mid-flight): never mint "?n" tags —
         // just route to the existing thread, if any.
@@ -66,16 +61,13 @@ impl TopicManager {
         match self.storage.get_thread(pane) {
             Some(t) => Some(t),
             None => {
-                let name = names::title(status, &tag, space);
+                let name = names::title(&tag, space);
                 match self.tg.create_forum_topic(forum, &name).await {
                     Ok(thread) => {
                         println!("[topics] created topic #{thread} for {pane} ({name})");
                         self.storage.insert(pane.to_string(), thread);
-                        self.last_title
-                            .lock()
-                            .unwrap()
-                            .insert(pane.to_string(), (name, Instant::now()));
-                        return Some(thread);
+                        self.migrated.lock().unwrap().insert(pane.to_string());
+                        Some(thread)
                     }
                     Err(e) => {
                         eprintln!("[topics] failed to create topic for {pane}: {e}");
@@ -86,41 +78,42 @@ impl TopicManager {
         }
     }
 
-    /// Rename the pane's topic unless it already shows this title.
-    /// Callers decide timing: working/blocked rename immediately, settles
-    /// only after debounce confirmation — that pacing (not a dumb timer)
-    /// is what keeps titles fast yet flicker-free. Never notifies.
-    pub async fn rename_to(&self, pane: &str, title: &str) {
-        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
-            return;
-        };
-        // Decide under the lock, act outside it — std guards can't cross await.
-        let due = match self.last_title.lock().unwrap().get(pane) {
-            // Fresh boot: set immediately (also migrates static titles).
-            None => true,
-            Some((prev, _)) => prev != title,
-        };
-        if !due {
-            return;
-        }
-        let ok = match self.tg.rename_forum_topic(forum, thread, title).await {
-            Ok(()) => true,
-            // Server considers it equal (incl. its emoji-blind comparison)
-            // — treat as synced so we don't retry-spam every observation.
-            // NOTE: topic errors use underscores ("TOPIC_NOT_MODIFIED"),
-            // unlike message edits ("message is not modified").
-            Err(e) if e.to_string().contains("NOT_MODIFIED") => true,
-            Err(e) => {
-                eprintln!("[topics] rename #{thread} ({pane}) failed: {e}");
-                false
+    /// Sync topic state: one-time strip to the text title plus the state
+    /// icon for this status. Everything is silent (never notifies) and
+    /// cache-guarded (no redundant API calls). Safe to call on every
+    /// observation — icon swaps are cheap and notification-free.
+    pub async fn sync_topic(&self, pane: &str, kind: &str, space: &str, status: &str) -> Option<i64> {
+        let thread = self.ensure_topic(pane, kind, space).await?;
+        let forum = self.forum_id?;
+        // Never mint tags for unknown kinds — ensure_topic already routed
+        // without assigning.
+        if kind != "?"
+            && self.migrated.lock().unwrap().insert(pane.to_string())
+        {
+            let name = names::title(&self.tag(pane, kind), space);
+            // Best effort; NOT_MODIFIED just means already text.
+            let migrated = match self.tg.rename_forum_topic(forum, thread, &name).await {
+                Ok(()) => true,
+                Err(e) if e.to_string().contains("NOT_MODIFIED") => true,
+                Err(e) => {
+                    eprintln!("[topics] rename #{thread} ({pane}) failed: {e}");
+                    false
+                }
+            };
+            if !migrated {
+                self.migrated.lock().unwrap().remove(pane);
             }
-        };
-        if ok {
-            self.last_title
-                .lock()
-                .unwrap()
-                .insert(pane.to_string(), (title.to_string(), Instant::now()));
         }
+        let icon = names::icon_emoji_id(status).to_string();
+        let due = match self.last_icon.lock().unwrap().get(pane) {
+            None => true,
+            Some(prev) => prev != &icon,
+        };
+        if due {
+            self.tg.set_topic_icon(forum, thread, &icon).await;
+            self.last_icon.lock().unwrap().insert(pane.to_string(), icon);
+        }
+        Some(thread)
     }
 
     /// One-time cleanup of the retired pinned-status era: unpin leftovers.

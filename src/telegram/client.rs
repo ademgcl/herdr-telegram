@@ -169,6 +169,24 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// Set a forum topic's custom-emoji icon — the silent state signal.
+    /// Unlike `icon_color` (create-only, ignored on edit), this applies
+    /// AND renders on edit (verified live). Never notifies.
+    pub async fn set_topic_icon(&self, chat_id: i64, thread_id: i64, emoji_id: &str) {
+        if let Err(e) = self
+            .call(
+                "editForumTopic",
+                json!({"chat_id": chat_id, "message_thread_id": thread_id, "icon_custom_emoji_id": emoji_id}),
+                Duration::from_secs(15),
+            )
+            .await
+        {
+            if !e.to_string().contains("NOT_MODIFIED") {
+                eprintln!("set_topic_icon #{thread_id} failed: {e}");
+            }
+        }
+    }
+
     /// Unpin a message (one-time cleanup helper).
     pub async fn unpin_msg(&self, chat_id: i64, message_id: i64) {
         if let Err(e) = self

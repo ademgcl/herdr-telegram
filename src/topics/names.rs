@@ -1,6 +1,6 @@
-/// Short, unique, live forum-topic titles: `{emoji} {tag} · {space}`
-/// e.g. `🟢 o2 · herdr-telegram`. Tags are stable per pane (persisted) so
-/// restarts never reshuffle names.
+/// Short, unique forum-topic titles: `{tag} · {space}` e.g.
+/// `o2 · herdr-telegram`. Tags are stable per pane (persisted) so
+/// restarts never reshuffle names. State lives on the topic ICON.
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown
@@ -58,14 +58,26 @@ pub fn assign(existing: &[String], kind: &str) -> String {
     }
 }
 
-/// Full topic title: `🔄 o2 · herdr-telegram` — emoji status + stable tag.
-/// Titles update on genuine transitions only (gated in manager), never per
-/// message flicker. NOTE: Telegram accepts `icon_color` solely on topic
-/// *creation* — on edit it returns ok:true while changing nothing (verified
-/// live), so emoji text is the only working state signal. Don't retry that.
-pub fn title(status: &str, tag: &str, space: &str) -> String {
+/// Short, unique forum-topic titles: `{tag} · {space}` e.g.
+/// `o2 · herdr-telegram`. Pure text, set once — state lives on the topic
+/// ICON (see `icon_emoji_id`), never in the title.
+pub fn title(tag: &str, space: &str) -> String {
     let short: String = space.chars().take(20).collect();
-    format!("{} {tag} · {short}", crate::ui::emoji(status))
+    format!("{tag} · {short}")
+}
+
+/// Topic icon per agent status, as preset custom-emoji IDs (verified live:
+/// unlike `icon_color`, `icon_custom_emoji_id` applies AND renders on
+/// edit). Instant, silent, zero clutter — the at-a-glance state signal.
+pub fn icon_emoji_id(status: &str) -> &'static str {
+    match status {
+        "working" => "5350554349074391003", // 💻
+        "idle" => "5350392020785437399",    // ☕️
+        "done" => "5237699328843200968",    // ✅
+        "blocked" => "5379748062124056162", // ❗️
+        "closed" | "dead" | "exited" => "5408906741125490282", // 🏁
+        _ => "5377316857231450742",         // ❓
+    }
 }
 
 #[cfg(test)]
@@ -111,13 +123,22 @@ mod tests {
 
     #[test]
     fn test_title_format() {
-        assert_eq!(title("idle", "o2", "herdr-telegram"), "🟢 o2 · herdr-telegram");
-        assert_eq!(title("working", "c1", "ajnow"), "🔄 c1 · ajnow");
-        assert_eq!(title("blocked", "a1", "my-project"), "⛔️ a1 · my-project");
+        assert_eq!(title("o2", "herdr-telegram"), "o2 · herdr-telegram");
+        assert_eq!(title("c1", "ajnow"), "c1 · ajnow");
         // Long labels are capped at 20 chars.
         assert_eq!(
-            title("done", "o1", "a-very-long-workspace-label-here"),
-            "✅️ o1 · a-very-long-workspac"
+            title("o1", "a-very-long-workspace-label-here"),
+            "o1 · a-very-long-workspac"
         );
+    }
+
+    #[test]
+    fn test_icon_mapping() {
+        assert_eq!(icon_emoji_id("working"), "5350554349074391003");
+        assert_eq!(icon_emoji_id("idle"), "5350392020785437399");
+        assert_eq!(icon_emoji_id("done"), "5237699328843200968");
+        assert_eq!(icon_emoji_id("blocked"), "5379748062124056162");
+        assert_eq!(icon_emoji_id("exited"), "5408906741125490282");
+        assert_eq!(icon_emoji_id("whatever"), "5377316857231450742");
     }
 }

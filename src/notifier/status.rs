@@ -50,22 +50,12 @@ pub async fn observe_status(
         .map(|w| format!("#{} {}", w.number, w.label))
         .unwrap_or_else(|| ws_id.clone());
 
-    // The pane's topic exists (created on first sight).
+    // The pane's topic exists and its state icon tracks status — silent,
+    // instant, zero clutter. Edits and icon swaps never notify; only
+    // pushed messages buzz.
     s.topics
-        .ensure_topic(pane, &kind, raw_space, new_status)
+        .sync_topic(pane, &kind, raw_space, new_status)
         .await;
-    // Title tracking — silent, renames never notify:
-    // - working/blocked rename immediately;
-    // - silent observations (seed, job finalize) always sync. This settles
-    //   prompt-path titles: their live settle event is swallowed by the
-    //   jobs guard below, so without this the badge would stick at 🔄.
-    // Spontaneous settles take the debounce path further down instead.
-    // ("?" kinds never mint tags — see ensure_topic.)
-    if kind != "?" && (silent || matches!(new_status, "working" | "blocked")) {
-        let title =
-            crate::topics::names::title(new_status, &s.topics.tag(pane, &kind), raw_space);
-        s.topics.rename_to(pane, &title).await;
-    }
 
     if silent || old.as_deref() == Some(new_status) {
         return;
@@ -239,12 +229,8 @@ async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Inst
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
-    // Settle confirmed: title follows now (even with no fresh body).
-    if kind != "?" {
-        let title =
-            crate::topics::names::title(&settled, &s.topics.tag(&pane, &kind), raw_space);
-        s.topics.rename_to(&pane, &title).await;
-    }
+    // Settle confirmed: icon follows now (even with no fresh body).
+    s.topics.sync_topic(&pane, &kind, raw_space, &settled).await;
     if body.is_empty() {
         return;
     }
@@ -279,7 +265,7 @@ async fn post_spontaneous_card(
         .insert(pane.to_string(), std::time::Instant::now());
 
     if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.ensure_topic(pane, kind, space, settled).await {
+        if let Some(thread) = s.topics.sync_topic(pane, kind, space, settled).await {
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 s.remember(forum, mid, pane).await;

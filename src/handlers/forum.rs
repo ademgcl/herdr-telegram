@@ -150,7 +150,7 @@ async fn handle_general_forum_message(
             Ok(row) => {
                 let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
                 let space = ws_label(&spaces, &row.ws);
-                if let Some(topic_th) = s.topics.ensure_topic(&row.pane, &row.kind, space, &row.status).await {
+                if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space, &row.status).await {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}] in topic #{topic_th}", row.kind, row.pane), None).await;
                 } else {
                     s.tg.send_msg(chat, thread_id, &format!("✅ Started {} [{}]", row.kind, row.pane), None).await;

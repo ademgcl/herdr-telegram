@@ -107,7 +107,7 @@ async fn handle_spawn(s: &AppState, chat: i64, msg_id: i64, kind: &str, ws: Opti
                 if s.cfg.forum.is_some() {
                     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
                     let sp = spaces.iter().find(|w| w.id == agent.ws).map(|w| w.label.as_str()).unwrap_or(&agent.ws);
-                    s.topics.ensure_topic(&agent.pane, &agent.kind, sp, &agent.status).await;
+                    s.topics.sync_topic(&agent.pane, &agent.kind, sp, &agent.status).await;
                 }
                 s.tg.edit_msg(chat, msg_id, &build_agent_card_text(&agent), Some(agent_card_kb(&row.pane, &agent.ws))).await;
             }

@@ -64,13 +64,13 @@ src/
 
 When `TELEGRAM_FORUM_CHAT_ID` is set:
 1. **One Topic Per Agent**: Every active Herdr agent has a dedicated Telegram forum topic.
-2. **Topic Titles**: `{emoji} {tag} · {space}` — short kind code + stable
-   per-kind counter + workspace label (usually the project folder, capped
-   at 20 chars), e.g. `🔄 o2 · herdr-telegram`. The badge tracks status
-   (green idle · yellow working · blue done · rose blocked): `working` and
-   `blocked` rename immediately, settles follow once debounce confirms them
-   (~15s) — fast yet flicker-free. Renames never notify. Tags persist in
-   `topics.state`, so restarts never reshuffle names.
+2. **Topic Titles**: `{tag} · {space}` — short kind code + stable per-kind
+   counter + workspace label (usually the project folder, capped at 20
+   chars), e.g. `o2 · herdr-telegram`. Pure text, set once. Live state
+   shows on the topic **icon** (💻 working · ☕️ idle · ✅ done · ❗️ blocked
+   · 🏁 closed · ❓ unknown), synced silently on every transition — icon
+   swaps never notify. Tags persist in `topics.state`, so restarts never
+   reshuffle names.
 3. **Push Discipline**: Only answers and `blocked` (needs-input) buzz.
    `done`/`idle` settles wait out a short debounce and post only if still
    settled with fresh output; empty settles stay silent.

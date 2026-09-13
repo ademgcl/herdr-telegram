@@ -158,7 +158,7 @@ pub fn help_text() -> &'static str {
      /keys <pane> y enter   send raw keys\n\n\
      ↩️ reply to any bot message → talks to that agent\n\
      plain text → focused agent\n\n\
-     alerts fire on ⛔ needs-input / ✅ finish — just reply to them"
+      alerts fire on 🛑 needs-input / 🏆 finish — just reply to them"
 }
 
 pub fn topic_help_text(pane: &str, kind: &str) -> String {
