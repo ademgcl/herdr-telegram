@@ -2,14 +2,15 @@ use std::sync::Arc;
 use serde_json::json;
 use tokio::time::{Duration, Instant};
 use crate::{
+    handlers::interactive::send_blocked_card,
     herdr::client::{get_agent, read_screen, rpc_t},
+    jobs::finalize::{edit_live, finalize, report},
     jobs::job::Job,
     jobs::segment::final_block,
-    jobs::stream::{delta, join_trimmed, EvStream, WatchEvent},
-    notifier::observe_status,
+    jobs::stream::{delta, EvStream, WatchEvent},
     state::AppState,
-    types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS, MAX_MSG_UNITS},
-    ui::{chunks, tail_fit},
+    types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS},
+    ui::tail_fit,
 };
 use crate::herdr::client::read_screen_adaptive;
 
@@ -62,7 +63,24 @@ pub async fn enqueue_prompt(
     {
         println!("[jobs] submit error: {e}");
         *job.pending.lock().await -= 1;
-        report(&s, req.chat_id, req.message_thread_id, &pane, &format!("⚠️ error: {e}")).await;
+        // Retire the watcher: nothing was delivered, so it must not report.
+        // (Without this it finalizes on the untouched screen — the bogus
+        // "(no captured output)" card.) Blocked panes get the interactive
+        // card instead, so replying always works.
+        job.mark_stopped();
+        job.cancel.notify_waiters();
+        let msg = e.to_string();
+        if msg.contains("blocked") {
+            send_blocked_card(
+                &s,
+                req.chat_id,
+                req.message_thread_id,
+                &pane,
+            )
+            .await;
+        } else {
+            report(&s, req.chat_id, req.message_thread_id, &pane, &format!("⚠️ error: {e}")).await;
+        }
     }
 }
 
@@ -172,96 +190,4 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     if map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
         map.remove(&pane);
     }
-}
-
-/// Turn the live message into the final result card from the generic,
-/// provider-agnostic screen stream: accumulated deltas first, then one
-/// cleaned settled-screen fallback for fast tasks where nothing streamed.
-/// (herdr exposes only raw TUI text for every provider — no clean-text
-/// API — so answers ride on the chrome-filtered stream, never raw tails.)
-async fn finalize(
-    s: &AppState,
-    pane: &str,
-    job: &Arc<Job>,
-    settled: &str,
-    live_mid: &mut Option<i64>,
-    acc: &mut Vec<String>,
-) {
-    // Fresh reply only: the last segment after tool calls, reasoning
-    // headers and the prompt echo — earlier turns and intermediate work
-    // are dropped. Falls back to the settled screen for fast tasks where
-    // nothing streamed.
-    let prompt = job.prompt.lock().await.clone();
-    let seg = final_block(acc, &prompt);
-    let (body, snapshot) = if !seg.is_empty() {
-        (join_trimmed(&seg), None)
-    } else {
-        let screen = read_screen(&s.cfg.socket, pane, 80).await;
-        let body = join_trimmed(&final_block(&screen, &prompt));
-        (body, Some(screen))
-    };
-
-    // The card is the answer itself — never a status-word lead. Blocked
-    // keeps the reply affordance.
-    let text = if body.is_empty() {
-        "(no captured output)".to_string()
-    } else if settled == "blocked" {
-        format!("{body}\n↩️ reply or type in topic to answer")
-    } else {
-        body.clone()
-    };
-    let parts = chunks(&text, MAX_MSG_UNITS);
-
-    observe_status(s, pane, settled, true, "job").await;
-    // Stamp the prompt completion so the notifier can suppress the
-    // redundant post-prompt idle/done echo (the card already answered),
-    // and anchor the spontaneous baseline so this card is never reposted.
-    s.last_done
-        .lock()
-        .await
-        .insert(pane.to_string(), std::time::Instant::now());
-    let snap = match snapshot {
-        Some(snap) => snap,
-        None => read_screen(&s.cfg.socket, pane, 80).await,
-    };
-    s.seen.lock().await.insert(pane.to_string(), snap);
-    let (chat, th) = *job.dest.lock().await;
-    println!("[prompt] finalize {pane}: {} part(s), body {} chars", parts.len(), body.len());
-    for (i, part) in parts.iter().enumerate() {
-        match (i, *live_mid) {
-            (0, Some(mid)) => s.tg.edit_msg(chat, mid, part, None).await,
-            _ => report(s, chat, th, pane, part).await,
-        }
-    }
-    *live_mid = None;
-    *job.pending.lock().await = 0;
-
-    // Nothing outstanding? Retire the watcher atomically.
-    let mut map = s.jobs.lock().await;
-    if *job.pending.lock().await == 0
-        && map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false)
-    {
-        map.remove(pane);
-        println!("[prompt] watcher retired: {pane}");
-    }
-}
-
-async fn edit_live(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    live_mid: &mut Option<i64>,
-    text: &str,
-) {
-    if let Some(mid) = live_mid.take() {
-        s.tg.edit_msg(chat_id, mid, text, None).await;
-    } else {
-        report(s, chat_id, thread_id, pane, text).await;
-    }
-}
-
-async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
-    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
-    s.remember(chat_id, mid, pane).await;
 }

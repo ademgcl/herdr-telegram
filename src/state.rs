@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::Arc,
 };
@@ -24,6 +24,9 @@ pub struct State {
     pub focus: Mutex<Option<String>>,
     pub keywait: Mutex<HashMap<i64, String>>,
     pub runwait: Mutex<HashMap<i64, String>>,
+    /// Next message in this chat is typed into the pane's waiting prompt
+    /// (blocked interactive input) + Enter. Set by the ⌨️ button.
+    pub typewait: Mutex<HashMap<i64, String>>,
     /// When a prompt watcher last reported a pane — status alerts inside
     /// this window are redundant (the final card already covered them).
     pub last_done: Mutex<HashMap<String, std::time::Instant>>,
@@ -37,6 +40,8 @@ pub struct State {
     /// Armed settle debounce per pane: (status, armed_at). A newer settle
     /// supersedes; the task posts only if still current when it fires.
     pub debounce: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// Panes with a model switch in flight — second taps wait.
+    pub modelop: Mutex<HashSet<String>>,
     /// When each pane last entered a settled state — drives the
     /// done→idle display decay (herdr parks agents at done indefinitely).
     pub settled_at: Mutex<HashMap<String, std::time::Instant>>,
@@ -75,10 +80,12 @@ impl State {
             focus: Mutex::new(focus),
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
+            typewait: Mutex::new(HashMap::new()),
             last_done: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
             debounce: Mutex::new(HashMap::new()),
+            modelop: Mutex::new(HashSet::new()),
             settled_at: Mutex::new(HashMap::new()),
         }))
     }

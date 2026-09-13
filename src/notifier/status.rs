@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 use serde_json::json;
 use crate::{
-    herdr::client::{get_agent, list_workspaces, read_agent_output},
+    handlers::interactive::send_blocked_card,
+    herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
     notifier::cards::post_spontaneous_card,
@@ -86,7 +87,26 @@ pub async fn observe_status(
         .sync_topic(pane, &kind, raw_space, display)
         .await;
 
-    if silent || old.as_deref() == Some(new_status) {
+    if silent {
+        // Boot seed only — but an already-blocked pane genuinely needs
+        // input NOW (missed while the bot was down): post its answer card
+        // instead of staying mute until the next transition.
+        if old.is_none() && new_status == "blocked" {
+            println!("[alert] seed found {pane} blocked — posting answer card");
+            let screen = read_screen_visible(&s.cfg.socket, pane, 80).await;
+            s.seen.lock().await.insert(pane.to_string(), screen);
+            if let Some(forum) = s.cfg.forum {
+                let thread = s.topics.all_mappings().get(pane).copied();
+                send_blocked_card(&s, forum, thread, pane).await;
+            } else {
+                for id in &s.cfg.owners {
+                    send_blocked_card(&s, *id, None, pane).await;
+                }
+            }
+        }
+        return;
+    }
+    if old.as_deref() == Some(new_status) {
         return;
     }
 
@@ -120,10 +140,11 @@ pub async fn observe_status(
     }
 
     // Settle→settle bounce right after a prompt's final card carries no
-    // fresh work — consume the baseline and stay quiet.
+    // fresh work — consume the baseline and stay quiet. Blocked is
+    // excluded: input needed NOW always surfaces, never suppressed.
     let fresh_work = matches!(old.as_deref(), None | Some("working"));
     if !fresh_work
-        && matches!(new_status, "idle" | "done" | "blocked")
+        && matches!(new_status, "idle" | "done")
         && let Some(t) = s.last_done.lock().await.get(pane)
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
     {
@@ -134,14 +155,20 @@ pub async fn observe_status(
 
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
 
-    // DM mode has no topics or pins — legacy immediate pushes.
+    // DM mode has no topics — legacy immediate pushes, but blocked always
+    // gets the answer card (buttons work in DMs too).
     if s.cfg.forum.is_none() {
+        s.seen.lock().await.insert(pane.to_string(), screen);
+        if new_status == "blocked" {
+            for id in &s.cfg.owners {
+                send_blocked_card(&s, *id, None, pane).await;
+            }
+            return;
+        }
         if !fresh_body.is_empty() {
-            s.seen.lock().await.insert(pane.to_string(), screen);
             post_spontaneous_card(&s, pane, &kind, raw_space, new_status, &fresh_body).await;
             return;
         }
-        s.seen.lock().await.insert(pane.to_string(), screen);
         let hint = match new_status {
             "blocked" => "\n↩️ reply or type in topic to answer",
             _ => "",
@@ -167,13 +194,15 @@ pub async fn observe_status(
         return;
     }
 
-    // Forum mode: blocked needs input NOW — push immediately. done/idle
-    // arm the debounce: the pin already shows state, the push waits to
-    // confirm the settle isn't mid-task flicker.
+    // Forum mode: blocked needs input NOW — always post its answer card
+    // (exactly one per block episode: repeats return early on old==new).
+    // done/idle arm the debounce: the push waits to confirm the settle
+    // isn't mid-task flicker.
     if new_status == "blocked" {
         s.seen.lock().await.insert(pane.to_string(), screen);
-        if !fresh_body.is_empty() {
-            post_spontaneous_card(&s, pane, &kind, raw_space, new_status, &fresh_body).await;
+        if let Some(forum) = s.cfg.forum {
+            let thread = s.topics.all_mappings().get(pane).copied();
+            send_blocked_card(&s, forum, thread, pane).await;
         }
         return;
     }

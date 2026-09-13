@@ -12,8 +12,13 @@ use crate::{
     },
 };
 
-pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
-    let from = msg["from"]["id"].as_i64().unwrap_or(0);
+/// Strip a `@BotName` mention suffix from a command (`/model@MyBot` → `/model`).
+/// Group clients append it when only one bot is present; plain commands pass through.
+fn bare_cmd(cmd: &str) -> &str {
+    cmd.split('@').next().unwrap_or(cmd)
+}
+
+pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {    let from = msg["from"]["id"].as_i64().unwrap_or(0);
     if !s.cfg.owners.contains(&from) {
         return;
     }
@@ -42,10 +47,12 @@ async fn handle_topic_agent_message(
     pane: &str,
     text: &str,
 ) {
-    let (cmd, arg) = match text.split_once(char::is_whitespace) {
+    let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),
     };
+    // Group clients may send `/cmd@BotName` — strip the mention suffix.
+    let cmd = bare_cmd(raw_cmd);
 
     let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
         s.tg.send_msg(chat, Some(thread_id), "⚠️ agent is not active or pane closed", None).await;
@@ -60,8 +67,18 @@ async fn handle_topic_agent_message(
     }
 
     if cmd == "/cancel" {
+        s.typewait.lock().await.remove(&chat);
         let count = s.cancel_all_jobs().await;
         s.tg.send_msg(chat, Some(thread_id), &format!("✋ cancelled {count} prompt(s)"), None).await;
+        return;
+    }
+
+    // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
+    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+        match super::interactive::type_text(&s, &wpane, text).await {
+            Ok(()) => { s.tg.send_msg(chat, Some(thread_id), &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
+            Err(e) => { s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None).await; }
+        }
         return;
     }
 
@@ -97,12 +114,32 @@ async fn handle_topic_agent_message(
         return;
     }
 
+    if cmd == "/model" {
+        if arg.is_empty() {
+            super::model::show_model(&s, chat, Some(thread_id), pane).await;
+        } else {
+            let filter = super::model::search_filter(arg);
+            super::model::switch_by_filter(&s, chat, Some(thread_id), pane, &filter, arg).await;
+        }
+        return;
+    }
+
     if cmd.starts_with('/') {
         s.tg.send_msg(chat, Some(thread_id), "unknown topic command. Type `/help` for available commands.", None).await;
         return;
     }
 
     // Bare message inside agent's topic -> prompt that agent!
+    // Blocked panes reject text prompts ("requires interactive input"),
+    // so type straight into the waiting prompt instead — no dead job.
+    if agent.status == "blocked" {
+        s.set_focus(pane).await;
+        match super::interactive::type_text(&s, pane, text).await {
+            Ok(()) => { s.tg.send_msg(chat, Some(thread_id), &format!("⌨️ typed into {pane} + ⏎"), None).await; }
+            Err(_) => { super::interactive::send_blocked_card(&s, chat, Some(thread_id), pane).await; }
+        }
+        return;
+    }
     s.set_focus(pane).await;
     enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
 }
@@ -113,16 +150,18 @@ async fn handle_general_forum_message(
     thread_id: Option<i64>,
     text: &str,
 ) {
-    let (cmd, arg) = match text.split_once(char::is_whitespace) {
+    let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),
     };
+    let cmd = bare_cmd(raw_cmd);
 
     if cmd == "/start" || cmd == "/help" {
         let msg = "🤖 **Herdr Telegram Bot**\n\n\
                    • `/agents` — open spaces & agents control panel\n\
                    • `/spawn <kind> [workspace]` — spawn a new agent & topic\n\
                    • `/newspace <name>` — create a new workspace\n\
+                   • `/model` — inside an agent topic: model picker\n\
                    • `/cancel` — abort pending jobs\n\n\
                    💡 Each active agent has its own dedicated topic in this group! Switch to an agent's topic to chat with it directly.";
         s.tg.send_msg(chat, thread_id, msg, None).await;
@@ -177,6 +216,11 @@ async fn handle_general_forum_message(
         return;
     }
 
+    if cmd == "/model" {
+        s.tg.send_msg(chat, thread_id, "open an agent's topic and run `/model` there — each topic is one agent.", None).await;
+        return;
+    }
+
     if cmd.starts_with('/') {
         s.tg.send_msg(chat, thread_id, "unknown command — see `/help` or `/agents`", None).await;
         return;
@@ -189,4 +233,16 @@ async fn handle_general_forum_message(
         "💡 To talk to an agent, please open its dedicated topic or use `/agents` to spawn one.",
         None,
     ).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bare_cmd_strips_mention() {
+        assert_eq!(bare_cmd("/model@HerdrBot"), "/model");
+        assert_eq!(bare_cmd("/model"), "/model");
+        assert_eq!(bare_cmd("hello"), "hello");
+    }
 }

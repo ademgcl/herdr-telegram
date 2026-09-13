@@ -36,6 +36,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     if cmd == "/cancel" {
         s.keywait.lock().await.remove(&chat);
         s.runwait.lock().await.remove(&chat);
+        s.typewait.lock().await.remove(&chat);
         let count = s.cancel_all_jobs().await;
         s.tg.send_msg(chat, None, &format!("✋ cancelled {count} pending job(s)"), None).await;
         return;
@@ -106,6 +107,51 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/model" {
+        // `/model [target] [search]` — first token is a target only when it
+        // resolves to a pane/kind; otherwise the whole arg is the search.
+        let (mut pane, query) = match arg.split_once(char::is_whitespace) {
+            Some((t, rest)) => match resolve_target(&rows, Some(t)) {
+                Some(r) => (Some(r.pane), rest.trim()),
+                None => (None, arg),
+            },
+            None => {
+                if arg.is_empty() {
+                    (None, "")
+                } else if let Some(r) = resolve_target(&rows, Some(arg)) {
+                    (Some(r.pane), "")
+                } else {
+                    (None, arg)
+                }
+            }
+        };
+        if pane.is_none()
+            && let Some(p) = reply_pane.as_deref().and_then(|p| rows.iter().find(|r| r.pane == p))
+        {
+            pane = Some(p.pane.clone());
+        }
+        if pane.is_none()
+            && let Some(f) = s.get_focus().await
+            && rows.iter().any(|r| r.pane == f)
+        {
+            pane = Some(f);
+        }
+        if pane.is_none() {
+            pane = resolve_target(&rows, Some("")).map(|r| r.pane);
+        }
+        let Some(pane) = pane else {
+            s.tg.send_msg(chat, None, "who? `/model <pane>` or tap an agent in /agents", None).await;
+            return;
+        };
+        if query.is_empty() {
+            super::model::show_model(&s, chat, None, &pane).await;
+        } else {
+            let filter = super::model::search_filter(query);
+            super::model::switch_by_filter(&s, chat, None, &pane, &filter, query).await;
+        }
+        return;
+    }
+
     if cmd.starts_with('/') {
         s.tg.send_msg(chat, None, "unknown command — /help", None).await;
         return;
@@ -131,6 +177,23 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     };
 
     if prompt_text.trim().is_empty() { return; }
+    // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
+    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+        match super::interactive::type_text(&s, &wpane, &prompt_text).await {
+            Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
+            Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await; }
+        }
+        return;
+    }
+    // Blocked panes reject text prompts — type into the waiting prompt.
+    if row.status == "blocked" {
+        s.set_focus(&row.pane).await;
+        match super::interactive::type_text(&s, &row.pane, &prompt_text).await {
+            Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {} + ⏎", row.pane), None).await; }
+            Err(_) => { super::interactive::send_blocked_card(&s, chat, None, &row.pane).await; }
+        }
+        return;
+    }
     s.set_focus(&row.pane).await;
     enqueue_prompt(s.clone(), chat, None, row, prompt_text).await;
 }

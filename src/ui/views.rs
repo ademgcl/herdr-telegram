@@ -153,6 +153,7 @@ pub fn tail_fit(lines: &[String], max_units: usize) -> String {
 
 pub fn help_text() -> &'static str {
     "/agents   control panel: spaces, agents, ➕ spawn\n\
+     /model    current model + free-Zen picker (opencode)\n\
      /read     recent output of focused agent\n\
      /cancel   abort prompts / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
@@ -166,6 +167,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
         "🤖 **{kind}** topic [{pane}]\n\n\
          • Plain text sends a prompt to this agent\n\
          • `/read` or `/output` — fetch recent terminal output\n\
+         • `/model` — current model + free-Zen picker (opencode)\n\
          • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
          • `/status` — refresh agent status card"

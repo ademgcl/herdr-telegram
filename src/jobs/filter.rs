@@ -101,6 +101,21 @@ pub fn chrome_filtered(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Strip one level of TUI frame rails (┃│|) for content recovery: dialog
+/// text and option rows render framed, and de-framed they go through the
+/// normal boundary/chrome pipeline. Only used for blocked-card question
+/// extraction — NOT the live stream (there, frames usefully mark noise).
+pub fn deframe(line: &str) -> String {
+    let mut t = line.trim();
+    loop {
+        match t.strip_prefix(|c: char| matches!(c, '┃' | '│' | '|')) {
+            Some(rest) => t = rest.trim_start(),
+            None => break,
+        }
+    }
+    t.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

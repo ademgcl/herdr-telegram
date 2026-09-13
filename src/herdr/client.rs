@@ -78,6 +78,19 @@ pub async fn read_agent_output(socket: &str, pane: &str, lines: u32) -> Res<Stri
     Ok(r["read"]["text"].as_str().unwrap_or("").trim().to_string())
 }
 
+/// Visible-viewport read: the ONLY source herdr serves while a pane is
+/// blocked/working on an alternate screen (recent_unwrapped errors with
+/// agent_not_idle there).
+pub async fn read_agent_visible(socket: &str, pane: &str, lines: u32) -> Res<String> {
+    let r = rpc(
+        socket,
+        "agent.read",
+        json!({"target": pane, "source": "visible", "lines": lines}),
+    )
+    .await?;
+    Ok(r["read"]["text"].as_str().unwrap_or("").trim().to_string())
+}
+
 pub async fn read_pane_output(socket: &str, pane: &str, lines: u32) -> Res<String> {
     let r = rpc(
         socket,
@@ -91,6 +104,17 @@ pub async fn read_pane_output(socket: &str, pane: &str, lines: u32) -> Res<Strin
 /// Terminal snapshot as trimmed lines (delta baseline / report source).
 pub async fn read_screen(socket: &str, pane: &str, lines: u32) -> Vec<String> {
     read_agent_output(socket, pane, lines)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect()
+}
+
+/// Visible-viewport snapshot — works on blocked panes where `read_screen`
+/// errors out.
+pub async fn read_screen_visible(socket: &str, pane: &str, lines: u32) -> Vec<String> {
+    read_agent_visible(socket, pane, lines)
         .await
         .unwrap_or_default()
         .lines()
@@ -181,5 +205,12 @@ pub async fn send_agent_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()>
 pub async fn send_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
     rpc_t(socket, "pane.send_text", json!({"pane_id": pane, "text": text}), 30).await?;
     rpc(socket, "pane.send_keys", json!({"pane_id": pane, "keys": ["enter"]})).await?;
+    Ok(())
+}
+
+/// Type text WITHOUT submitting — for TUI pickers/filters where Enter
+/// means "confirm selection", not "send".
+pub async fn type_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
+    rpc_t(socket, "pane.send_text", json!({"pane_id": pane, "text": text}), 30).await?;
     Ok(())
 }

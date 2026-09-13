@@ -1,4 +1,5 @@
 pub mod filter;
+pub mod finalize;
 pub mod job;
 pub mod runner;
 pub mod segment;

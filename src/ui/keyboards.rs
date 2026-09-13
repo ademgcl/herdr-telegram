@@ -94,7 +94,10 @@ pub fn agent_card_kb(pane: &str, ws: &str) -> Value {
             btn("⌨️ keys", &format!("K:{pane}")),
         ],
         [
+            btn("🤖 model", &format!("M:list:{pane}")),
             btn("🔄 refresh", &format!("a:{pane}")),
+        ],
+        [
             btn(format!("← {ws}"), &format!("w:{ws}")),
         ],
     ])

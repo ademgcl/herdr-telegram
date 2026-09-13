@@ -216,4 +216,35 @@ mod tests {
         let lines = v(&["intro", "---", "> quoted", "> added", "| a | b |", "end"]);
         assert_eq!(final_block(&lines, "q"), lines);
     }
+
+    #[test]
+    fn test_permission_dialog_keeps_question_and_options() {
+        // Real opencode permission dialog as herdr reports it: everything
+        // framed. De-framed, path + options survive the pipeline while
+        // footers drop (see waiting_text).
+        use crate::jobs::filter::deframe;
+        let raw = v(&[
+            "  ┃",
+            "  ┃  △ Permission required",
+            "  ┃    ← Access external directory ~/.config/opencode",
+            "  ┃",
+            "  ┃  Patterns",
+            "  ┃",
+            "  ┃  - /Users/adem/.config/opencode/*",
+            "  ┃",
+            "  ┃",
+            "  ┃   Allow once   Allow always   Reject",
+            "  ┃",
+            "  ┃  ctrl+f fullscreen  ⇆ select  enter confirm",
+            "  ┃",
+        ]);
+        assert_eq!(deframe("  ┃  △ Permission required"), "△ Permission required");
+        assert_eq!(deframe("plain line"), "plain line");
+        let lines: Vec<String> = raw.iter().map(|l| deframe(l)).collect();
+        let out = final_block(&lines, "");
+        let body = out.join("\n");
+        assert!(body.contains("Allow once"), "options kept: {body}");
+        assert!(body.contains("opencode/*"), "path kept: {body}");
+        assert!(!body.contains("ctrl+p"), "footer dropped: {body}");
+    }
 }
