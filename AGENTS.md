@@ -22,7 +22,7 @@ The service bridges **Telegram** (Direct Messages and Supergroup Forum Topics) w
 ```
 src/
 ├── main.rs                 # Single-instance guard, service initialization, main select loop
-├── types.rs                # Core types, error alias, AgentRow, WorkspaceRow
+├── types.rs                # Core types, error alias, AgentRow, AgentDetail
 ├── config.rs               # Environment variable loading & Cfg model
 ├── state.rs                # Central thread-safe State & synchronization primitives
 ├── herdr/                  # Herdr communication layer
@@ -36,21 +36,36 @@ src/
 │   └── router.rs           # Update routing (DMs, Forum Topics, Callbacks)
 ├── topics/                 # Forum topic management
 │   ├── mod.rs              # Re-exports
-│   ├── storage.rs          # Pane <-> thread mapping persistence (~/.local/share/herdr-telegram/topics.json)
-│   └── manager.rs          # Automatic topic creation, title updates, and lifecycle tracking
+│   ├── storage.rs          # Pane <-> thread mapping persisted in topics.state (next to the bot)
+│   ├── names.rs            # Stable tags, title format, status icons, done→idle decay
+│   └── manager.rs          # Topic creation (named once), icon sync, lifecycle tracking
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
 │   ├── dm.rs               # Private 1-on-1 message & command handling
 │   ├── forum.rs            # Supergroup forum topic message & command handling
-│   └── callback.rs         # Inline keyboard callback queries (spaces, agents, spawn, keys, run)
+│   ├── callback.rs         # Inline keyboard callback queries (nav, spawn, model, kill)
+│   ├── dialog.rs           # Blocked-pane question cards, content-addressed refresh
+│   ├── tap.rs              # Blocked-card button taps (in-place update) + typed answers
+│   ├── interactive.rs      # Static key maps for interactive answers
+│   ├── kill.rs             # Pane kill confirm flow
+│   ├── model.rs            # Opencode model picker (show/switch)
+│   ├── model_parse.rs      # Model list parsing for the picker
+│   ├── model_scan.rs       # Column-split helpers for option rows
+│   └── shell.rs            # Agentless shell panes (run commands, quit-to-shell)
 ├── jobs/                   # Agent prompt execution
 │   ├── mod.rs              # Re-exports
-│   ├── job.rs              # Prompt job state, cancellation notify, FIFO queue
-│   └── runner.rs           # Prompt submission, timeout resilience, multi-round watch loop
+│   ├── job.rs              # Per-pane prompt job state, cancellation notify
+│   ├── runner.rs           # Prompt submission + per-pane watcher (live stream → final card)
+│   ├── finalize.rs         # Settle arbitration: stream vs settled screen
+│   ├── notices.rs          # Rate-limit / quota stall detection + alert cards
+│   ├── segment.rs          # Fresh-reply extraction from multi-turn scrollback
+│   ├── stream.rs           # Herdr event stream client, delta, join helpers
+│   └── filter.rs           # TUI chrome filtering (frames, footers, spinners)
 ├── notifier/               # Status & alert dispatching
 │   ├── mod.rs              # Re-exports
 │   ├── status.rs           # Status transition observer, flap dampener, alert delivery
-│   └── reconcile.rs        # Watchdog reconciliation across all live agents and topics
+│   ├── cards.rs            # Debounced spontaneous pushes (settle must hold)
+│   └── reconcile.rs        # Watchdog reconciliation + background limit-stall scan
 └── ui/                     # Presentation & formatters
     ├── mod.rs              # Re-exports
     ├── emoji.rs            # Status emoji mappings
@@ -75,12 +90,17 @@ When `TELEGRAM_FORUM_CHAT_ID` is set:
    relax to idle (herdr parks agents at done, so without decay idle would
    almost never show). Tags persist in `topics.state`, so restarts never
    reshuffle names.
-3. **Push Discipline**: Only answers and `blocked` (needs-input) buzz.
-   `done`/`idle` settles wait out a short debounce and post only if still
-   settled with fresh output; empty settles stay silent.
-3. **Direct In-Topic Prompts**: Any message posted inside an agent's topic is dispatched directly to that agent as a prompt.
-4. **Contextual Commands**: `/read`, `/keys`, `/cancel`, and `/status` run in the context of the topic's agent.
-5. **General Topic**: Serves as the dashboard with `/agents`, `/spawn`, `/spaces`, `/newspace`, and `/help`.
+3. **Push Discipline**: Answers, `blocked` (needs-input), and usage-limit
+   stalls buzz. `done`/`idle` settles wait out a short debounce and post
+   only if still settled with fresh output; empty settles stay silent.
+4. **Blocked Dialogs Follow Content**: Consecutive dialogs arrive with no
+   status change, so cards are content-addressed — repeats stay silent, a
+   turned-over dialog posts/updates. Button taps edit the tapped card in
+   place (new question + buttons, or button-strip on resume); typed
+   answers go through atomic `pane.send_input` and are verified on-screen.
+5. **Direct In-Topic Prompts**: Any message posted inside an agent's topic is dispatched directly to that agent as a prompt.
+6. **Contextual Commands**: `/read`, `/keys`, `/status`, `/model`, `/quit`, `/kill`, `/shell`, and `/cancel` run in the context of the topic's agent.
+7. **General Topic**: Serves as the dashboard with `/agents`, `/spawn`, `/shell`, `/newspace`, and `/help`.
 
 ---
 
