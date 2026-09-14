@@ -27,6 +27,7 @@ cp .env.example .env  # fill in below
 
 - General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/cancel` `/help`
 - Agent topic: plain text = prompt. `/read` `/model` `/quit` `/kill` `/keys` `/status` `/cancel`
+- Spaces, agents, shells — the whole Herdr tree is drivable from chat: `/space [name]` makes a workspace and drops you in its shell topic.
 - Blocked agents post answer cards — tap a button or just type the answer.
 - Topics track state on their icon: 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed. Your titles are never touched.
 
