@@ -88,12 +88,12 @@ pub fn title(tag: &str, space: &str) -> String {
 pub fn icon_emoji_id(status: &str) -> &'static str {
     match status {
         "working" => "5350554349074391003", // 💻
-        "idle" => "5350392020785437399",    // ☕️
+        "idle" => "5417915203100613993",    // 💬 ready for your next prompt
         // Shell panes badge as idle: no verified shell custom-emoji id
-        // exists (new glyphs must be probe-verified), and ☕️ honestly
+        // exists (new glyphs must be probe-verified), and 💬 honestly
         // reads "awaiting input". The 💲 text glyph in cards and menus
         // carries the shell-vs-agent distinction.
-        "shell" => "5350392020785437399", // ☕️
+        "shell" => "5417915203100613993", // 💬
         "done" => "5237699328843200968",    // ✅
         "blocked" => "5379748062124056162", // ❗️
         "closed" | "dead" | "exited" => "5408906741125490282", // 🏁
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn test_icon_mapping() {
         assert_eq!(icon_emoji_id("working"), "5350554349074391003");
-        assert_eq!(icon_emoji_id("idle"), "5350392020785437399");
+        assert_eq!(icon_emoji_id("idle"), "5417915203100613993");
         assert_eq!(icon_emoji_id("shell"), icon_emoji_id("idle"));
         assert_eq!(icon_emoji_id("done"), "5237699328843200968");
         assert_eq!(icon_emoji_id("blocked"), "5379748062124056162");

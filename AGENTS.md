@@ -66,8 +66,10 @@ When `TELEGRAM_FORUM_CHAT_ID` is set:
 1. **One Topic Per Agent**: Every active Herdr agent has a dedicated Telegram forum topic.
 2. **Topic Titles**: `{tag} · {space}` — short kind code + stable per-kind
    counter + workspace label (usually the project folder, capped at 20
-   chars), e.g. `o2 · herdr-telegram`. Pure text, set once. Live state
-   shows on the topic **icon** (💻 working · ☕️ idle · ✅ done · ❗️ blocked
+   chars), e.g. `o2 · herdr-telegram`. Pure text, named exactly once at
+   creation — manual renames are NEVER overwritten (icons still track
+   state below). Live state
+   shows on the topic **icon** (💻 working · 💬 idle · ✅ done · ❗️ blocked
    · 🏁 closed · ❓ unknown), synced silently on every transition — icon
    swaps never notify. Fresh completions show done; quiet-for-15-min ones
    relax to idle (herdr parks agents at done, so without decay idle would
