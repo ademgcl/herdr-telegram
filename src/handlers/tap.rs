@@ -3,9 +3,9 @@
 use std::time::Duration;
 use serde_json::Value;
 use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, parse_options, refresh_blocked_card, waiting_lines},
+    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, parse_options, refresh_blocked_card, waiting_lines},
     handlers::interactive::{keys_for, opt_keys},
-    herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_text},
+    herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_input},
     state::AppState,
 };
 
@@ -143,10 +143,22 @@ pub async fn answer_tap(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64
 }
 
 /// Type free text into the waiting prompt (y/n answers, picker filters,
-/// text inputs) + Enter. The answer may advance to a SECOND dialog with
-/// no status change, so re-check shortly and surface fresh buttons.
+/// text inputs) + Enter, atomically: split text/Enter round-trips get
+/// lost on redraw-heavy TUIs. Verified like button taps — a lying
+/// "typed" ack is worse than none. The answer may advance to a SECOND
+/// dialog with no status change, so re-check shortly and surface fresh
+/// buttons.
 pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), String> {
-    send_pane_text(&s.cfg.socket, pane, text).await.map_err(|e| e.to_string())?;
+    let socket = &s.cfg.socket;
+    let before = read_screen_visible(socket, pane, 30).await;
+    send_pane_input(socket, pane, text).await.map_err(|e| e.to_string())?;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    if get_agent(socket, pane).await.map(|a| a.status == "blocked").unwrap_or(true) {
+        let after = read_screen_visible(socket, pane, 30).await;
+        if dialog_stalled(&before, &after) {
+            return Err("text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into());
+        }
+    }
     let s2 = s.clone();
     let pane2 = pane.to_string();
     tokio::spawn(async move {
@@ -154,6 +166,12 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), Strin
         refresh_blocked_card(&s2, &pane2).await;
     });
     Ok(())
+}
+
+/// True when a typed answer provably went nowhere: both screens readable
+/// and the dialog identical. Unreadable screens never fail the send.
+pub fn dialog_stalled(before: &[String], after: &[String]) -> bool {
+    !before.is_empty() && !after.is_empty() && dialog_sig(after) == dialog_sig(before)
 }
 
 #[cfg(test)]
@@ -196,5 +214,17 @@ mod tests {
         // Unreadable screen never touches the card, either way.
         assert_eq!(classify_tap(&v(&["x"]), &[], true), TapResult::Unchanged);
         assert_eq!(classify_tap(&v(&["x"]), &[], false), TapResult::Resumed);
+    }
+
+    #[test]
+    fn test_dialog_stalled_same_dialog() {
+        let dlg = v(&["△ Permission required", "Allow once   Allow always   Reject"]);
+        assert!(dialog_stalled(&dlg, &dlg));
+        // Typed text echoing into the field counts as progress.
+        let filled = v(&["△ Permission required", "Allow once   Allow always   Reject", "my reason"]);
+        assert!(!dialog_stalled(&dlg, &filled));
+        // Unreadable screens never fail the send.
+        assert!(!dialog_stalled(&[], &dlg));
+        assert!(!dialog_stalled(&dlg, &[]));
     }
 }

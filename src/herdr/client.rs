@@ -208,6 +208,21 @@ pub async fn send_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
     Ok(())
 }
 
+/// Type text + submit in ONE call for blocked-agent dialogs. Two
+/// round-trips (send_text, then send_keys enter) can split across a TUI
+/// redraw: the text lands in the field while Enter hits a refocused
+/// control, so the dialog proceeds WITHOUT the typed value.
+pub async fn send_pane_input(socket: &str, pane: &str, text: &str) -> Res<()> {
+    rpc_t(
+        socket,
+        "pane.send_input",
+        json!({"pane_id": pane, "text": text, "keys": ["enter"]}),
+        30,
+    )
+    .await?;
+    Ok(())
+}
+
 /// Raw keys to a pane (no agent needed) — shell-mode `/keys`, quit flows.
 pub async fn send_pane_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> {
     rpc(socket, "pane.send_keys", json!({"pane_id": pane, "keys": keys})).await?;

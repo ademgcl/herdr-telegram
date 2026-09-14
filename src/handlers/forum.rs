@@ -236,6 +236,19 @@ async fn handle_general_forum_message(
         return;
     }
 
+    // Answering a waiting prompt armed by the ⌨️ button: the next message
+    // belongs to the waiter no matter which topic it lands in (typewait
+    // is keyed by chat = the group here). Checked before commands so the
+    // answer can't be eaten by General's fallback and leak onto a later
+    // unrelated message.
+    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+        match super::tap::type_text(&s, &wpane, text).await {
+            Ok(()) => { s.tg.send_msg(chat, thread_id, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
+            Err(e) => { s.tg.send_msg(chat, thread_id, &format!("⚠️ type failed: {e}"), None).await; }
+        }
+        return;
+    }
+
     if cmd == "/model" {
         s.tg.send_msg(chat, thread_id, "open an agent's topic and run `/model` there — each topic is one agent.", None).await;
         return;
