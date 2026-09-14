@@ -1,122 +1,100 @@
 # AGENTS.md
 
-Welcome to **herdr-telegram**. This document defines the engineering standards, architecture, and agent rules for developing and maintaining this codebase.
+herdr-telegram: Telegram (DMs + supergroup forum topics) ↔ Herdr terminal/agent multiplexer via local Unix socket RPC.
 
 ---
 
-## 1. Core Rule: File Size Limit
+## 1. Core Rule: 300-Line File Limit
 
 > [!IMPORTANT]
-> **Strict Rule**: No single source code file in this repository may exceed **300 lines of code**.
-> If a file approaches 300 lines, it must be split into logical submodules or separate files with single responsibilities.
+> No source file may exceed **300 lines**. Near the limit, split into single-responsibility submodules.
 
-### Verification
-Run `wc -l $(find src -name '*.rs') AGENTS.md` before committing to ensure every file satisfies this rule.
+Verify: `wc -l $(find src -name '*.rs') AGENTS.md` before committing.
 
 ---
 
-## 2. Project Architecture
-
-The service bridges **Telegram** (Direct Messages and Supergroup Forum Topics) with the **Herdr** terminal/agent multiplexer via local Unix domain socket RPC.
+## 2. Architecture
 
 ```
 src/
-├── main.rs                 # Single-instance guard, service initialization, main select loop
+├── main.rs                 # Single-instance guard, init, main select loop
 ├── types.rs                # Core types, error alias, AgentRow, AgentDetail
-├── config.rs               # Environment variable loading & Cfg model
-├── state.rs                # Central thread-safe State & synchronization primitives
+├── config.rs               # Env loading & Cfg
+├── state.rs                # Thread-safe shared State
 ├── herdr/                  # Herdr communication layer
 │   ├── mod.rs              # Re-exports
-│   ├── client.rs           # Async Unix socket RPC (agent.*, workspace.*, pane.*, tab.*)
-│   └── events.rs           # Herdr event stream subscriber and auto-reconnect
+│   ├── client.rs           # Unix socket RPC
+│   └── events.rs           # Event stream + auto-reconnect
 ├── telegram/               # Telegram API layer
 │   ├── mod.rs              # Re-exports
-│   ├── client.rs           # Telegram Bot API client (HTTP requests, send, edit, topics)
-│   ├── polling.rs          # Long-polling loop, offset management & stale update filter
-│   └── router.rs           # Update routing (DMs, Forum Topics, Callbacks)
+│   ├── client.rs           # Bot API HTTP client
+│   ├── polling.rs          # Long-poll, offsets, stale filter
+│   └── router.rs           # Update routing
 ├── topics/                 # Forum topic management
 │   ├── mod.rs              # Re-exports
-│   ├── storage.rs          # Pane <-> thread mapping persisted in topics.state (next to the bot)
-│   ├── names.rs            # Stable tags, title format, status icons, done→idle decay
-│   └── manager.rs          # Topic creation (named once), icon sync, lifecycle tracking
+│   ├── storage.rs          # Pane↔thread map in topics.state
+│   ├── names.rs            # Tags, titles, icons, done→idle decay
+│   └── manager.rs          # Creation (named once), icon sync, lifecycle
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
-│   ├── dm.rs               # Private 1-on-1 message & command handling
-│   ├── forum.rs            # Supergroup forum topic message & command handling
-│   ├── callback.rs         # Inline keyboard callback queries (nav, spawn, model, kill)
-│   ├── dialog.rs           # Blocked-pane question cards, content-addressed refresh
-│   ├── tap.rs              # Blocked-card button taps (in-place update) + typed answers
-│   ├── interactive.rs      # Static key maps for interactive answers
-│   ├── kill.rs             # Pane kill confirm flow
-│   ├── model.rs            # Opencode model picker (show/switch)
-│   ├── model_parse.rs      # Model list parsing for the picker
-│   ├── model_scan.rs       # Column-split helpers for option rows
-│   └── shell.rs            # Agentless shell panes (run commands, quit-to-shell)
+│   ├── dm.rs               # DM messages + commands
+│   ├── forum.rs            # Topic messages + commands
+│   ├── callback.rs         # Inline keyboard callbacks
+│   ├── dialog.rs           # Blocked cards, content-addressed refresh
+│   ├── tap.rs              # Taps (in-place update) + typed answers
+│   ├── interactive.rs      # Static key maps
+│   ├── kill.rs             # Kill confirm flow
+│   ├── model.rs            # Opencode model picker
+│   ├── model_parse.rs      # Picker list parsing
+│   ├── model_scan.rs       # Column-split helpers
+│   └── shell.rs            # Agentless shell panes
 ├── jobs/                   # Agent prompt execution
 │   ├── mod.rs              # Re-exports
-│   ├── job.rs              # Per-pane prompt job state, cancellation notify
-│   ├── runner.rs           # Prompt submission + per-pane watcher (live stream → final card)
+│   ├── job.rs              # Per-pane job state, cancel notify
+│   ├── runner.rs           # Prompt submit + watcher (live → final card)
 │   ├── finalize.rs         # Settle arbitration: stream vs settled screen
-│   ├── notices.rs          # Rate-limit / quota stall detection + alert cards
-│   ├── segment.rs          # Fresh-reply extraction from multi-turn scrollback
-│   ├── stream.rs           # Herdr event stream client, delta, join helpers
-│   └── filter.rs           # TUI chrome filtering (frames, footers, spinners)
+│   ├── notices.rs          # Limit/quota stall alerts
+│   ├── segment.rs          # Fresh-reply extraction
+│   ├── stream.rs           # Event stream client, delta helpers
+│   └── filter.rs           # TUI chrome filtering
 ├── notifier/               # Status & alert dispatching
 │   ├── mod.rs              # Re-exports
-│   ├── status.rs           # Status transition observer, flap dampener, alert delivery
-│   ├── cards.rs            # Debounced spontaneous pushes (settle must hold)
-│   └── reconcile.rs        # Watchdog reconciliation + background limit-stall scan
+│   ├── status.rs           # Transition observer, flap dampener, alerts
+│   ├── cards.rs            # Debounced spontaneous pushes
+│   └── reconcile.rs        # Watchdog + background limit scan
 └── ui/                     # Presentation & formatters
     ├── mod.rs              # Re-exports
-    ├── emoji.rs            # Status emoji mappings
-    ├── keyboards.rs        # Inline keyboard builders
-    └── views.rs            # Text views for spaces, agent cards, and message sizing
+    ├── emoji.rs            # Status emoji
+    ├── keyboards.rs        # Inline keyboards
+    └── views.rs            # Text views + message sizing
 ```
 
 ---
 
-## 3. Telegram Forum Topics Integration
+## 3. Forum Topics (`TELEGRAM_FORUM_CHAT_ID` set)
 
-When `TELEGRAM_FORUM_CHAT_ID` is set:
-1. **One Topic Per Agent**: Every active Herdr agent has a dedicated Telegram forum topic.
-2. **Topic Titles**: `{tag} · {space}` — short kind code + stable per-kind
-   counter + workspace label (usually the project folder, capped at 20
-   chars), e.g. `o2 · herdr-telegram`. Pure text, named exactly once at
-   creation — manual renames are NEVER overwritten (icons still track
-   state below). Live state
-   shows on the topic **icon** (💻 working · 💬 idle · ✅ done · ❗️ blocked
-   · 🏁 closed · ❓ unknown), synced silently on every transition — icon
-   swaps never notify. Fresh completions show done; quiet-for-15-min ones
-   relax to idle (herdr parks agents at done, so without decay idle would
-   almost never show). Tags persist in `topics.state`, so restarts never
-   reshuffle names.
-3. **Push Discipline**: Answers, `blocked` (needs-input), and usage-limit
-   stalls buzz. `done`/`idle` settles wait out a short debounce and post
-   only if still settled with fresh output; empty settles stay silent.
-4. **Blocked Dialogs Follow Content**: Consecutive dialogs arrive with no
-   status change, so cards are content-addressed — repeats stay silent, a
-   turned-over dialog posts/updates. Button taps edit the tapped card in
-   place (new question + buttons, or button-strip on resume); typed
-   answers go through atomic `pane.send_input` and are verified on-screen.
-5. **Direct In-Topic Prompts**: Any message posted inside an agent's topic is dispatched directly to that agent as a prompt.
-6. **Contextual Commands**: `/read`, `/keys`, `/status`, `/model`, `/quit`, `/kill`, `/shell`, and `/cancel` run in the context of the topic's agent.
-7. **General Topic**: Serves as the dashboard with `/agents`, `/spawn`, `/shell`, `/newspace`, and `/help`.
+- One topic per agent.
+- Titles `{tag} · {space}` (kind code + stable counter + ≤20-char label), named once at creation — manual renames NEVER overwritten. Tags persist in `topics.state`.
+- State lives on the **icon**, synced silently (never notifies): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown. Fresh `done` decays to idle after 15 quiet min.
+- Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
+- Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
+- In-topic plain text = prompt; commands in context: `/read` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/cancel`.
+- General topic: `/agents` `/spawn` `/shell` `/newspace` `/help`.
 
 ---
 
-## 4. Direct Messages (DM Mode)
+## 4. DM Mode
 
-Authorized owners can also control agents directly in private chats:
-- Reply to any alert/card to target that agent.
-- Use `/agents` for the interactive navigator.
-- Plain text routes to the focused agent or the sole active agent.
+- Reply to any card to target that agent; `/agents` navigator; plain text → focused (or sole) agent.
 
 ---
 
-## 5. Coding & Contribution Guidelines
+## 5. Guidelines
 
-- **Package Management**: Use `cargo` for Rust builds and dependencies.
-- **Async Runtime**: Use `tokio` multi-threaded runtime.
-- **Error Handling**: Use `Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>`.
-- **Concurrency**: Avoid holding async mutexes across unbounded sleep / long RPCs.
-- **Clean Separation**: Handlers should not contain low-level socket or HTTP serialization logic.
+- cargo; tokio multi-thread; `Res<T>` errors; no async mutexes across sleep/long RPCs; no socket/HTTP logic in handlers.
+
+---
+
+## 6. Reply Style
+
+- CTO summary: minimal, bulleted, every idea kept, nothing extra.
