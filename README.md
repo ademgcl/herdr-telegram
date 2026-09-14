@@ -30,6 +30,14 @@ cp .env.example .env  # fill in below
 - Blocked agents post answer cards — tap a button or just type the answer.
 - Topics track state on their icon: 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed. Your titles are never touched.
 
+## Security
+
+This is shell access over chat — treat it like SSH. Anyone holding your phone or your bot token owns the machine: guard both like keys. Owner-only by numeric id; no auth beyond that.
+
+## Limitations
+
+Hobby POC, not hardened: no audit log, plaintext local state, single instance. Needs network to Telegram (long-poll, no webhooks). One bot, one Herdr socket, one machine.
+
 ## License
 
 MIT
