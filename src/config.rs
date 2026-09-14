@@ -51,6 +51,15 @@ pub fn cfg_from_env() -> Res<Cfg> {
 
     let home = env::var("HOME").unwrap_or_default();
     let socket = env::var("HERDR_SOCKET")
+        .map(|v| {
+            if v == "~" {
+                home.clone()
+            } else if let Some(rest) = v.strip_prefix("~/") {
+                format!("{home}/{rest}")
+            } else {
+                v
+            }
+        })
         .unwrap_or_else(|_| format!("{home}/.config/herdr/herdr.sock"));
 
     let forum = env::var("TELEGRAM_FORUM_CHAT_ID")
