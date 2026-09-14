@@ -1,7 +1,7 @@
 use serde_json::Value;
 use crate::{
     herdr::client::{
-        create_workspace, get_agent, list_agents, list_workspaces,
+        get_agent, list_agents, list_workspaces,
         read_agent_output, send_agent_keys, spawn_agent,
     },
     jobs::enqueue_prompt,
@@ -26,6 +26,18 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {    let 
     let thread_id = msg["message_thread_id"].as_i64();
     let text = msg["text"].as_str().unwrap_or("").trim();
     if text.is_empty() { return; }
+
+    // `/space [name]` works everywhere (General + any agent/shell topic):
+    // new space + shell topic to keep chatting in. Blank auto-labels.
+    let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
+        Some((c, a)) => (c, a.trim()),
+        None => (text, ""),
+    };
+    if bare_cmd(raw_cmd) == "/space" {
+        let label = if super::space::check_label(arg) { arg.to_string() } else { super::space::next_label(&s).await };
+        super::space::open_space(&s, chat, thread_id, &label).await;
+        return;
+    }
 
     // If inside an agent topic thread:
     if let Some(th) = thread_id {
@@ -179,8 +191,8 @@ async fn handle_general_forum_message(
         let msg = "🤖 **Herdr Telegram Bot**\n\n\
                    • `/agents` — open spaces & agents control panel\n\
                    • `/spawn <kind> [workspace]` — spawn a new agent & topic\n\
-                   • `/shell [space]` — open a fresh shell pane & topic\n\
-                   • `/newspace <name>` — create a new workspace\n\
+                    • `/shell [space]` — open a fresh shell pane & topic\n\
+                    • `/space [name]` — new space + shell topic\n\
                    • `/model` — inside an agent topic: model picker\n\
                    • `/cancel` — abort pending jobs\n\n\
                    💡 Each active agent has its own dedicated topic in this group! Switch to an agent's topic to chat with it directly.";
@@ -218,14 +230,6 @@ async fn handle_general_forum_message(
             Err(e) => {
                 s.tg.send_msg(chat, thread_id, &format!("⚠️ spawn failed: {e}"), None).await;
             }
-        }
-        return;
-    }
-
-    if cmd == "/newspace" && !arg.is_empty() {
-        match create_workspace(&s.cfg.socket, arg).await {
-            Ok(id) => { s.tg.send_msg(chat, thread_id, &format!("✅ created workspace `{arg}` ({id})"), None).await; }
-            Err(e) => { s.tg.send_msg(chat, thread_id, &format!("⚠️ failed: {e}"), None).await; }
         }
         return;
     }

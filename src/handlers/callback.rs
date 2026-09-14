@@ -41,7 +41,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         ("n", Some(ws)) => {
             s.tg.edit_msg(chat, msg_id, &format!("spawn into {ws}: which agent?"), Some(spawn_kb(Some(ws)))).await;
         }
-        ("N", None) => handle_new_space(&s, chat, msg_id).await,
+        ("N", None) => handle_new_space(&s, chat, msg_id, thread).await,
         ("k", Some(r)) => match r.split_once(':') {
             Some((ws, kind)) => handle_spawn(&s, chat, msg_id, kind, Some(ws)).await,
             None => handle_spawn(&s, chat, msg_id, r, None).await,
@@ -105,19 +105,20 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     }
 }
 
-async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64) {
+async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>) {
     s.tg.edit_msg(chat, msg_id, "⏳ creating space…", None).await;
-    let n = list_workspaces(&s.cfg.socket).await.map(|w| w.len()).unwrap_or(0) + 1;
-    match create_workspace(&s.cfg.socket, &format!("space-{n}")).await {
-        Ok(_) => {
-            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-            let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
-            s.tg.edit_msg(chat, msg_id, &build_menu_text(&spaces, &agents), Some(main_menu_kb(&spaces, &agents))).await;
-        }
+    let label = super::space::next_label(s).await;
+    let ws_id = match create_workspace(&s.cfg.socket, &label).await {
+        Ok(id) => id,
         Err(e) => {
             s.tg.edit_msg(chat, msg_id, &format!("⚠️ failed to create space: {e}"), None).await;
+            return;
         }
-    }
+    };
+    super::shell::open_shell(s, chat, thread, Some(&ws_id)).await;
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
+    s.tg.edit_msg(chat, msg_id, &build_menu_text(&spaces, &agents), Some(main_menu_kb(&spaces, &agents))).await;
 }
 
 async fn handle_spawn(s: &AppState, chat: i64, msg_id: i64, kind: &str, ws: Option<&str>) {

@@ -131,6 +131,11 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         super::shell::open_shell(&s, chat, None, ws.as_deref()).await;
         return;
     }
+    if cmd == "/space" {
+        let label = if super::space::check_label(arg) { arg.to_string() } else { super::space::next_label(&s).await };
+        super::space::open_space(&s, chat, None, &label).await;
+        return;
+    }
 
     if cmd == "/model" {
         // `/model [target] [search]` — first token is a target only when it

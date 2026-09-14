@@ -18,6 +18,6 @@ HERDR_SOCKET=~/.config/herdr/herdr.sock # optional
 Run: `cargo run`
 
 ## Use
-- General: `/agents` `/spawn <kind> [space]` `/newspace <name>` `/help` `/cancel`
+- General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/help` `/cancel`
 - In agent topic: plain text = prompt, plus `/read` `/keys` `/status` `/cancel`
 - In DM: reply to card, or `/agents` to focus, then plain text = prompt.

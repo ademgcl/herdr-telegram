@@ -8,6 +8,7 @@ pub mod model;
 pub mod model_parse;
 pub mod model_scan;
 pub mod shell;
+pub mod space;
 pub mod tap;
 
 pub use callback::handle_callback;
