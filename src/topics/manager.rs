@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::Mutex,
 };
 use crate::{
@@ -11,9 +11,6 @@ pub struct TopicManager {
     forum_id: Option<i64>,
     storage: TopicStorage,
     tg: TelegramClient,
-    /// Panes already stripped to text titles this process (one-time
-    /// migration away from the emoji-title era).
-    migrated: Mutex<HashSet<String>>,
     /// Last icon set per pane — recolors fire only on real change.
     last_icon: Mutex<HashMap<String, String>>,
 }
@@ -24,7 +21,6 @@ impl TopicManager {
             forum_id,
             storage: TopicStorage::new(),
             tg,
-            migrated: Mutex::new(HashSet::new()),
             last_icon: Mutex::new(HashMap::new()),
         }
     }
@@ -33,23 +29,19 @@ impl TopicManager {
         self.storage.get_pane(thread)
     }
 
-    /// This pane's stable tag, assigning on first sight (no-op after).
-    pub fn tag(&self, pane: &str, kind: &str) -> String {
-        self.storage.assign_tag(pane, kind)
-    }
-
     pub fn all_mappings(&self) -> std::collections::HashMap<String, i64> {
         self.storage.all_mappings()
     }
 
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
-        self.migrated.lock().unwrap().remove(pane);
         self.last_icon.lock().unwrap().remove(pane);
         self.storage.remove(pane)
     }
 
-    /// Ensure the pane's topic exists (`{tag} · {space}`, pure text) and
-    /// return its thread. Titles never carry state — see `sync_topic`.
+    /// Ensure the pane's topic exists and return its thread. The auto
+    /// title (`{tag} · {space}`, pure text) is set exactly once — at
+    /// creation. After that the name belongs to the owner: manual
+    /// renames are NEVER overwritten (icons still track status below).
     pub async fn ensure_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         let forum = self.forum_id?;
         // Unknown kind (agent vanished mid-flight): never mint "?n" tags —
@@ -66,7 +58,6 @@ impl TopicManager {
                     Ok(thread) => {
                         println!("[topics] created topic #{thread} for {pane} ({name})");
                         self.storage.insert(pane.to_string(), thread);
-                        self.migrated.lock().unwrap().insert(pane.to_string());
                         Some(thread)
                     }
                     Err(e) => {
@@ -78,32 +69,14 @@ impl TopicManager {
         }
     }
 
-    /// Sync topic state: one-time strip to the text title plus the state
-    /// icon for this status. Everything is silent (never notifies) and
-    /// cache-guarded (no redundant API calls). Safe to call on every
-    /// observation — icon swaps are cheap and notification-free.
+    /// Sync topic state: ensure the topic exists and set the state icon
+    /// for this status. The NAME is never touched here — only the icon.
+    /// Everything is silent (never notifies) and cache-guarded (no
+    /// redundant API calls). Safe to call on every observation — icon
+    /// swaps are cheap and notification-free.
     pub async fn sync_topic(&self, pane: &str, kind: &str, space: &str, status: &str) -> Option<i64> {
         let thread = self.ensure_topic(pane, kind, space).await?;
         let forum = self.forum_id?;
-        // Never mint tags for unknown kinds — ensure_topic already routed
-        // without assigning.
-        if kind != "?"
-            && self.migrated.lock().unwrap().insert(pane.to_string())
-        {
-            let name = names::title(&self.tag(pane, kind), space);
-            // Best effort; NOT_MODIFIED just means already text.
-            let migrated = match self.tg.rename_forum_topic(forum, thread, &name).await {
-                Ok(()) => true,
-                Err(e) if e.to_string().contains("NOT_MODIFIED") => true,
-                Err(e) => {
-                    eprintln!("[topics] rename #{thread} ({pane}) failed: {e}");
-                    false
-                }
-            };
-            if !migrated {
-                self.migrated.lock().unwrap().remove(pane);
-            }
-        }
         let icon = names::icon_emoji_id(status).to_string();
         let due = match self.last_icon.lock().unwrap().get(pane) {
             None => true,

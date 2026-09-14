@@ -25,8 +25,12 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
 
     // Rate-limit stalls never transition (herdr reports `working` while
     // opencode retries internally), so the status path above stays mute:
-    // scan working panes for the banner directly.
-    scan_limits(s).await;
+    // scan working panes for the banner directly. Skipped on the silent
+    // seed (boot text can mimic error banners); the next watchdog tick
+    // — 60s later — surfaces real stalls anyway.
+    if !silent {
+        scan_limits(s).await;
+    }
 
     // Stored panes with no agent are shells (quit) or dead (closed).
     // Shells keep their topic with the shell badge and zero alerts;
@@ -106,6 +110,6 @@ async fn scan_limits(s: &AppState) {
                 s.remember(*id, mid, &pane).await;
             }
         }
-        println!("[alert] limit stall {pane}: {}", hit.kind);
+        println!("[alert] limit stall {pane}: {} ({})", hit.kind, hit.excerpt);
     }
 }
