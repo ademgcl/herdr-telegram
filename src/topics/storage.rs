@@ -7,7 +7,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct Store {
     #[serde(default)]
     topics: HashMap<String, i64>,
@@ -56,20 +55,20 @@ impl TopicStorage {
 
     fn read_from_disk(path: &PathBuf) -> Store {
         let Ok(txt) = fs::read_to_string(path) else { return Store::default() };
-        // Current format
-        if let Ok(s) = serde_json::from_str::<Store>(&txt) {
-            return s;
-        }
-        // Legacy flat map {pane: thread}
-        serde_json::from_str::<HashMap<String, i64>>(&txt)
-            .map(|topics| Store {
+        // Legacy flat map {pane: thread} FIRST: without
+        // deny_unknown_fields it would parse as an empty Store and wipe
+        // every mapping. A current-format file always carries non-integer
+        // values, so it can never match the flat shape.
+        if let Ok(topics) = serde_json::from_str::<HashMap<String, i64>>(&txt) {
+            return Store {
                 topics,
                 unread: HashSet::new(),
                 tags: HashMap::new(),
                 titles: HashMap::new(),
                 pins: HashMap::new(),
-            })
-            .unwrap_or_default()
+            };
+        }
+        serde_json::from_str::<Store>(&txt).unwrap_or_default()
     }
 
     fn save(&self, s: &Store) {
@@ -77,7 +76,12 @@ impl TopicStorage {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(json) = serde_json::to_string_pretty(s) {
-            let _ = fs::write(&self.file_path, json);
+            let mut tmp = self.file_path.as_os_str().to_owned();
+            tmp.push(".tmp");
+            let tmp = PathBuf::from(tmp);
+            if fs::write(&tmp, json).is_ok() {
+                let _ = fs::rename(&tmp, &self.file_path);
+            }
         }
     }
 
@@ -164,12 +168,19 @@ mod tests {
 
     #[test]
     fn test_store_roundtrip_and_migration() {
-        let legacy = r#"{"w1:p1": 42}"#;
-        let migrated: Store = serde_json::from_str(legacy)
-            .or_else(|_| serde_json::from_str::<HashMap<String, i64>>(legacy).map(|m| Store { topics: m, unread: HashSet::new(), tags: HashMap::new(), titles: HashMap::new(), pins: HashMap::new() }))
-            .unwrap();
-        assert_eq!(migrated.topics.get("w1:p1"), Some(&42));
-        assert!(migrated.unread.is_empty());
+        // Legacy flat map migrates through the real read path; current
+        // format (incl. unknown future fields) reads as-is.
+        let leg = std::env::temp_dir().join(format!("herdr-tg-test-legacy-{}.json", std::process::id()));
+        std::fs::write(&leg, r#"{"w1:p1": 42}"#).unwrap();
+        let st = TopicStorage::at(leg.clone());
+        assert_eq!(st.get_thread("w1:p1"), Some(42));
+        let _ = std::fs::remove_file(&leg);
+
+        let cur = std::env::temp_dir().join(format!("herdr-tg-test-cur-{}.json", std::process::id()));
+        std::fs::write(&cur, r#"{"topics": {"w2:p2": 7}, "future_field": true}"#).unwrap();
+        let st2 = TopicStorage::at(cur.clone());
+        assert_eq!(st2.get_thread("w2:p2"), Some(7));
+        let _ = std::fs::remove_file(&cur);
 
         let s = Store::default();
         assert!(!s.unread.contains("x"));
