@@ -112,6 +112,8 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
             .await;
         return;
     }
+    s.keywait.lock().await.remove(&(chat, thread));
+    s.runwait.lock().await.remove(&(chat, thread));
     s.typewait.lock().await.remove(&(chat, thread));
     if send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"]).await.is_err() {
         s.tg.send_msg(chat, thread, "⚠️ quit keys failed — quit on the PC", None).await;
