@@ -1,4 +1,5 @@
-use crate::{telegram::client::TelegramClient, types::Res};
+use super::client::TelegramClient;
+use crate::types::Res;
 use serde_json::{Value, json};
 use std::time::Duration;
 

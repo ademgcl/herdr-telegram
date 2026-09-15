@@ -84,7 +84,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .unwrap_or(0);
     let display = display_status(&settled, settled_age);
     s.topics.sync_topic(&pane, &kind, raw_space, display).await;
-    if body.chars().count() < 10 {
+    // Short genuine answers ("ok", "done") still push: the debounce
+    // and delta above already gate noise, and a silent settle leaves
+    // the owner unaware. Only a truly empty body stays quiet.
+    if body.is_empty() {
         return;
     }
     post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await;

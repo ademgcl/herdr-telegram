@@ -1,7 +1,5 @@
-use crate::herdr::client::read_screen_adaptive;
 use crate::jobs::episode::BuzzEpisode;
-use crate::jobs::notices::{detect_limit, limit_card_text};
-use crate::notifier::LIMIT_REMIND_SECS;
+use crate::jobs::stall::watch_stall;
 use crate::{
     handlers::dialog::send_blocked_card,
     herdr::client::{get_agent, read_screen, rpc_t},
@@ -44,10 +42,17 @@ pub async fn enqueue_prompt(
         Some(j) => j,
         None => {
             let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-            let j = Job::new(baseline, chat_id, thread_id);
-            s.jobs.lock().await.insert(pane.clone(), j.clone());
-            tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
-            j
+            // Re-check under a fresh lock: a concurrent enqueue may have
+            // won the pane while the baseline read yielded — spawning a
+            // second watcher would double-report every alert.
+            if let Some(j) = s.jobs.lock().await.get(&pane).cloned() {
+                j
+            } else {
+                let j = Job::new(baseline, chat_id, thread_id);
+                s.jobs.lock().await.insert(pane.clone(), j.clone());
+                tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
+                j
+            }
         }
     };
 
@@ -196,50 +201,10 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             break;
         }
 
-        // Rate-limit stall watch: opencode retries internally while herdr
-        // keeps reporting `working` — no settle, no notifier event, and
-        // live-message edits never buzz. Scan the raw screen every tick
-        // and post one NEW (buzzing) card per episode.
-        // (Runs on the raw screen, before chrome filtering, and outside
-        // the edit cooldown so stalls surface even when nothing streams.)
-        // Empty read = outage/unknown: preserve the episode (never reset
-        // dedup on a failed read) and retry next tick.
-        let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
-        if screen.is_empty() {
-            episode.note_empty();
-        } else if let Some(hit) =
-            episode.tick(detect_limit(&screen).as_ref(), std::time::Instant::now())
-        {
-            // Cross-path dedup: the watchdog shares `limit_alert` — if it
-            // (or a prior watcher) already buzzed this kind within the
-            // remind window, stay silent so handoffs never double-page.
-            // Check + claim hold one lock guard (atomic): concurrent
-            // watchdog ticks then see the claim and stay silent too.
-            let dup = {
-                let mut map = s.limit_alert.lock().await;
-                match map.get(&pane) {
-                    Some((k, t))
-                        if k == hit.kind
-                            && t.elapsed() < Duration::from_secs(LIMIT_REMIND_SECS) =>
-                    {
-                        true
-                    }
-                    _ => {
-                        map.insert(
-                            pane.clone(),
-                            (hit.kind.to_string(), std::time::Instant::now()),
-                        );
-                        false
-                    }
-                }
-            };
-            if !dup {
-                let (chat, th) = *job.dest.lock().await;
-                let text = limit_card_text(&pane, hit);
-                report(&s, chat, th, &pane, &text).await;
-                println!("[prompt] limit alert {pane}: {}", hit.kind);
-            }
-        }
+        // Rate-limit stall watch (see stall.rs): opencode retries
+        // internally with no settle and no buzz — one NEW card per
+        // episode, straight from the raw screen.
+        let screen = watch_stall(&s, &pane, &job, &mut episode).await;
 
         // Stream whatever is new into the live message
         if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {

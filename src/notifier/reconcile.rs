@@ -65,7 +65,10 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                     // dedup (see status.rs working→* clear).
                     s.clear_limit_episode(&pane).await;
                     s.topics.mark_shell(&pane).await;
-                } else if !silent {
+                // Dead-pane close is silent (no card), so it never waits
+                // for a non-silent tick — orphans from a restart close on
+                // the seed pass instead of lingering a full cycle.
+                } else {
                     if s.topics.close_topic(&pane).await {
                         s.topics.remove_mapping(&pane);
                     }

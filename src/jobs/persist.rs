@@ -20,10 +20,24 @@ pub fn store_path() -> PathBuf {
 }
 
 pub fn load_file(path: &Path) -> HashMap<String, PendingPrompt> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+    let Ok(txt) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    if txt.trim().is_empty() {
+        return HashMap::new();
+    }
+    serde_json::from_str(&txt).unwrap_or_else(|_| {
+        // Corrupt intent file: back it up before dropping, mirroring
+        // topics.storage — a truncated write must never silently eat
+        // owed replies.
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
+        let _ = std::fs::copy(path, &bak);
+        HashMap::new()
+    })
 }
 
 pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {

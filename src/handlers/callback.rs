@@ -1,8 +1,5 @@
 use crate::{
-    herdr::client::{
-        create_workspace, get_agent, list_agents, list_workspaces, read_agent_output,
-        read_pane_output, spawn_agent,
-    },
+    herdr::client::{get_agent, list_agents, list_workspaces, read_agent_output, read_pane_output},
     state::AppState,
     ui::{
         agent_card_kb, btn, build_agent_card_text, build_menu_text, build_ws_text, main_menu_kb,
@@ -62,10 +59,12 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             .await;
             s.targets.lock().await.remove(&(chat, msg_id));
         }
-        ("N", None) => handle_new_space(&s, chat, msg_id, thread).await,
+        ("N", None) => super::callback_spawn::handle_new_space(&s, chat, msg_id, thread).await,
         ("k", Some(r)) => match r.split_once(':') {
-            Some((ws, kind)) => handle_spawn(&s, chat, msg_id, kind, Some(ws)).await,
-            None => handle_spawn(&s, chat, msg_id, r, None).await,
+            Some((ws, kind)) => {
+                super::callback_spawn::handle_spawn(&s, chat, msg_id, kind, Some(ws)).await
+            }
+            None => super::callback_spawn::handle_spawn(&s, chat, msg_id, r, None).await,
         },
         ("K", Some(pane)) => {
             s.keywait
@@ -168,7 +167,9 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
         }
         // Model picker: M:<idx>:<pane> free-Zen taps, M:list:<pane> card.
-        ("M", Some(r)) => handle_model_tap(&s, chat, msg_id, thread, r).await,
+        ("M", Some(r)) => {
+            super::callback_model::handle_model_tap(&s, chat, msg_id, thread, r).await
+        }
         // Pane kill confirm: X:<kill|keep>:<pane> — stateless buttons.
         ("X", Some(r)) => {
             if let Some((action, pane)) = r.split_once(':') {
@@ -177,162 +178,4 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         }
         _ => {}
     }
-}
-
-async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>) {
-    s.tg.edit_msg(chat, msg_id, "⏳ creating space…", None)
-        .await;
-    let label = super::space::next_label(s).await;
-    let ws_id = match create_workspace(&s.cfg.socket, &label).await {
-        Ok(id) => id,
-        Err(e) => {
-            s.tg.edit_msg(
-                chat,
-                msg_id,
-                &format!("⚠️ failed to create space: {e}"),
-                None,
-            )
-            .await;
-            return;
-        }
-    };
-    super::shell::open_shell(s, chat, thread, Some(&ws_id)).await;
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
-    s.tg.edit_msg(
-        chat,
-        msg_id,
-        &build_menu_text(&spaces, &agents),
-        Some(main_menu_kb(&spaces, &agents)),
-    )
-    .await;
-}
-
-async fn handle_spawn(s: &AppState, chat: i64, msg_id: i64, kind: &str, ws: Option<&str>) {
-    let label = ws.unwrap_or("tg");
-    s.tg.edit_msg(
-        chat,
-        msg_id,
-        &format!("⏳ starting {kind} in {label} space…"),
-        None,
-    )
-    .await;
-    match spawn_agent(&s.cfg.socket, kind, ws).await {
-        Ok(row) => {
-            s.remember(chat, Some(msg_id), &row.pane).await;
-            s.set_focus(&row.pane).await;
-            if let Ok(agent) = get_agent(&s.cfg.socket, &row.pane).await {
-                // Ensure topic exists in forum group if enabled
-                if s.cfg.forum.is_some() {
-                    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                    let sp = spaces
-                        .iter()
-                        .find(|w| w.id == agent.ws)
-                        .map(|w| w.label.as_str())
-                        .unwrap_or(&agent.ws);
-                    s.topics
-                        .sync_topic(&agent.pane, &agent.kind, sp, &agent.status)
-                        .await;
-                }
-                s.tg.edit_msg(
-                    chat,
-                    msg_id,
-                    &build_agent_card_text(&agent),
-                    Some(agent_card_kb(&row.pane, &agent.ws)),
-                )
-                .await;
-            }
-        }
-        Err(e) => {
-            s.tg.edit_msg(chat, msg_id, &format!("⚠️ spawn failed: {e}"), None)
-                .await;
-        }
-    }
-}
-
-/// Model-card taps: `M:list:<pane>` re-renders the card in place,
-/// `M:<idx>:<pane>` switches to that free-Zen model with progress edits.
-async fn handle_model_tap(s: &AppState, chat: i64, msg_id: i64, _thread: Option<i64>, r: &str) {
-    let Some((idx, pane)) = r.split_once(':') else {
-        return;
-    };
-    if idx == "list" {
-        let kind = get_agent(&s.cfg.socket, pane)
-            .await
-            .map(|a| a.kind)
-            .unwrap_or_else(|_| "?".into());
-        let cur = super::model::current_model(s, pane).await;
-        let text = super::model::model_card_text(cur.as_deref(), pane, &kind);
-        let kb = if kind == "opencode" {
-            Some(super::model::model_kb(pane))
-        } else {
-            None
-        };
-        s.remember(chat, Some(msg_id), pane).await;
-        s.set_focus(pane).await;
-        s.tg.edit_msg(chat, msg_id, &text, kb).await;
-        return;
-    }
-    let Ok(i) = idx.parse::<usize>() else { return };
-    let Some((filter, marker)) = super::model_parse::free_tap(i) else {
-        return;
-    };
-    s.set_focus(pane).await;
-    // Strip the buttons while switching: mid-switch taps can only collide.
-    let no_kb = Some(Value::Array(Vec::new()));
-    s.tg.edit_msg(
-        chat,
-        msg_id,
-        &format!("⏳ switching {pane} → `{marker}`…"),
-        no_kb.clone(),
-    )
-    .await;
-    match super::model::switch_model(s, pane, &filter, &marker).await {
-        // Set means set: plain confirmation, buttons stay off.
-        Ok(footer) => {
-            s.tg.edit_msg(
-                chat,
-                msg_id,
-                &format!("✅ model set: `{footer}`\n[{pane}]"),
-                Some(Value::Array(Vec::new())),
-            )
-            .await;
-        }
-        Err(e) => {
-            if e.starts_with("no model matches") {
-                // Button predates the picker-grounded rename (e.g. the old
-                // "Contributor" filter): swap the dead card for a fresh one
-                // so the next tap can't miss.
-                let kind = get_agent(&s.cfg.socket, pane)
-                    .await
-                    .map(|a| a.kind)
-                    .unwrap_or_else(|_| "?".into());
-                let cur = super::model::current_model(s, pane).await;
-                let text = format!(
-                    "⚠️ that button was stale — fresh list, tap again:\n\n{}",
-                    super::model::model_card_text(cur.as_deref(), pane, &kind)
-                );
-                let kb = if kind == "opencode" {
-                    Some(super::model::model_kb(pane))
-                } else {
-                    None
-                };
-                s.tg.edit_msg(chat, msg_id, &text, kb).await;
-            } else {
-                // Keep the picker on screen so a retry is one tap.
-                let cur = super::model::current_model(s, pane).await;
-                let cur_line = cur.as_deref().unwrap_or("(unreadable)");
-                s.tg.edit_msg(
-                    chat,
-                    msg_id,
-                    &format!("⚠️ switch failed: {e}\nstill on: {cur_line}"),
-                    Some(super::model::model_kb(pane)),
-                )
-                .await;
-            }
-        }
-    }
-    // Card edits happen in place (same thread), so only routing memory
-    // needs updating here.
-    s.remember(chat, Some(msg_id), pane).await;
 }

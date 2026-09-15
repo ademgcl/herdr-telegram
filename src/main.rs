@@ -90,6 +90,11 @@ async fn main() -> Res<()> {
 
     loop {
         tokio::select! {
+            _ = shutdown_signal() => {
+                println!("[main] shutdown signal — saving offset");
+                s.save_offset().await;
+                break;
+            }
             _ = watchdog_tick.tick() => {
                 reconcile(&s, false, "watchdog").await;
             }
@@ -112,6 +117,9 @@ async fn main() -> Res<()> {
                             }
                             handle_update(s.clone(), &u).await;
                         }
+                        // Durable ack per batch: a crash before the next
+                        // poll must not replay these prompts.
+                        s.save_offset().await;
                     }
                     Err(e) => {
                         let msg = s.tg.redact(&e.to_string());
@@ -126,5 +134,29 @@ async fn main() -> Res<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// SIGINT or SIGTERM (launchd/docker send TERM): break the poll loop so
+/// the offset flushes instead of replaying the batch on next boot.
+/// Pending intents are already durable per-write; topics/focus likewise.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = term.recv() => {},
+            },
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }

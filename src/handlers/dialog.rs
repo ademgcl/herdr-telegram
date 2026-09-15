@@ -34,10 +34,12 @@ const HINT_WORDS: &[&str] = &[
 
 /// Selectable option labels out of a question card: the first line
 /// holding 2–4 short phrases in columns ("Allow once   Allow always
-/// Reject"). Pure — tested below.
+/// Reject"). De-frames first: tap paths parse the raw visible screen
+/// (frame rails intact), so a framed row must parse exactly like the
+/// de-framed card text. Pure — tested below.
 pub fn parse_options(lines: &[String]) -> Vec<String> {
     for line in lines {
-        let t = line.trim();
+        let t = deframe(line);
         if t.is_empty() {
             continue;
         }
@@ -45,7 +47,7 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
         if HINT_WORDS.iter().any(|w| low.contains(w)) {
             continue;
         }
-        let parts = split_columns(t);
+        let parts = split_columns(&t);
         let short = parts.len() >= 2
             && parts.len() <= 4
             && parts.iter().all(|p| {
@@ -207,6 +209,20 @@ mod tests {
         assert!(parse_options(&v(&["Hello! How can I help you today?"])).is_empty());
         assert!(parse_options(&v(&["| a | b |", "| c | d |"])).is_empty());
         assert!(parse_options(&v(&["first line", "second line"])).is_empty());
+    }
+
+    #[test]
+    fn test_parse_options_framed_row() {
+        // Tap paths parse the raw visible screen (rails intact) — a
+        // framed row must yield the same options as card text.
+        let lines = v(&[
+            "┃ △ Permission required",
+            "┃   Allow once   Allow always   Reject",
+        ]);
+        assert_eq!(
+            parse_options(&lines),
+            vec!["Allow once", "Allow always", "Reject"]
+        );
     }
 
     #[test]

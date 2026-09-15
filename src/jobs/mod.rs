@@ -7,6 +7,7 @@ pub mod persist;
 pub mod recover;
 pub mod runner;
 pub mod segment;
+pub mod stall;
 pub mod stream;
 
 pub use recover::recover_pending;

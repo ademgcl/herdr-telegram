@@ -1,8 +1,12 @@
 use crate::{
-    telegram::client::TelegramClient,
+    telegram::TelegramClient,
     topics::{names, storage::TopicStorage},
 };
-use std::{collections::HashMap, sync::Mutex, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Mutex,
+    time::Instant,
+};
 
 pub struct TopicManager {
     forum_id: Option<i64>,
@@ -11,6 +15,11 @@ pub struct TopicManager {
     /// Last icon set per pane — recolors fire only on real change.
     last_icon: Mutex<HashMap<String, String>>,
     last_title_write: Mutex<HashMap<String, Instant>>,
+    /// Panes with a topic creation in flight — concurrent ensures for
+    /// the same new pane (spawn racing a status event) wait for the
+    /// winner instead of minting a second, orphaned topic. Short-lived
+    /// claims only; never held across an await.
+    creating: Mutex<HashSet<String>>,
 }
 
 impl TopicManager {
@@ -21,6 +30,7 @@ impl TopicManager {
             tg,
             last_icon: Mutex::new(HashMap::new()),
             last_title_write: Mutex::new(HashMap::new()),
+            creating: Mutex::new(HashSet::new()),
         }
     }
 
@@ -35,6 +45,7 @@ impl TopicManager {
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
         self.last_icon.lock().unwrap().remove(pane);
         self.last_title_write.lock().unwrap().remove(pane);
+        self.creating.lock().unwrap().remove(pane);
         self.storage.remove(pane)
     }
 
@@ -55,24 +66,36 @@ impl TopicManager {
         // the watchdog writes it into the herdr pane label when unlabeled,
         // so the default name is herdr-tracked from the start.
         let tag = self.storage.assign_tag(pane, kind);
-        match self.storage.get_thread(pane) {
-            Some(t) => Some(t),
-            None => {
-                let name = names::title(&tag, space);
-                match self.tg.create_forum_topic(forum, &name).await {
-                    Ok(thread) => {
-                        println!("[topics] created topic #{thread} for {pane} ({name})");
-                        self.storage.insert(pane.to_string(), thread);
-                        self.storage.set_title(pane, &name);
-                        Some(thread)
-                    }
-                    Err(e) => {
-                        eprintln!("[topics] failed to create topic for {pane}: {e}");
-                        None
-                    }
+        if let Some(t) = self.storage.get_thread(pane) {
+            return Some(t);
+        }
+        // Single-flight: a concurrent ensure for this same new pane may
+        // already be creating. The loser waits for the winner's insert
+        // (bounded — a slow network just defers to the next tick).
+        if !self.creating.lock().unwrap().insert(pane.to_string()) {
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if let Some(t) = self.storage.get_thread(pane) {
+                    return Some(t);
                 }
             }
+            return self.storage.get_thread(pane);
         }
+        let name = names::title(&tag, space);
+        let out = match self.tg.create_forum_topic(forum, &name).await {
+            Ok(thread) => {
+                println!("[topics] created topic #{thread} for {pane} ({name})");
+                self.storage.insert(pane.to_string(), thread);
+                self.storage.set_title(pane, &name);
+                Some(thread)
+            }
+            Err(e) => {
+                eprintln!("[topics] failed to create topic for {pane}: {e}");
+                None
+            }
+        };
+        self.creating.lock().unwrap().remove(pane);
+        out
     }
 
     /// Sync topic state: ensure the topic exists and set the state icon
@@ -103,7 +126,7 @@ impl TopicManager {
                         .insert(pane.to_string(), icon);
                 }
                 Err(e) => {
-                    if crate::telegram::client::topic_missing(&e.to_string()) {
+                    if crate::telegram::topic_missing(&e.to_string()) {
                         self.remove_mapping(pane);
                         println!("[topics] pruned missing topic #{thread} ({pane})");
                         return None;
@@ -168,10 +191,10 @@ impl TopicManager {
                     .insert(pane.to_string(), Instant::now());
             }
             Err(e) => {
-                if crate::telegram::client::topic_missing(&e.to_string()) {
+                if crate::telegram::topic_missing(&e.to_string()) {
                     self.remove_mapping(pane);
                     println!("[topics] pruned missing topic #{thread} ({pane})");
-                } else if crate::telegram::client::topic_not_modified(&e.to_string()) {
+                } else if crate::telegram::topic_not_modified(&e.to_string()) {
                     // Already showing it — converged, store and stay quiet
                     // instead of retry-spamming every watchdog tick.
                     self.storage.set_title(pane, desired);
@@ -203,7 +226,7 @@ impl TopicManager {
         match self.tg.close_forum_topic(forum, thread).await {
             Ok(()) => true,
             Err(e) => {
-                if crate::telegram::client::topic_missing(&e.to_string()) {
+                if crate::telegram::topic_missing(&e.to_string()) {
                     return true;
                 }
                 eprintln!("[topics] close topic #{thread} ({pane}) failed: {e}");

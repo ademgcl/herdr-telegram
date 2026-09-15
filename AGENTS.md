@@ -23,12 +23,20 @@ src/
 ├── state.rs                # Thread-safe shared State
 ├── herdr/                  # Herdr communication layer
 │   ├── mod.rs              # Re-exports
-│   ├── client.rs           # Unix socket RPC
+│   ├── client.rs           # Facade re-export (paths stable)
+│   ├── rpc.rs              # Unix socket transport (rpc/rpc_t/ping)
+│   ├── agents.rs           # Agent list/get/read/keys
+│   ├── panes.rs            # Pane list/read/input/keys/tabs/splits
+│   ├── workspaces.rs       # Workspace ensure + agent spawn
+│   ├── screens.rs          # Screen snapshots (tail/visible/adaptive)
 │   ├── labels.rs           # Pane labels (rename + list parse)
 │   └── events.rs           # Event stream + auto-reconnect
 ├── telegram/               # Telegram API layer
 │   ├── mod.rs              # Re-exports
-│   ├── client.rs           # Bot API HTTP client
+│   ├── client.rs           # Core transport + setup (call/new/redact)
+│   ├── messages.rs         # Message UX (send/edit/typing/callback/unpin)
+│   ├── forum.rs            # Forum-topic API (create/close/title/icon)
+│   ├── errors.rs           # Error predicates (missing/not-modified)
 │   ├── polling.rs          # Long-poll, offsets, stale filter
 │   └── router.rs           # Update routing
 ├── topics/                 # Forum topic management
@@ -38,18 +46,32 @@ src/
 │   └── manager.rs          # Creation (friendly tag·space named), icon + title sync, lifecycle
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
-│   ├── dm.rs               # DM messages + commands
+│   ├── dm.rs               # DM dispatcher (waiters → commands → prompt)
+│   ├── dm_info.rs          # DM /agents /keys /read /status
+│   ├── dm_lifecycle.rs     # DM /quit /kill /shell /space /spawn
+│   ├── dm_model.rs         # DM /model
+│   ├── dm_prompt.rs        # DM typewait + bare-text routing
 │   ├── forum.rs            # Topic messages + commands
 │   ├── general.rs          # General-topic commands
-│   ├── callback.rs         # Inline keyboard callbacks
+│   ├── callback.rs         # Callback dispatcher
+│   ├── callback_spawn.rs   # Callback workspace/agent spawn
+│   ├── callback_model.rs   # Callback model taps
 │   ├── dialog.rs           # Blocked cards, content-addressed refresh
-│   ├── tap.rs              # Taps (in-place update) + typed answers
+│   ├── tap.rs              # Facade re-export (paths stable)
+│   ├── tap_classify.rs     # Post-tap classification (pure)
+│   ├── tap_keys.rs         # Key-send + re-read
+│   ├── tap_answer.rs       # Button-tap entry (in-place card update)
+│   ├── tap_input.rs        # Typed answers + run/key waiters
 │   ├── interactive.rs      # Static key maps
 │   ├── kill.rs             # Kill confirm flow
 │   ├── model.rs            # Opencode model picker
 │   ├── model_parse.rs      # Picker list parsing
 │   ├── model_scan.rs       # Column-split helpers
-│   ├── shell.rs            # Agentless shell panes (ops)
+│   ├── shell.rs            # Facade re-export (paths stable)
+│   ├── shell_common.rs     # Reply format, settle wait, card text
+│   ├── shell_run.rs        # Shell command run
+│   ├── shell_lifecycle.rs  # Quit-to-shell
+│   ├── shell_provision.rs  # Shell open/split
 │   ├── shell_topic.rs      # Shell-topic command routing
 │   ├── space.rs            # Workspace creation (/space)
 │   ├── target.rs           # DM pane-target resolution
@@ -59,8 +81,14 @@ src/
 │   ├── job.rs              # Per-pane job state, cancel notify
 │   ├── episode.rs          # Stall-episode gate for mid-run alerts
 │   ├── runner.rs           # Prompt submit + watcher (live → final card)
+│   ├── stall.rs            # Mid-run limit/stall watch (per-episode buzz)
 │   ├── finalize.rs         # Settle arbitration: stream vs settled screen
-│   ├── notices.rs          # Limit/quota stall alerts
+│   ├── notices/            # Limit/quota stall alerts
+│   │   ├── mod.rs          # Re-exports
+│   │   ├── types.rs        # LimitHit, kinds, stuck gate
+│   │   ├── patterns.rs     # Match tables (strong/weak/context)
+│   │   ├── detect.rs       # Screen scanning (priority-ordered)
+│   │   └── card.rs         # Buzzing card rendering
 │   ├── persist.rs          # Durable prompt intent (jobs.state)
 │   ├── recover.rs          # Boot re-arm of orphaned watchers
 │   ├── segment.rs          # Fresh-reply extraction

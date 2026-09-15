@@ -1,7 +1,7 @@
 //! Pane display labels + workspace placement: the user-set name synced
 //! 1:1 with forum topic titles (`pane.rename` sets it, `pane.list`
 //! serves it, absent when cleared). Read-only except via `rename_pane`.
-use crate::{herdr::client::rpc, types::Res};
+use crate::{herdr::rpc::rpc, types::Res};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 

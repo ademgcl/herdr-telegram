@@ -1,5 +1,5 @@
 use crate::{
-    herdr::client::list_agents,
+    herdr::agents::list_agents,
     notifier::{observe_status, reconcile},
     state::AppState,
     types::Res,

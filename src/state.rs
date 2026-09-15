@@ -2,7 +2,7 @@ use crate::{
     config::Cfg,
     jobs::job::Job,
     jobs::persist::{self, PendingPrompt},
-    telegram::client::TelegramClient,
+    telegram::TelegramClient,
     topics::TopicManager,
     types::Res,
 };
@@ -83,6 +83,24 @@ impl State {
         PathBuf::from("focus.state")
     }
 
+    fn offset_file() -> PathBuf {
+        PathBuf::from("offset.state")
+    }
+
+    /// Persist the Telegram poll offset (atomic tmp+rename, like focus):
+    /// a crash between handling an update and the next poll ack must not
+    /// replay the prompt and double-submit it to the agent.
+    pub async fn save_offset(&self) {
+        let off = *self.offset.lock().await;
+        let file = Self::offset_file();
+        let mut tmp = file.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        if std::fs::write(&tmp, off.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &file);
+        }
+    }
+
     pub fn new(cfg: Cfg) -> Res<AppState> {
         let tg = TelegramClient::new(cfg.token.clone())?;
         let topics = TopicManager::new(cfg.forum, tg.clone());
@@ -97,11 +115,17 @@ impl State {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        // Offset survives restarts (see save_offset) — boot resumes the
+        // poll stream instead of replaying the last 10 minutes of prompts.
+        let offset = std::fs::read_to_string(Self::offset_file())
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
         Ok(Arc::new(Self {
             cfg,
             tg,
             topics,
-            offset: Mutex::new(0),
+            offset: Mutex::new(offset),
             status: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
             targets: Mutex::new(HashMap::new()),
@@ -162,6 +186,7 @@ impl State {
     pub async fn cancel_jobs_for(&self, pane: &str) -> bool {
         let job = self.jobs.lock().await.remove(pane);
         self.clear_pending(pane).await;
+        self.clear_waiters(pane).await;
         match job {
             Some(job) => {
                 job.mark_stopped();
@@ -226,7 +251,17 @@ impl State {
         self.limit_miss.lock().await.remove(pane);
     }
 
+    /// Drop armed input waiters for a dead pane: a typewait surviving
+    /// /kill would eat the owner's next message as typed input into a
+    /// pane that no longer exists.
+    async fn clear_waiters(&self, pane: &str) {
+        self.typewait.lock().await.retain(|_, p| p != pane);
+        self.keywait.lock().await.retain(|_, p| p != pane);
+        self.runwait.lock().await.retain(|_, p| p != pane);
+    }
+
     pub async fn clear_pane(&self, pane: &str) {
+        self.clear_waiters(pane).await;
         self.status.lock().await.remove(pane);
         self.last_done.lock().await.remove(pane);
         self.seen.lock().await.remove(pane);

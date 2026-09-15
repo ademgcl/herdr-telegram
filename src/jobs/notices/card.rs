@@ -1,8 +1,8 @@
 //! Buzzing card body for a limit/stall episode. Split from `notices`
-//! (300-line file limit): detection lives in `notices::mod`, rendering
+//! (300-line file limit): detection lives in `notices::detect`, rendering
 //! lives here and is re-exported (`crate::jobs::notices::limit_card_text`
 //! keeps working for `runner`/`reconcile`).
-use super::{ERROR_KIND, LimitHit};
+use super::types::{ERROR_KIND, LimitHit};
 
 /// Buzzing card body for a limit episode. Names the pane so DM owners
 /// with several agents know which one stalled.
