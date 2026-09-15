@@ -74,16 +74,24 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
 
     // Step 1: Paced deletion (~1.5s delay, 429 retry-safe)
     let mut deleted = 0;
+    let mut failed = Vec::new();
     for (pane, thread) in mappings {
         println!("[reset] deleting topic #{thread} for {pane}");
         if s.topics.delete_topic(&pane).await {
             deleted += 1;
+        } else {
+            failed.push((pane, thread));
         }
         tokio::time::sleep(RESET_STEP_DELAY).await;
     }
 
-    // Step 2: Clear stored titles and tags
+    // Step 2: Clear stored titles and tags. Topics whose deletion
+    // failed still exist on Telegram: keep their mappings so step 4
+    // reuses them instead of minting duplicates.
     s.topics.clear_all();
+    for (pane, thread) in &failed {
+        s.topics.restore_mapping(pane.clone(), *thread);
+    }
 
     // Step 3: Pure read from Herdr (AUDIT: zero mutation on Herdr)
     let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
@@ -126,15 +134,17 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     }
 
-    s.tg.send_msg(
-        chat,
-        thread_id,
-        &format!(
+    let summary = if failed.is_empty() {
+        format!(
             "✅ Paced reset complete: deleted {deleted} topic(s), recreated {created} topic(s)."
-        ),
-        None,
-    )
-    .await;
+        )
+    } else {
+        format!(
+            "✅ Paced reset complete: deleted {deleted} topic(s), recreated {created} topic(s), {} failed (kept, retried by next /reset).",
+            failed.len()
+        )
+    };
+    s.tg.send_msg(chat, thread_id, &summary, None).await;
 }
 
 #[cfg(test)]

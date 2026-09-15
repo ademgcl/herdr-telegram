@@ -120,6 +120,9 @@ impl State {
             return;
         }
         let mut tasks = self.typing_tasks.lock().await;
+        // Reap dead handles: a panicked task must not block its
+        // replacement forever.
+        tasks.retain(|_, h| !h.is_finished());
         if tasks.contains_key(pane) {
             return;
         }

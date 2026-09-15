@@ -26,8 +26,8 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         m.insert(pane.to_string(), std::time::Instant::now())
     };
 
-    // Collapse rapid done <-> idle flap up front — before any fetch or
-    // icon touch, so oscillation neither costs RPCs nor discoes the icon.
+    // Collapse rapid done <-> idle flap up front — before any fetch,
+    // so oscillation never costs RPCs.
     // Slow sampled bounces are legitimate completions: the agent did work
     // between observations, so they flow through.
     if ((old.as_deref() == Some("done") && new_status == "idle")

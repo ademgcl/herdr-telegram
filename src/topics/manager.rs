@@ -264,6 +264,13 @@ impl TopicManager {
         }
     }
 
+    /// Restore a mapping wiped by `clear_all` (reset retry path):
+    /// the Telegram topic survived, so re-sync reuses it instead of
+    /// minting a duplicate. Titles/tags reconverge on the next tick.
+    pub fn restore_mapping(&self, pane: String, thread: i64) {
+        self.storage.insert(pane, thread);
+    }
+
     pub fn clear_all(&self) {
         self.last_title_write.lock().unwrap().clear();
         self.creating.lock().unwrap().clear();

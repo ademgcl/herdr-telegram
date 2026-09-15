@@ -13,7 +13,7 @@ use crate::{
 use std::time::{Duration, Instant};
 
 /// A settle must hold this long before a spontaneous answer pushes —
-/// micro-settle flicker mid-task stays on the icon instead of buzzing.
+/// micro-settle flicker mid-task stays silent instead of buzzing.
 /// Blocked (needs input) always pushes immediately.
 pub(crate) const SETTLE_DEBOUNCE_SECS: u64 = 15;
 

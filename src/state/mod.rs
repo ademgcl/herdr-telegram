@@ -226,6 +226,9 @@ impl State {
     ///
     /// Lives in `jobs.rs` (job lifecycle owns waiter cleanup).
     pub async fn clear_pane(&self, pane: &str) {
+        // A dead pane must stop typing at once: otherwise the loop
+        // spams the action into the void every 4s until reaped.
+        self.stop_typing(pane).await;
         self.clear_waiters(pane).await;
         // A killed pane must not stay focused: the next bare message
         // would route into the void instead of resolving fresh.
