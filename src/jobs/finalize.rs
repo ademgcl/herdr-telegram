@@ -49,17 +49,20 @@ pub async fn finalize(
         return true;
     }
 
-    // The card is the answer itself — never a status-word lead. Blocked
-    // keeps the reply affordance. A blocked settle with no captured text
-    // means an interactive prompt is up: post its answer card instead of
-    // a dead "(no captured output)".
-    if body.is_empty() && settled == "blocked" {
+    // Blocked settle: the viewport holds the question, the scrollback
+    // tail holds tool activity — so NEVER dump the stream body here (it
+    // posts ↳ echoes + a reply footer ahead of the real question card).
+    // Always take the blocked-card path: it reads the visible screen
+    // (question text survives, activity doesn't) with answer buttons.
+    if settled == "blocked" {
         let (chat, th) = *job.dest.lock().await;
         // Reuse the live message slot when there is one.
         if let Some(mid) = live_mid.take() {
             s.tg.edit_msg(chat, mid, "⛔ blocked — needs input (see next message)", None).await;
         }
         send_blocked_card(&s, chat, th, pane).await;
+        // Silent icon sync (card dedupes via blocked_sig, inserted above).
+        observe_status(s, pane, settled, true, "job").await;
         s.last_done
             .lock()
             .await
@@ -76,11 +79,7 @@ pub async fn finalize(
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return false;
     }
-    let text = if settled == "blocked" {
-        format!("{body}\n↩️ reply or type in topic to answer")
-    } else {
-        body.clone()
-    };
+    let text = body.clone();
     let parts = chunks(&text, MAX_MSG_UNITS);
 
     observe_status(s, pane, settled, true, "job").await;
