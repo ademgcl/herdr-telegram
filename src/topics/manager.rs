@@ -38,17 +38,22 @@ impl TopicManager {
         self.storage.remove(pane)
     }
 
-    /// Ensure the pane's topic exists and return its thread. The auto
-    /// title (`{tag} · {space}`, pure text) is set exactly once — at
-    /// creation. After that the name belongs to the owner: manual
-    /// renames are NEVER overwritten (icons still track status below).
+    /// Ensure the pane's topic exists and return its thread. New topics
+    /// open under the herdr pane id; the watchdog's 1:1 title sync
+    /// renames to the pane label when one is set. Manual renames are
+    /// never overwritten blindly — they flow back as pane labels
+    /// (`forum_topic_edited` → `pane.rename`), and the stored title
+    /// absorbs our own sync echoes.
     pub async fn ensure_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         let forum = self.forum_id?;
-        // Unknown kind (agent vanished mid-flight): never mint "?n" tags —
+        // Unknown kind (agent vanished mid-flight): never mint topics —
         // just route to the existing thread, if any.
         if kind == "?" {
             return self.storage.get_thread(pane);
         }
+        // New topics open under the friendly default (stable tag + space);
+        // the watchdog writes it into the herdr pane label when unlabeled,
+        // so the default name is herdr-tracked from the start.
         let tag = self.storage.assign_tag(pane, kind);
         match self.storage.get_thread(pane) {
             Some(t) => Some(t),
@@ -58,6 +63,7 @@ impl TopicManager {
                     Ok(thread) => {
                         println!("[topics] created topic #{thread} for {pane} ({name})");
                         self.storage.insert(pane.to_string(), thread);
+                        self.storage.set_title(pane, &name);
                         Some(thread)
                     }
                     Err(e) => {
@@ -89,10 +95,44 @@ impl TopicManager {
         Some(thread)
     }
 
-    /// Badge a live-but-agentless pane as shell: no title touch (tags
-    /// stay stable for re-entry), just the shell icon. Silent, idempotent.
+    /// Badge a live-but-agentless pane as shell: no title touch (titles
+    /// sync 1:1 with herdr names), just the shell icon. Silent, idempotent.
     pub async fn mark_shell(&self, pane: &str) {
         self.sync_topic(pane, "?", "?", "shell").await;
+    }
+
+    /// Stable short tag for this pane (`o2`) — backs the friendly
+    /// default title for unlabeled panes.
+    pub fn tag_for(&self, pane: &str, kind: &str) -> String {
+        self.storage.assign_tag(pane, kind)
+    }
+
+    /// Last synced 1:1 title for this pane (herdr label or pane id).
+    pub fn topic_title(&self, pane: &str) -> Option<String> {
+        self.storage.get_title(pane)
+    }
+
+    /// Record a title the telegram side already shows (native rename):
+    /// no API call, just the echo loop-guard.
+    pub fn note_title(&self, pane: &str, title: &str) {
+        self.storage.set_title(pane, title);
+    }
+
+    /// herdr→telegram half: rename the topic when the pane's desired
+    /// title drifted. Silent; stores only on success so failures retry
+    /// on the next watchdog tick.
+    pub async fn sync_title(&self, pane: &str, desired: &str) {
+        if self.storage.get_title(pane).as_deref() == Some(desired) {
+            return;
+        }
+        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else { return };
+        match self.tg.set_topic_title(forum, thread, desired).await {
+            Ok(()) => {
+                println!("[topics] renamed topic #{thread} ({pane}) to {desired:?}");
+                self.storage.set_title(pane, desired);
+            }
+            Err(e) => eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}"),
+        }
     }
 
     /// One-time cleanup of the retired pinned-status era: unpin leftovers.

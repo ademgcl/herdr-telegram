@@ -159,6 +159,19 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// Rename a forum topic — the herdr→telegram half of 1:1 title
+    /// sync. Silent (never notifies); our own edit echoes back as
+    /// `forum_topic_edited`, which the stored-title compare absorbs.
+    pub async fn set_topic_title(&self, chat_id: i64, thread_id: i64, name: &str) -> Res<()> {
+        self.call(
+            "editForumTopic",
+            json!({"chat_id": chat_id, "message_thread_id": thread_id, "name": name}),
+            Duration::from_secs(15),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Set a forum topic's custom-emoji icon — the silent state signal.
     /// Unlike `icon_color` (create-only, ignored on edit), this applies
     /// AND renders on edit (verified live). Never notifies.

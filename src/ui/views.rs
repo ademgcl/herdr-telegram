@@ -174,9 +174,10 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • `/model` — current model + free-Zen picker (opencode)\n\
          • `/quit` — drop the agent to a shell (idle only)\n\
          • `/kill` — close this pane completely (confirms first)\n\
-         • `/keys y enter` — send keystrokes\n\
+          • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
-         • `/status` — refresh agent status card"
+         • `/status` — refresh agent status card\n\
+         • ✏️ rename this topic = renames the herdr pane (kept in sync)"
     )
 }
 
@@ -188,8 +189,9 @@ pub fn shell_help_text(pane: &str) -> String {
          • `opencode` — re-enter the agent\n\
          • `/read` — recent shell output\n\
          • `/keys y enter` — send keystrokes\n\
-         • `/kill` — close this pane completely (confirms first)\n\
-         • `/status` — shell card"
+          • `/kill` — close this pane completely (confirms first)\n\
+         • `/status` — shell card\n\
+         • ✏️ rename this topic = renames the herdr pane (kept in sync)"
     )
 }
 

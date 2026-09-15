@@ -17,6 +17,10 @@ struct Store {
     /// names never reshuffle. Missing in old files → default empty.
     #[serde(default)]
     tags: HashMap<String, String>,
+    /// Last 1:1 synced title per pane (herdr label or pane id). Compared
+    /// before every rename so both directions converge without loops.
+    #[serde(default)]
+    titles: HashMap<String, String>,
     /// Pinned live-status message per pane (pane → message id).
     #[serde(default)]
     pins: HashMap<String, i64>,
@@ -62,6 +66,7 @@ impl TopicStorage {
                 topics,
                 unread: HashSet::new(),
                 tags: HashMap::new(),
+                titles: HashMap::new(),
                 pins: HashMap::new(),
             })
             .unwrap_or_default()
@@ -101,11 +106,25 @@ impl TopicStorage {
         let prev = s.topics.remove(pane);
         s.unread.remove(pane);
         let untagged = s.tags.remove(pane);
+        let untitled = s.titles.remove(pane);
         let unpinned = s.pins.remove(pane);
-        if prev.is_some() || untagged.is_some() || unpinned.is_some() {
+        if prev.is_some() || untagged.is_some() || untitled.is_some() || unpinned.is_some() {
             self.save(&s);
         }
         prev
+    }
+
+    pub fn get_title(&self, pane: &str) -> Option<String> {
+        self.store.lock().unwrap().titles.get(pane).cloned()
+    }
+
+    pub fn set_title(&self, pane: &str, title: &str) {
+        let mut s = self.store.lock().unwrap();
+        if s.titles.get(pane).map(|t| t.as_str()) == Some(title) {
+            return;
+        }
+        s.titles.insert(pane.to_string(), title.to_string());
+        self.save(&s);
     }
 
     /// Get-or-assign this pane's stable tag, atomically under one lock so
@@ -147,7 +166,7 @@ mod tests {
     fn test_store_roundtrip_and_migration() {
         let legacy = r#"{"w1:p1": 42}"#;
         let migrated: Store = serde_json::from_str(legacy)
-            .or_else(|_| serde_json::from_str::<HashMap<String, i64>>(legacy).map(|m| Store { topics: m, unread: HashSet::new(), tags: HashMap::new(), pins: HashMap::new() }))
+            .or_else(|_| serde_json::from_str::<HashMap<String, i64>>(legacy).map(|m| Store { topics: m, unread: HashSet::new(), tags: HashMap::new(), titles: HashMap::new(), pins: HashMap::new() }))
             .unwrap();
         assert_eq!(migrated.topics.get("w1:p1"), Some(&42));
         assert!(migrated.unread.is_empty());
@@ -183,6 +202,23 @@ mod tests {
         assert_eq!(re.assign_tag("w1:p2", "opencode"), "o2");
         re.remove("w1:p1");
         assert_eq!(re.assign_tag("w3:p9", "opencode"), "o1");
+        let _ = std::fs::remove_file(&st.file_path);
+    }
+
+    #[test]
+    fn test_titles_roundtrip() {
+        let st = TopicStorage::at(PathBuf::from(format!(
+            "/tmp/herdr-tg-test-titles-{}.json",
+            std::process::id()
+        )));
+        assert_eq!(st.get_title("w1:p1"), None);
+        st.set_title("w1:p1", "api");
+        st.set_title("w1:p1", "api"); // idempotent, no extra write
+        assert_eq!(st.get_title("w1:p1"), Some("api".to_string()));
+        let re = TopicStorage::at(st.file_path.clone());
+        assert_eq!(re.get_title("w1:p1"), Some("api".to_string()));
+        re.remove("w1:p1");
+        assert_eq!(re.get_title("w1:p1"), None);
         let _ = std::fs::remove_file(&st.file_path);
     }
 }

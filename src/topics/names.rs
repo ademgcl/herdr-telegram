@@ -1,6 +1,6 @@
-/// Short, unique forum-topic titles: `{tag} · {space}` e.g.
-/// `o2 · herdr-telegram`. Tags are stable per pane (persisted) so
-/// restarts never reshuffle names. State lives on the topic ICON.
+/// Stable short tags per pane (`o2`): kept as persisted ids; the
+/// VISIBLE title syncs 1:1 with herdr pane names (see `sync_title`).
+/// State lives on the topic ICON.
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown
@@ -58,10 +58,6 @@ pub fn assign(existing: &[String], kind: &str) -> String {
     }
 }
 
-/// Short, unique forum-topic titles: `{tag} · {space}` e.g.
-/// `o2 · herdr-telegram`. Pure text, set once — state lives on the topic
-/// ICON (see `icon_emoji_id`), never in the title.
-
 /// Quiet horizon: a `done` older than this displays as idle (available
 /// again). herdr parks agents at done indefinitely, so without decay the
 /// idle badge would almost never show.
@@ -77,9 +73,19 @@ pub fn display_status(status: &str, settled_secs: u64) -> &str {
         status
     }
 }
+/// Friendly default title: `{tag} · {space}` e.g. `o2 · tg`. Written
+/// into the herdr pane label when unlabeled, so the default name is a
+/// real herdr-tracked name, not just a telegram string.
 pub fn title(tag: &str, space: &str) -> String {
     let short: String = space.chars().take(20).collect();
     format!("{tag} · {short}")
+}
+
+/// 1:1 pane↔topic title: the herdr pane label, else the unique pane id
+/// (`w8:p1`). Blank labels count as unset. Telegram caps names at 128.
+pub fn sync_title(label: Option<&str>, pane: &str) -> String {
+    let base = label.filter(|l| !l.trim().is_empty()).unwrap_or(pane);
+    base.chars().take(128).collect()
 }
 
 /// Topic icon per agent status, as preset custom-emoji IDs (verified live:
@@ -143,16 +149,6 @@ mod tests {
     }
 
     #[test]
-    fn test_title_format() {
-        assert_eq!(title("o2", "herdr-telegram"), "o2 · herdr-telegram");
-        assert_eq!(title("c1", "ajnow"), "c1 · ajnow");
-        // Long labels are capped at 20 chars.
-        assert_eq!(
-            title("o1", "a-very-long-workspace-label-here"),
-            "o1 · a-very-long-workspac"
-        );
-    }
-    #[test]
     fn test_icon_mapping() {
         assert_eq!(icon_emoji_id("working"), "5350554349074391003");
         assert_eq!(icon_emoji_id("idle"), "5417915203100613993");
@@ -173,5 +169,24 @@ mod tests {
         assert_eq!(display_status("working", 3600), "working");
         assert_eq!(display_status("blocked", 3600), "blocked");
         assert_eq!(display_status("idle", 0), "idle");
+    }
+
+    #[test]
+    fn test_title_format() {
+        assert_eq!(title("o2", "tg"), "o2 · tg");
+        assert_eq!(title("c1", "ajnow"), "c1 · ajnow");
+        // Long labels are capped at 20 chars.
+        assert_eq!(
+            title("o1", "a-very-long-workspace-label-here"),
+            "o1 · a-very-long-workspac"
+        );
+    }
+
+    #[test]
+    fn test_sync_title_label_or_pane_id() {
+        assert_eq!(sync_title(Some("api"), "w8:p1"), "api");
+        assert_eq!(sync_title(None, "w8:p1"), "w8:p1");
+        assert_eq!(sync_title(Some("  "), "w8:p1"), "w8:p1");
+        assert_eq!(sync_title(Some(&"x".repeat(200)), "w8:p1").chars().count(), 128);
     }
 }

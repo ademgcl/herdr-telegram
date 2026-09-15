@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use crate::{
+    handlers::titles::sync_titles,
     herdr::client::{list_agents, list_panes, read_screen_adaptive},
     jobs::notices::{detect_limit, limit_card_text},
     notifier::status::observe_status,
@@ -56,6 +57,10 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
             }
         }
     }
+
+    // 1:1 pane↔topic titles (herdr labels win here; native TG renames
+    // flow back via forum_topic_edited). Self-guards when forum is off.
+    sync_titles(s).await;
 }
 
 /// Buzz once per limit episode on job-less working panes (prompt-owned

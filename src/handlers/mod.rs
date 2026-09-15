@@ -10,6 +10,7 @@ pub mod model_scan;
 pub mod shell;
 pub mod space;
 pub mod tap;
+pub mod titles;
 
 pub use callback::handle_callback;
 pub use dm::handle_dm_message;

@@ -24,6 +24,7 @@ src/
 ├── herdr/                  # Herdr communication layer
 │   ├── mod.rs              # Re-exports
 │   ├── client.rs           # Unix socket RPC
+│   ├── labels.rs           # Pane labels (rename + list parse)
 │   └── events.rs           # Event stream + auto-reconnect
 ├── telegram/               # Telegram API layer
 │   ├── mod.rs              # Re-exports
@@ -33,8 +34,8 @@ src/
 ├── topics/                 # Forum topic management
 │   ├── mod.rs              # Re-exports
 │   ├── storage.rs          # Pane↔thread map in topics.state
-│   ├── names.rs            # Tags, titles, icons, done→idle decay
-│   └── manager.rs          # Creation (named once), icon sync, lifecycle
+│   ├── names.rs            # Tags, 1:1 title rule, icons, done→idle decay
+│   └── manager.rs          # Creation (pane-id named), icon + title sync, lifecycle
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
 │   ├── dm.rs               # DM messages + commands
@@ -48,6 +49,7 @@ src/
 │   ├── model_parse.rs      # Picker list parsing
 │   ├── model_scan.rs       # Column-split helpers
 │   └── shell.rs            # Agentless shell panes
+│   └── titles.rs           # 1:1 pane↔topic title sync (both directions)
 ├── jobs/                   # Agent prompt execution
 │   ├── mod.rs              # Re-exports
 │   ├── job.rs              # Per-pane job state, cancel notify
@@ -73,13 +75,14 @@ src/
 
 ## 3. Forum Topics (`TELEGRAM_FORUM_CHAT_ID` set)
 
-- One topic per agent.
-- Titles `{tag} · {space}` (kind code + stable counter + ≤20-char label), named once at creation — manual renames NEVER overwritten. Tags persist in `topics.state`.
+- One topic per pane (agents and shells alike).
+- Titles sync 1:1 with herdr pane names: pane label when set, else the unique pane id (`w8:p1`). Last synced title persists in `topics.state`.
+- Either side renames: native topic rename → `pane.rename`; herdr-side rename → topic renamed on the ≤60s watchdog. Stored-title compare both ways, so edits converge without loops.
 - State lives on the **icon**, synced silently (never notifies): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown. Fresh `done` decays to idle after 15 quiet min.
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
-- In-topic plain text = prompt; commands in context: `/read` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/cancel`.
-- General topic: `/agents` `/spawn` `/shell` `/newspace` `/help`.
+- In-topic plain text = prompt; commands in context: `/read` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/cancel`.
+- General topic: `/agents` `/spawn` `/space` `/shell` `/help`.
 
 ---
 
