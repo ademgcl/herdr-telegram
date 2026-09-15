@@ -11,7 +11,7 @@
 /// scan screens with [`detect_limit`] and post one buzzing card per
 /// episode so the owner notices.
 pub struct LimitHit {
-    /// Stable per-episode signature: `rate-limit` | `auth` | `provider`.
+    /// Stable per-episode signature: `rate-limit` | `auth` | `provider` | `error`.
     /// Dedup keys on this (NOT the excerpt — countdowns like
     /// `retrying in 12s` change every second and must not re-alert).
     pub kind: &'static str,
@@ -36,6 +36,27 @@ const STRONG: &[(&str, &str)] = &[
     ("retrying in", "rate-limit"),
     ("rate limited", "rate-limit"),
     ("rate-limited", "rate-limit"),
+    // Fatal provider request failures (opencode surfaces these as
+    // `Error from provider (Console): Upstream request failed:
+    // [invalid_request_error] ...`). Unlike overloads they settle fast
+    // and never auto-retry to success — the final card must show them,
+    // never a stale prior reply.
+    ("error from provider", "error"),
+    ("upstream request failed", "error"),
+    ("invalid_request", "error"),
+    ("encrypted_content", "error"),
+    ("was not issued to this caller", "error"),
+];
+
+/// Fatal provider-failure markers (lowercase substrings). Shared by the
+/// chrome filter bypass and settle arbitration so a framed or
+/// fast-settling provider error is never dropped or shadowed.
+const FATAL_PROVIDER_MARKERS: &[&str] = &[
+    "error from provider",
+    "upstream request failed",
+    "invalid_request",
+    "encrypted_content",
+    "was not issued to this caller",
 ];
 
 /// Weak patterns: common words that also occur in normal prose — they
@@ -104,6 +125,18 @@ pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
     None
 }
 
+/// A single screen line carrying a fatal provider request failure
+/// (never TUI chrome — survives framing/filtering and shadows nothing).
+pub fn is_provider_failure_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    FATAL_PROVIDER_MARKERS.iter().any(|m| lower.contains(m))
+}
+
+/// Any line on the screen is a fatal provider failure.
+pub fn screen_has_provider_failure(lines: &[String]) -> bool {
+    lines.iter().any(|l| is_provider_failure_line(l))
+}
+
 fn clip(line: &str) -> String {
     let t = line.trim();
     if t.chars().count() <= 180 {
@@ -119,6 +152,10 @@ pub fn limit_card_text(pane: &str, hit: &LimitHit) -> String {
         "auth" => (
             "⚠️ agent auth failed",
             "Check login / API key on the PC, then prompt again.",
+        ),
+        "error" => (
+            "⚠️ provider request failed",
+            "This run failed — it won't auto-retry. Prompt again; if it repeats, /new or /model.",
         ),
         "provider" => (
             "⚠️ provider overloaded",
@@ -201,5 +238,25 @@ mod tests {
         assert!(text.contains("wG:p1"));
         assert!(text.contains("Free usage exceeded"));
         assert!(text.contains("/model"));
+    }
+
+    #[test]
+    fn test_detects_fatal_provider_encrypted_content() {
+        let screen = v(&[
+            "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller",
+        ]);
+        let hit = detect_limit(&screen).expect("fatal provider error must detect");
+        assert_eq!(hit.kind, "error");
+        assert!(screen_has_provider_failure(&screen));
+        assert!(is_provider_failure_line(&screen[0]));
+        let text = limit_card_text("w8:p1", &hit);
+        assert!(text.contains("won't auto-retry"));
+    }
+
+    #[test]
+    fn test_fatal_markers_case_insensitive() {
+        assert!(is_provider_failure_line("ERROR FROM PROVIDER (console) boom"));
+        assert!(is_provider_failure_line("  ┃ Error from provider (Console): fail"));
+        assert!(!is_provider_failure_line("hello there"));
     }
 }

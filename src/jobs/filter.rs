@@ -66,6 +66,12 @@ fn is_spinner(line: &str) -> bool {
 /// A line of pure interface (spinner frames, footers, borders, tool
 /// echoes, reasoning headers, log lines, blank padding).
 pub fn is_chrome(line: &str) -> bool {
+    // Fatal provider errors are content, never chrome — even when the
+    // TUI frames them with ┃/│ rails. Dropping them here blanked the
+    // tail and let stale turns resurface as the "answer".
+    if super::notices::is_provider_failure_line(line) {
+        return false;
+    }
     if is_spinner(line) {
         return true;
     }
@@ -163,5 +169,13 @@ mod tests {
         assert!(!is_chrome("> added line"));
         assert!(!is_chrome("| a | b |"));
         assert!(!is_chrome("intro --- still content"));
+    }
+
+    #[test]
+    fn test_chrome_keeps_fatal_provider_error_even_framed() {
+        let err = "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller";
+        assert!(!is_chrome(err));
+        assert!(!is_chrome(&format!("  ┃  {err}")));
+        assert!(!chrome_filtered(&[format!("  ┃  {err}")]).is_empty());
     }
 }

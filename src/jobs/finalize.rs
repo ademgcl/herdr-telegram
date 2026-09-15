@@ -163,10 +163,21 @@ const STREAM_MIN_CHARS: usize = 40;
 /// follow-up turn — never displaces the stream.
 pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> String {
     let acc_body = join_trimmed(&final_block(acc, prompt));
+    let screen_body = join_trimmed(&final_block(screen, prompt));
+    // Fatal provider errors settle fast (often before the stream sees
+    // them) while `acc` still holds the prior turn. A settled error must
+    // never lose to a stale healthy stream — otherwise Telegram repeats
+    // the old answer and the error vanishes.
+    let screen_failed = crate::jobs::notices::screen_has_provider_failure(screen)
+        || crate::jobs::notices::is_provider_failure_line(&screen_body);
+    let acc_failed = crate::jobs::notices::screen_has_provider_failure(acc)
+        || crate::jobs::notices::is_provider_failure_line(&acc_body);
+    if screen_failed && !acc_failed && !screen_body.is_empty() {
+        return screen_body;
+    }
     if acc_body.chars().count() >= STREAM_MIN_CHARS {
         return acc_body;
     }
-    let screen_body = join_trimmed(&final_block(screen, prompt));
     let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     if screen_body.len() > acc_body.len()
         && (acc_body.is_empty() || squash(&screen_body).contains(&squash(&acc_body)))
@@ -240,5 +251,18 @@ mod tests {
     #[test]
     fn test_empty_both_ways() {
         assert_eq!(select_final_body(&[], &[], "q"), "");
+    }
+
+    #[test]
+    fn test_settled_provider_error_beats_stale_stream() {
+        // Prior turn streamed fine (>=40 chars) but the settled screen is
+        // a fast fatal provider failure the stream never saw: the error
+        // must win, never a repeat of the old answer.
+        let acc = v(&["The project has three services, all green and deployed."]);
+        let err = "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller";
+        let screen = v(&["  ┃", &format!("  ┃  {err}"), "╹▀▀▀▀"]);
+        let body = select_final_body(&acc, &screen, "do it");
+        assert!(body.contains("invalid_request_error"), "error surfaced: {body:?}");
+        assert!(!body.contains("three services"));
     }
 }
