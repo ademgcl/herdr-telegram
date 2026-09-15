@@ -83,7 +83,7 @@ async fn handle_topic_agent_message(
     println!(
         "[forum] got agent {} cmd={arg:?}...",
         agent.pane,
-        arg = &text.chars().take(30).collect::<String>()
+        arg = text.chars().take(30).collect::<String>()
     );
 
     if cmd == "/help" {
