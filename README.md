@@ -23,6 +23,14 @@ cp .env.example .env  # fill in below
 | `TELEGRAM_FORUM_CHAT_ID` | the supergroup id — one topic per agent (omit for DM-only mode) |
 | `HERDR_SOCKET` | optional, default `~/.config/herdr/herdr.sock` |
 
+## Run
+
+```sh
+cp dev.herdr.telegram.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.herdr.telegram.plist  # auto-restart on crash/reboot, logs to bot.log
+launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop service before manual runs, or the single-instance guard + Telegram getUpdates Conflict will fight it
+launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev.herdr.telegram.plist  # uninstall
+```
+
 ## Use
 
 - General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/cancel` `/help`

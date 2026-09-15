@@ -16,6 +16,10 @@ impl TelegramClient {
         Ok(Self { token, http })
     }
 
+    pub fn redact(&self, s: &str) -> String {
+        s.replace(&self.token, "<redacted>")
+    }
+
     pub async fn call(&self, method: &str, body: Value, timeout: Duration) -> Res<Value> {
         let url = format!("https://api.telegram.org/bot{}/{}", self.token, method);
         let resp = self.http.post(&url).json(&body).timeout(timeout).send().await?;
@@ -59,7 +63,7 @@ impl TelegramClient {
                 Ok(v) => return v["message_id"].as_i64(),
                 Err(e) => {
                     let msg = e.to_string();
-                    eprintln!("sendMessage failed (attempt {}): {msg}", attempt + 1);
+                    eprintln!("sendMessage failed (attempt {}): {}", attempt + 1, self.redact(&msg));
                     if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
                         tokio::time::sleep(wait).await;
                         continue;
@@ -107,7 +111,7 @@ impl TelegramClient {
                         continue;
                     }
                     if attempt == 2 {
-                        eprintln!("editMessageText failed: {msg}");
+                        eprintln!("editMessageText failed: {}", self.redact(&msg));
                         return;
                     }
                 }
@@ -175,7 +179,7 @@ impl TelegramClient {
     /// Set a forum topic's custom-emoji icon — the silent state signal.
     /// Unlike `icon_color` (create-only, ignored on edit), this applies
     /// AND renders on edit (verified live). Never notifies.
-    pub async fn set_topic_icon(&self, chat_id: i64, thread_id: i64, emoji_id: &str) {
+    pub async fn set_topic_icon(&self, chat_id: i64, thread_id: i64, emoji_id: &str) -> Res<()> {
         if let Err(e) = self
             .call(
                 "editForumTopic",
@@ -184,10 +188,14 @@ impl TelegramClient {
             )
             .await
         {
-            if !e.to_string().contains("NOT_MODIFIED") {
-                eprintln!("set_topic_icon #{thread_id} failed: {e}");
+            let msg = e.to_string();
+            if msg.contains("message is not modified") || msg.contains("NOT_MODIFIED") {
+                return Ok(());
             }
+            eprintln!("set_topic_icon #{thread_id} failed: {}", self.redact(&msg));
+            return Err(msg.into());
         }
+        Ok(())
     }
 
     /// Unpin a message (one-time cleanup helper).
@@ -200,7 +208,7 @@ impl TelegramClient {
             )
             .await
         {
-            eprintln!("unpinChatMessage failed: {e}");
+            eprintln!("unpinChatMessage failed: {}", self.redact(&e.to_string()));
         }
     }
 
@@ -223,5 +231,39 @@ impl TelegramClient {
             )
             .await;
         Ok(())
+    }
+}
+
+pub fn topic_missing(err: &str) -> bool {
+    err.contains("TOPIC_ID_INVALID")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_client() -> TelegramClient {
+        TelegramClient::new("fake-token-123".to_string()).expect("client build")
+    }
+
+    #[test]
+    fn redact_replaces_token() {
+        let c = test_client();
+        let out = c.redact("https://api.telegram.org/botfake-token-123/getUpdates failed");
+        assert!(!out.contains("fake-token-123"));
+        assert!(out.contains("<redacted>"));
+    }
+
+    #[test]
+    fn redact_leaves_clean_input_unchanged() {
+        let c = test_client();
+        assert_eq!(c.redact("connection reset"), "connection reset");
+    }
+
+    #[test]
+    fn topic_missing_detects_invalid_topic() {
+        assert!(topic_missing("Bad Request: TOPIC_ID_INVALID"));
+        assert!(!topic_missing("Bad Request: message is not modified"));
+        assert!(!topic_missing("connection reset"));
     }
 }

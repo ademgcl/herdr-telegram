@@ -89,8 +89,19 @@ impl TopicManager {
             Some(prev) => prev != &icon,
         };
         if due {
-            self.tg.set_topic_icon(forum, thread, &icon).await;
-            self.last_icon.lock().unwrap().insert(pane.to_string(), icon);
+            match self.tg.set_topic_icon(forum, thread, &icon).await {
+                Ok(()) => {
+                    self.last_icon.lock().unwrap().insert(pane.to_string(), icon);
+                }
+                Err(e) => {
+                    if crate::telegram::client::topic_missing(&e.to_string()) {
+                        self.remove_mapping(pane);
+                        println!("[topics] pruned missing topic #{thread} ({pane})");
+                        return None;
+                    }
+                    eprintln!("[topics] icon topic #{thread} ({pane}) failed: {e}");
+                }
+            }
         }
         Some(thread)
     }
@@ -131,7 +142,14 @@ impl TopicManager {
                 println!("[topics] renamed topic #{thread} ({pane}) to {desired:?}");
                 self.storage.set_title(pane, desired);
             }
-            Err(e) => eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}"),
+            Err(e) => {
+                if crate::telegram::client::topic_missing(&e.to_string()) {
+                    self.remove_mapping(pane);
+                    println!("[topics] pruned missing topic #{thread} ({pane})");
+                } else {
+                    eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}");
+                }
+            }
         }
     }
 
@@ -145,9 +163,19 @@ impl TopicManager {
         }
     }
 
-    pub async fn close_topic(&self, pane: &str) {
-        if let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) {
-            let _ = self.tg.close_forum_topic(forum, thread).await;
+    pub async fn close_topic(&self, pane: &str) -> bool {
+        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+            return true;
+        };
+        match self.tg.close_forum_topic(forum, thread).await {
+            Ok(()) => true,
+            Err(e) => {
+                if crate::telegram::client::topic_missing(&e.to_string()) {
+                    return true;
+                }
+                eprintln!("[topics] close topic #{thread} ({pane}) failed: {e}");
+                false
+            }
         }
     }
 }

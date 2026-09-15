@@ -89,8 +89,14 @@ async fn main() -> Res<()> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[tg] poll failed: {e}");
-                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let msg = e.to_string();
+                        if msg.contains("Conflict") {
+                            eprintln!("[tg] poll conflict (overlap), backing off 30s: {msg}");
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                        } else {
+                            eprintln!("[tg] poll failed: {msg}");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
                     }
                 }
             }
