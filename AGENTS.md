@@ -143,6 +143,7 @@ src/
 ## 5. Guidelines
 
 - cargo; tokio multi-thread; `Res<T>` errors; no async mutexes across sleep/long RPCs; no raw socket/HTTP in handlers — herdr/telegram layers own I/O.
+- No personal identifiers in tracked files or commits (names, emails, home paths, chat ids, tokens) — use placeholders (`$HOME`, `/home/user`); secrets live in untracked `.env` only.
 
 ---
 
