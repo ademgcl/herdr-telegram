@@ -28,7 +28,12 @@ pub fn load_file(path: &Path) -> HashMap<String, PendingPrompt> {
 
 pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {
     if let Ok(json) = serde_json::to_string_pretty(map) {
-        let _ = std::fs::write(path, json);
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
     }
 }
 

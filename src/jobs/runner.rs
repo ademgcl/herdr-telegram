@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
 use tokio::time::{Duration, Instant};
@@ -52,6 +53,7 @@ pub async fn enqueue_prompt(
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
     *job.prompt.lock().await = req.text.clone();
     *job.pending.lock().await += 1;
+    job.epoch.fetch_add(1, Ordering::Relaxed);
     s.set_focus(&pane).await;
 
     // Deliver immediately — interactive agents buffer input like a real terminal
@@ -105,6 +107,7 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // countdowns change every second and must not re-alert). Cleared
     // when the banner leaves the screen so the next episode re-alerts.
     let mut limit_kind: Option<String> = None;
+    let mut fails: u32 = 0;
     println!("[watcher] start {pane}");
 
     loop {
@@ -143,7 +146,21 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Every wake-up: check settle first (never depend on herdr events),
         // then stream whatever output is new.
-        let Ok(agent) = get_agent(&s.cfg.socket, &pane).await else { continue };
+        let agent = match get_agent(&s.cfg.socket, &pane).await {
+            Ok(a) => {
+                fails = 0;
+                a
+            }
+            Err(_) => {
+                fails += 1;
+                if fails >= 12 {
+                    job.mark_stopped();
+                    s.clear_pending(&pane).await;
+                    break;
+                }
+                continue;
+            }
+        };
         if SETTLED.contains(&agent.status.as_str()) {
             // Collapse done↔idle flapping before committing to a report
             tokio::time::sleep(Duration::from_millis(750)).await;
@@ -152,7 +169,11 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             {
                 continue;
             }
+            let epoch_before = job.epoch.load(Ordering::Relaxed);
             finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
+            if job.epoch.load(Ordering::Relaxed) != epoch_before {
+                continue;
+            }
             break;
         }
 

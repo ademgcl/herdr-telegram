@@ -13,14 +13,15 @@ use crate::{
 };
 
 pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
-    let text = msg["text"].as_str().unwrap_or("").trim();
+    let text = msg["text"].as_str().or_else(|| msg["caption"].as_str()).unwrap_or("").trim();
     if text.is_empty() { return; }
     println!("[dm] from {chat}: {}", text.chars().take(40).collect::<String>());
 
-    let (cmd, arg) = match text.split_once(char::is_whitespace) {
+    let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),
     };
+    let cmd = super::forum::bare_cmd(raw_cmd);
 
     let reply_pane: Option<String> = match msg["reply_to_message"]["message_id"].as_i64() {
         Some(rid) => s.targets.lock().await.get(&(chat, rid)).cloned(),
@@ -33,20 +34,20 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd == "/cancel" {
-        s.keywait.lock().await.remove(&chat);
-        s.runwait.lock().await.remove(&chat);
-        s.typewait.lock().await.remove(&chat);
+        s.keywait.lock().await.remove(&(chat, None));
+        s.runwait.lock().await.remove(&(chat, None));
+        s.typewait.lock().await.remove(&(chat, None));
         let count = s.cancel_all_jobs().await;
         s.tg.send_msg(chat, None, &format!("✋ cancelled {count} pending job(s)"), None).await;
         return;
     }
 
-    if let Some(ws) = s.runwait.lock().await.remove(&chat) {
+    if let Some(ws) = s.runwait.lock().await.remove(&(chat, None)) {
         super::shell::handle_run_command(&s, chat, &ws, text).await;
         return;
     }
 
-    if let Some(pane) = s.keywait.lock().await.remove(&chat) {
+    if let Some(pane) = s.keywait.lock().await.remove(&(chat, None)) {
         let keys: Vec<&str> = text.split_whitespace().collect();
         match send_agent_keys(&s.cfg.socket, &pane, &keys).await {
             Ok(_) => { s.tg.send_msg(chat, None, "⌨️ sent", None).await; }
@@ -189,7 +190,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
 
     // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
     // Checked before routing: the next message belongs to the waiter.
-    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, None)) {
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => { s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
             Err(e) => { s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await; }

@@ -171,6 +171,7 @@ pub async fn observe_status(
     // excluded: input needed NOW always surfaces, never suppressed.
     let fresh_work = matches!(old.as_deref(), None | Some("working"));
     if !fresh_work
+        && fresh_body.is_empty()
         && matches!(new_status, "idle" | "done")
         && let Some(t) = s.last_done.lock().await.get(pane)
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)

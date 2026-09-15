@@ -27,11 +27,12 @@ pub struct State {
     /// Prompts owed a reply (pane → dest + text), mirrored to jobs.state
     /// so boot re-arms watchers orphaned by a restart.
     pub pending: Mutex<HashMap<String, PendingPrompt>>,
-    pub keywait: Mutex<HashMap<i64, String>>,
-    pub runwait: Mutex<HashMap<i64, String>>,
+    pub keywait: Mutex<HashMap<(i64, Option<i64>), String>>,
+    pub runwait: Mutex<HashMap<(i64, Option<i64>), String>>,
     /// Next message in this chat is typed into the pane's waiting prompt
     /// (blocked interactive input) + Enter. Set by the ⌨️ button.
-    pub typewait: Mutex<HashMap<i64, String>>,
+    pub typewait: Mutex<HashMap<(i64, Option<i64>), String>>,
+    pub nagged: Mutex<HashSet<i64>>,
     /// When a prompt watcher last reported a pane — status alerts inside
     /// this window are redundant (the final card already covered them).
     pub last_done: Mutex<HashMap<String, std::time::Instant>>,
@@ -100,6 +101,7 @@ impl State {
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
             typewait: Mutex::new(HashMap::new()),
+            nagged: Mutex::new(HashSet::new()),
             last_done: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
@@ -186,5 +188,18 @@ impl State {
             map.clear();
             persist::save_file(&persist::store_path(), &map);
         }
+    }
+
+    pub async fn clear_pane(&self, pane: &str) {
+        self.status.lock().await.remove(pane);
+        self.last_done.lock().await.remove(pane);
+        self.seen.lock().await.remove(pane);
+        self.last_change.lock().await.remove(pane);
+        self.debounce.lock().await.remove(pane);
+        self.settled_at.lock().await.remove(pane);
+        self.limit_alert.lock().await.remove(pane);
+        self.blocked_sig.lock().await.remove(pane);
+        self.modelop.lock().await.remove(pane);
+        self.blockop.lock().await.remove(pane);
     }
 }

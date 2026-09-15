@@ -98,7 +98,7 @@ src/
 
 ## 5. Guidelines
 
-- cargo; tokio multi-thread; `Res<T>` errors; no async mutexes across sleep/long RPCs; no socket/HTTP logic in handlers.
+- cargo; tokio multi-thread; `Res<T>` errors; no async mutexes across sleep/long RPCs; no raw socket/HTTP in handlers — herdr/telegram layers own I/O.
 
 ---
 

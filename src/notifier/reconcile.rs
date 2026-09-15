@@ -52,7 +52,8 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                 } else if !silent {
                     s.topics.close_topic(&pane).await;
                     s.topics.remove_mapping(&pane);
-                    s.limit_alert.lock().await.remove(&pane);
+                    s.cancel_jobs_for(&pane).await;
+                    s.clear_pane(&pane).await;
                 }
             }
         }

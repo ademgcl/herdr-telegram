@@ -153,12 +153,14 @@ pub fn tail_fit(lines: &[String], max_units: usize) -> String {
 
 pub fn help_text() -> &'static str {
     "/agents   control panel: spaces, agents, ➕ spawn\n\
+     /spawn <kind> [space]   spawn a new agent\n\
      /space [name]   new space + shell topic\n\
      /model    current model + free-Zen picker (opencode)\n\
      /quit     drop the agent to a shell (idle only)\n\
      /kill     close the pane completely (confirms first)\n\
      /shell    open a fresh shell pane\n\
      /read     recent output of focused agent\n\
+     /status   refresh agent status card\n\
      /cancel   abort prompts / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
      ↩️ reply to any bot message → talks to that agent\n\
@@ -174,6 +176,8 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • `/model` — current model + free-Zen picker (opencode)\n\
          • `/quit` — drop the agent to a shell (idle only)\n\
          • `/kill` — close this pane completely (confirms first)\n\
+         • `/shell [space]` — open a fresh shell pane\n\
+         • `/space [name]` — new space + shell topic\n\
           • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
          • `/status` — refresh agent status card\n\

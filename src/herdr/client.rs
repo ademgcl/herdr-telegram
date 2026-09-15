@@ -130,7 +130,7 @@ pub async fn read_screen_adaptive(socket: &str, pane: &str) -> Vec<String> {
     match big {
         Ok(text) if !text.is_empty() => wrap(text),
         _ => {
-            let tail = read_agent_output(socket, pane, LIVE_TAIL_LINES).await;
+            let tail = read_agent_visible(socket, pane, LIVE_TAIL_LINES).await;
             tail.map(wrap).unwrap_or_default()
         }
     }
@@ -178,7 +178,8 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
     let pane = tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string();
 
     let name = format!(
-        "tg-{kind}-{}",
+        "tg-{kind}-{}-{}",
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -199,12 +200,6 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
 
 pub async fn send_agent_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> {
     rpc(socket, "agent.send_keys", json!({"target": pane, "keys": keys})).await?;
-    Ok(())
-}
-
-pub async fn send_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
-    rpc_t(socket, "pane.send_text", json!({"pane_id": pane, "text": text}), 30).await?;
-    rpc(socket, "pane.send_keys", json!({"pane_id": pane, "keys": ["enter"]})).await?;
     Ok(())
 }
 

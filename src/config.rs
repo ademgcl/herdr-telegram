@@ -35,6 +35,9 @@ pub fn load_env_file() {
 pub fn cfg_from_env() -> Res<Cfg> {
     load_env_file();
     let token = env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
+    if token.trim().is_empty() {
+        return Err("TELEGRAM_BOT_TOKEN must not be empty".into());
+    }
     let mut owners = Vec::new();
     for (k, v) in env::vars() {
         if (k == "TELEGRAM_CHAT_ID" || k.starts_with("TELEGRAM_CHAT_ID_"))

@@ -2,9 +2,10 @@
 /// Split from `runner` (300-line file limit). `watch_job` calls
 /// `finalize` on settle; `enqueue_prompt` reports submit errors.
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use crate::{
     handlers::dialog::send_blocked_card,
-    herdr::client::read_screen,
+    herdr::client::read_screen_adaptive,
     jobs::job::Job,
     jobs::segment::final_block,
     jobs::stream::join_trimmed,
@@ -31,12 +32,14 @@ pub async fn finalize(
     // headers and the prompt echo — earlier turns and intermediate work
     // are dropped. Falls back to the settled screen for fast tasks where
     // nothing streamed.
+    let entry_epoch = job.epoch.load(Ordering::Relaxed);
+    let entry_pending = *job.pending.lock().await;
     let prompt = job.prompt.lock().await.clone();
     // One settled read, arbitrated against the stream (see
     // select_final_body): alt-screen TUIs starve the delta stream, so a
     // trivial fragment must not shadow the real answer. The same screen
     // doubles as the spontaneous baseline below (no second RPC).
-    let screen = read_screen(&s.cfg.socket, pane, 80).await;
+    let screen = read_screen_adaptive(&s.cfg.socket, pane).await;
     let body = select_final_body(acc, &screen, &prompt);
     let snapshot = screen;
 
@@ -57,17 +60,17 @@ pub async fn finalize(
             .insert(pane.to_string(), std::time::Instant::now());
         // Anchor the baseline so later settles don't repost the dialog.
         s.seen.lock().await.insert(pane.to_string(), snapshot);
-        *job.pending.lock().await = 0;
-        s.clear_pending(pane).await;
-        let mut map = s.jobs.lock().await;
-        if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
-            map.remove(pane);
-        }
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return;
     }
-    let text = if body.is_empty() {
-        "(no captured output)".to_string()
-    } else if settled == "blocked" {
+    // Empty non-blocked settle: post nothing and stamp nothing, so the
+    // spontaneous path re-evaluates from its own baseline.
+    if body.is_empty() {
+        observe_status(s, pane, settled, true, "job").await;
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
+        return;
+    }
+    let text = if settled == "blocked" {
         format!("{body}\n↩️ reply or type in topic to answer")
     } else {
         body.clone()
@@ -75,6 +78,9 @@ pub async fn finalize(
     let parts = chunks(&text, MAX_MSG_UNITS);
 
     observe_status(s, pane, settled, true, "job").await;
+    if settled != "blocked" {
+        s.blocked_sig.lock().await.remove(pane);
+    }
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.
@@ -92,14 +98,28 @@ pub async fn finalize(
         }
     }
     *live_mid = None;
+    settle_books(s, pane, job, entry_epoch, entry_pending).await;
+}
+
+/// Cover the prompts owed at entry. A new submit mid-finalize bumps the
+/// epoch: leave its pending count, persisted intent and map entry so the
+/// watcher loop keeps serving it.
+async fn settle_books(
+    s: &AppState,
+    pane: &str,
+    job: &Arc<Job>,
+    entry_epoch: u64,
+    entry_pending: usize,
+) {
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        let mut p = job.pending.lock().await;
+        *p = p.saturating_sub(entry_pending);
+        return;
+    }
     *job.pending.lock().await = 0;
     s.clear_pending(pane).await;
-
-    // Nothing outstanding? Retire the watcher atomically.
     let mut map = s.jobs.lock().await;
-    if *job.pending.lock().await == 0
-        && map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false)
-    {
+    if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
         map.remove(pane);
         println!("[prompt] watcher retired: {pane}");
     }

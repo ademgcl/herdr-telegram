@@ -218,6 +218,8 @@ impl TelegramClient {
                 "setMyCommands",
                 json!({"commands": [
                     {"command": "agents", "description": "open control panel (spaces + agents)"},
+                    {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
+                    {"command": "space", "description": "new space + shell topic"},
                     {"command": "model", "description": "current model + free-Zen picker"},
                     {"command": "quit", "description": "drop the agent to a shell"},
                     {"command": "kill", "description": "close the pane completely"},

@@ -24,7 +24,7 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {    let 
     }
 
     let thread_id = msg["message_thread_id"].as_i64();
-    let text = msg["text"].as_str().unwrap_or("").trim();
+    let text = msg["text"].as_str().or_else(|| msg["caption"].as_str()).unwrap_or("").trim();
     if text.is_empty() { return; }
 
     // `/space [name]` works everywhere (General + any agent/shell topic):
@@ -81,7 +81,7 @@ async fn handle_topic_agent_message(
     }
 
     if cmd == "/cancel" {
-        s.typewait.lock().await.remove(&chat);
+        s.typewait.lock().await.remove(&(chat, Some(thread_id)));
         let count = s.cancel_all_jobs().await;
         s.tg.send_msg(chat, Some(thread_id), &format!("✋ cancelled {count} prompt(s)"), None).await;
         return;
@@ -105,7 +105,7 @@ async fn handle_topic_agent_message(
     }
 
     // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
-    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, Some(thread_id))) {
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => { s.tg.send_msg(chat, Some(thread_id), &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
             Err(e) => { s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None).await; }
@@ -241,11 +241,10 @@ async fn handle_general_forum_message(
     }
 
     // Answering a waiting prompt armed by the ⌨️ button: the next message
-    // belongs to the waiter no matter which topic it lands in (typewait
-    // is keyed by chat = the group here). Checked before commands so the
-    // answer can't be eaten by General's fallback and leak onto a later
-    // unrelated message.
-    if let Some(wpane) = s.typewait.lock().await.remove(&chat) {
+    // in the same topic belongs to the waiter (typewait is keyed by
+    // (chat, thread)). Checked before commands so the answer can't be
+    // eaten by General's fallback and leak onto a later unrelated message.
+    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, thread_id)) {
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => { s.tg.send_msg(chat, thread_id, &format!("⌨️ typed into {wpane} + ⏎"), None).await; }
             Err(e) => { s.tg.send_msg(chat, thread_id, &format!("⚠️ type failed: {e}"), None).await; }

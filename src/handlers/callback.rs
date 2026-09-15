@@ -1,5 +1,7 @@
+use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use crate::{
+    types::STALE_SECS,
     herdr::client::{
         create_workspace, get_agent, list_agents, list_workspaces,
         read_agent_output, read_pane_output, spawn_agent,
@@ -25,15 +27,18 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     }
     let (Some(chat), Some(msg_id)) = (chat, msg_id) else { return };
 
-    // Head-split once: pane ids contain ':' (wG:p1), so only the first
-    // colon separates the route. (splitn(3) silently broke every
-    // pane-carrying button — "a:wG:p1" never matched ["a", pane].)
+    // Thread for ack messages (forum topics carry it, DMs don't).
+    let thread = cbq["message"]["message_thread_id"].as_i64();
+    let date = cbq["message"]["date"].as_u64().unwrap_or(0);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    if now.saturating_sub(date) > STALE_SECS {
+        println!("[callback] dropping stale tap");
+        return;
+    }
     let (head, rest) = match data.split_once(':') {
         Some((h, r)) => (h, Some(r)),
         None => (data, None),
     };
-    // Thread for ack messages (forum topics carry it, DMs don't).
-    let thread = cbq["message"]["message_thread_id"].as_i64();
     match (head, rest) {
         ("n", None) => {
             s.tg.edit_msg(chat, msg_id, "spawn which agent?", Some(spawn_kb(None))).await;
@@ -47,18 +52,18 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             None => handle_spawn(&s, chat, msg_id, r, None).await,
         },
         ("K", Some(pane)) => {
-            s.keywait.lock().await.insert(chat, pane.to_string());
+            s.keywait.lock().await.insert((chat, thread), pane.to_string());
             s.set_focus(pane).await;
             s.tg.edit_msg(chat, msg_id, &format!("⌨️ send keys for {pane}\nnext message = keys (e.g. `y enter`, `esc`)"), None).await;
         }
         ("R", Some(ws)) => {
-            s.runwait.lock().await.insert(chat, ws.to_string());
+            s.runwait.lock().await.insert((chat, thread), ws.to_string());
             s.tg.edit_msg(chat, msg_id, &format!("⌨️ send shell command for {ws}\nnext message = command"), None).await;
         }
         ("p", Some(pane)) => {
             let out = read_pane_output(&s.cfg.socket, pane, 120).await.unwrap_or_default();
             let body = if out.is_empty() { "(no output)".into() } else { out };
-            s.tg.send_msg(chat, None, &body, Some(pane_output_kb(pane))).await;
+            s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(pane))).await;
         }
         ("m", None) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
@@ -82,7 +87,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             let out = read_agent_output(&s.cfg.socket, pane, 120).await.unwrap_or_default();
             let body = if out.is_empty() { "(no output)".into() } else { out };
             let kb = serde_json::json!([[btn("← back", &format!("a:{pane}"))]]);
-            let mid = s.tg.send_msg(chat, None, &body, Some(kb)).await;
+            let mid = s.tg.send_msg(chat, thread, &body, Some(kb)).await;
             s.remember(chat, mid, pane).await;
             s.set_focus(pane).await;
         }

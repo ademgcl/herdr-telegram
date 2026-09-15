@@ -95,7 +95,7 @@ async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
 /// outcomes send a message.
 pub async fn answer_tap(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>, pane: &str, action: &str) {
     if action == "type" {
-        s.typewait.lock().await.insert(chat, pane.to_string());
+        s.typewait.lock().await.insert((chat, thread), pane.to_string());
         let mid = s.tg.send_msg(chat, thread, "⌨️ type your answer as the next message (⏎ sends it)", None).await;
         s.remember(chat, mid, pane).await;
         return;

@@ -12,12 +12,19 @@ use crate::{
 };
 
 pub async fn event_task(s: AppState) {
+    let mut fails: u64 = 0;
     loop {
+        let start = tokio::time::Instant::now();
         match run_stream(&s).await {
             Ok(reason) => println!("[events] resubscribe ({reason})"),
             Err(e) => eprintln!("[events] stream error: {e}"),
         }
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        if start.elapsed() < Duration::from_secs(10) {
+            fails += 1;
+        } else {
+            fails = 1;
+        }
+        tokio::time::sleep(Duration::from_secs((5 * fails).min(60))).await;
         reconcile(&s, false, "reconnect").await;
     }
 }
@@ -55,7 +62,10 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
 
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
+        let n = match tokio::time::timeout(Duration::from_secs(90), reader.read_line(&mut line)).await {
+            Err(_) => return Ok("idle timeout"),
+            Ok(res) => res?,
+        };
         if n == 0 {
             return Ok("connection closed");
         }

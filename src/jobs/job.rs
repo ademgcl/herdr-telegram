@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -23,6 +23,9 @@ pub struct Job {
     /// Latest prompt text (last submitter wins) — echo boundary so the
     /// fresh reply can be cut out of multi-turn scrollback.
     pub prompt: Mutex<String>,
+    /// Submit epoch: bumped on every enqueue; finalize retires only if
+    /// unchanged (a new prompt mid-finalize keeps the watcher alive).
+    pub epoch: AtomicU64,
 }
 
 impl Job {
@@ -36,6 +39,7 @@ impl Job {
             baseline_ok: AtomicBool::new(ok),
             dest: Mutex::new((chat_id, thread_id)),
             prompt: Mutex::new(String::new()),
+            epoch: AtomicU64::new(0),
         })
     }
 

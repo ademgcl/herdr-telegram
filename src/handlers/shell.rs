@@ -9,7 +9,7 @@ use crate::{
     herdr::client::{
         create_tab, ensure_tg_space, get_agent, list_panes, list_workspaces,
         read_shell_output, send_agent_keys,
-        send_pane_text,
+        send_pane_input,
     },
     state::AppState,
     ui::{pane_output_kb, tail_fit, ws_label},
@@ -59,7 +59,7 @@ async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> String {
 pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, cmd: &str) {
     s.set_focus(pane).await;
     let before = shell_snapshot(s, pane).await;
-    if let Err(e) = send_pane_text(&s.cfg.socket, pane, cmd).await {
+    if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         s.tg
             .send_msg(chat, thread, &format!("⚠️ pane gone or unreachable: {e}"), None)
             .await;
@@ -107,7 +107,7 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
             .await;
         return;
     }
-    s.typewait.lock().await.remove(&chat);
+    s.typewait.lock().await.remove(&(chat, thread));
     if send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"]).await.is_err() {
         s.tg.send_msg(chat, thread, "⚠️ quit keys failed — quit on the PC", None).await;
         return;
@@ -200,7 +200,7 @@ pub async fn handle_run_command(s: &AppState, chat: i64, ws: &str, cmd: &str) {
     let before = shell_snapshot(s, &pane).await;
     let cmd = cmd.trim();
     s.tg.send_msg(chat, None, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
-    if let Err(e) = send_pane_text(&s.cfg.socket, &pane, cmd).await {
+    if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
         s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
         return;
     }

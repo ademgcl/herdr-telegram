@@ -33,13 +33,14 @@ pub async fn handle_update(s: AppState, u: &Value) {
 
     let msg = &u["message"];
     if msg.is_null() {
+        println!("[tg] ignoring unknown update kind");
         return;
     }
 
     let from = msg["from"]["id"].as_i64();
     let chat_id = msg["chat"]["id"].as_i64();
     let chat_type = msg["chat"]["type"].as_str().unwrap_or("");
-    let text = msg["text"].as_str().unwrap_or("");
+    let text = msg["text"].as_str().or_else(|| msg["caption"].as_str()).unwrap_or("");
 
     let (Some(from), Some(chat_id)) = (from, chat_id) else { return };
 
@@ -81,6 +82,9 @@ pub async fn handle_update(s: AppState, u: &Value) {
             }
         } else {
             println!("[telegram] message in group {chat_id} ('{}') without TELEGRAM_FORUM_CHAT_ID", msg["chat"]["title"].as_str().unwrap_or(""));
+            if !s.nagged.lock().await.insert(chat_id) {
+                return;
+            }
             let th = msg["message_thread_id"].as_i64();
             let note = format!(
                 "🤖 Connected to Herdr!\n\nTo enable per-agent forum topics, add this group to `.env`:\n`TELEGRAM_FORUM_CHAT_ID={chat_id}`"
