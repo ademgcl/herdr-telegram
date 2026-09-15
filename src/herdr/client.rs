@@ -1,10 +1,10 @@
+use crate::types::{AgentDetail, AgentRow, Res, WorkspaceInfo};
+use serde_json::{Value, json};
 use std::time::Duration;
-use serde_json::{json, Value};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
 };
-use crate::types::{AgentDetail, AgentRow, Res, WorkspaceInfo};
 
 pub async fn rpc(socket: &str, method: &str, params: Value) -> Res<Value> {
     rpc_t(socket, method, params, 30).await
@@ -21,7 +21,11 @@ pub async fn rpc_t(socket: &str, method: &str, params: Value, timeout_secs: u64)
         reader.read_line(&mut line).await?;
         let v: Value = serde_json::from_str(line.trim())?;
         if let Some(e) = v.get("error") {
-            return Err(e["message"].as_str().unwrap_or("herdr error").to_string().into());
+            return Err(e["message"]
+                .as_str()
+                .unwrap_or("herdr error")
+                .to_string()
+                .into());
         }
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     };
@@ -175,7 +179,10 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
         _ => ensure_tg_space(socket).await?,
     };
     let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
-    let pane = tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string();
+    let pane = tab["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
 
     let name = format!(
         "tg-{kind}-{}-{}",
@@ -199,7 +206,12 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
 }
 
 pub async fn send_agent_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> {
-    rpc(socket, "agent.send_keys", json!({"target": pane, "keys": keys})).await?;
+    rpc(
+        socket,
+        "agent.send_keys",
+        json!({"target": pane, "keys": keys}),
+    )
+    .await?;
     Ok(())
 }
 
@@ -220,7 +232,12 @@ pub async fn send_pane_input(socket: &str, pane: &str, text: &str) -> Res<()> {
 
 /// Raw keys to a pane (no agent needed) — shell-mode `/keys`, quit flows.
 pub async fn send_pane_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> {
-    rpc(socket, "pane.send_keys", json!({"pane_id": pane, "keys": keys})).await?;
+    rpc(
+        socket,
+        "pane.send_keys",
+        json!({"pane_id": pane, "keys": keys}),
+    )
+    .await?;
     Ok(())
 }
 
@@ -258,7 +275,13 @@ pub async fn list_panes(socket: &str) -> Res<Vec<String>> {
 /// Type text WITHOUT submitting — for TUI pickers/filters where Enter
 /// means "confirm selection", not "send".
 pub async fn type_pane_text(socket: &str, pane: &str, text: &str) -> Res<()> {
-    rpc_t(socket, "pane.send_text", json!({"pane_id": pane, "text": text}), 30).await?;
+    rpc_t(
+        socket,
+        "pane.send_text",
+        json!({"pane_id": pane, "text": text}),
+        30,
+    )
+    .await?;
     Ok(())
 }
 
@@ -271,14 +294,23 @@ pub async fn close_pane(socket: &str, pane: &str) -> Res<()> {
 /// Fresh tab in `ws`, returning its root (shell) pane id.
 pub async fn create_tab(socket: &str, ws: &str) -> Res<String> {
     let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
-    Ok(tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string())
+    Ok(tab["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string())
 }
 
 /// Split a pane sideways in the same tab, returning the new pane id.
 /// herdr names it with the workspace's next pane counter (`w8:p4`),
 /// unlabeled, in the same tab.
 pub async fn split_pane(socket: &str, pane: &str, direction: &str) -> Res<String> {
-    let r = rpc_t(socket, "pane.split", json!({"target_pane_id": pane, "direction": direction}), 30).await?;
+    let r = rpc_t(
+        socket,
+        "pane.split",
+        json!({"target_pane_id": pane, "direction": direction}),
+        30,
+    )
+    .await?;
     r["pane"]["pane_id"]
         .as_str()
         .map(|s| s.to_string())

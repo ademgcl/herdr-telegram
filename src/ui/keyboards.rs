@@ -1,6 +1,6 @@
-use serde_json::{json, Value};
-use crate::types::{AgentRow, WorkspaceInfo};
 use super::{emoji, views::ws_label, worst_status};
+use crate::types::{AgentRow, WorkspaceInfo};
+use serde_json::{Value, json};
 
 pub const SPAWN_KINDS: &[&str] = &[
     "opencode", "claude", "codex", "gemini", "cursor", "copilot", "amp", "droid", "grok", "qwen",
@@ -53,14 +53,16 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
         );
     }
 
-    kb.push(vec![
-        btn("➕ spawn agent", "n"),
-        btn("🆕 new space", "N"),
-    ]);
+    kb.push(vec![btn("➕ spawn agent", "n"), btn("🆕 new space", "N")]);
 
     for a in agents {
         kb.push(vec![btn(
-            format!("{} {} @ {}", emoji(&a.status), a.kind, ws_label(spaces, &a.ws)),
+            format!(
+                "{} {} @ {}",
+                emoji(&a.status),
+                a.kind,
+                ws_label(spaces, &a.ws)
+            ),
             &format!("a:{}", a.pane),
         )]);
     }
@@ -97,9 +99,7 @@ pub fn agent_card_kb(pane: &str, ws: &str) -> Value {
             btn("🤖 model", &format!("M:list:{pane}")),
             btn("🔄 refresh", &format!("a:{pane}")),
         ],
-        [
-            btn(format!("← {ws}"), &format!("w:{ws}")),
-        ],
+        [btn(format!("← {ws}"), &format!("w:{ws}")),],
     ])
 }
 

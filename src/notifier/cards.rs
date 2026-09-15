@@ -1,8 +1,7 @@
-/// Debounced spontaneous pushes: a settle must hold before its answer
-/// buzzes, so micro-settle flicker mid-task stays silent. Blocked (needs
-/// input) bypasses the debounce in the caller and posts immediately.
+//! Debounced spontaneous pushes: a settle must hold before its answer
+//! buzzes, so micro-settle flicker mid-task stays silent. Blocked (needs
+//! input) bypasses the debounce in the caller and posts immediately.
 
-use std::time::{Duration, Instant};
 use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output},
     jobs::segment::final_block,
@@ -12,6 +11,7 @@ use crate::{
     types::MAX_MSG_UNITS,
     ui::{chunks, emoji, ws_label},
 };
+use std::time::{Duration, Instant};
 
 /// A settle must hold this long before a spontaneous answer pushes —
 /// micro-settle flicker mid-task stays on the icon instead of buzzing.
@@ -103,7 +103,10 @@ pub(crate) async fn post_spontaneous_card(
     // NOTE: deliberately NOT touching focus here — background pushes must
     // never hijack where the owner's next plain-text message gets delivered.
     let text = match settled {
-        "blocked" => format!("{} {body}\n↩️ reply or type in topic to answer", emoji("blocked")),
+        "blocked" => format!(
+            "{} {body}\n↩️ reply or type in topic to answer",
+            emoji("blocked")
+        ),
         _ => body.to_string(),
     };
     let parts = chunks(&text, MAX_MSG_UNITS);
@@ -118,7 +121,13 @@ pub(crate) async fn post_spontaneous_card(
         .insert(pane.to_string(), std::time::Instant::now());
 
     if let Some(forum) = s.cfg.forum {
-        let settled_age = s.settled_at.lock().await.get(pane).map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        let settled_age = s
+            .settled_at
+            .lock()
+            .await
+            .get(pane)
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
         let display = display_status(settled, settled_age);
         if let Some(thread) = s.topics.sync_topic(pane, kind, space, display).await {
             for part in &parts {

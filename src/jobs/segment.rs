@@ -1,8 +1,8 @@
-/// Provider-agnostic reply extraction: the fresh reply is the last
-/// non-empty output segment after cycle boundaries and prompt echoes.
-///
-/// herdr exposes only raw terminal text for every agent; earlier turns and
-/// intermediate work are dropped here so cards carry just what was said.
+//! Provider-agnostic reply extraction: the fresh reply is the last
+//! non-empty output segment after cycle boundaries and prompt echoes.
+//!
+//! herdr exposes only raw terminal text for every agent; earlier turns and
+//! intermediate work are dropped here so cards carry just what was said.
 
 use super::filter::chrome_filtered;
 
@@ -60,7 +60,7 @@ fn is_prompt_echo(line: &str, want: &str) -> bool {
     }
     let t = line
         .trim()
-        .trim_start_matches(|c: char| matches!(c, '┃' | '│' | '|' | '❯' | '>' | '›' | ' '));
+        .trim_start_matches(['┃', '│', '|', '❯', '>', '›', ' ']);
     t == want
 }
 
@@ -72,8 +72,7 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let mut seg_start = 0;
     let mut best: Vec<String> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
-        let split =
-            is_boundary(l) || (!want.is_empty() && is_prompt_echo(l, want));
+        let split = is_boundary(l) || (!want.is_empty() && is_prompt_echo(l, want));
         if split {
             let cand = chrome_filtered(&lines[seg_start..i]);
             if !cand.is_empty() {
@@ -238,7 +237,10 @@ mod tests {
             "  ┃  ctrl+f fullscreen  ⇆ select  enter confirm",
             "  ┃",
         ]);
-        assert_eq!(deframe("  ┃  △ Permission required"), "△ Permission required");
+        assert_eq!(
+            deframe("  ┃  △ Permission required"),
+            "△ Permission required"
+        );
         assert_eq!(deframe("plain line"), "plain line");
         let lines: Vec<String> = raw.iter().map(|l| deframe(l)).collect();
         let out = final_block(&lines, "");

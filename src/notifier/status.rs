@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-use serde_json::json;
 use crate::{
     handlers::dialog::{refresh_blocked_card, send_blocked_card},
     herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},
@@ -9,6 +7,8 @@ use crate::{
     state::AppState,
     ui::{btn, emoji, ws_label},
 };
+use serde_json::json;
+use std::time::{Duration, Instant};
 
 /// How long after a prompt's final card an idle/done alert is redundant.
 const POST_PROMPT_QUIET_SECS: u64 = 45;
@@ -16,13 +16,7 @@ const POST_PROMPT_QUIET_SECS: u64 = 45;
 /// are legitimate sampled completions.
 const FLAP_WINDOW_SECS: u64 = 15;
 
-pub async fn observe_status(
-    s: &AppState,
-    pane: &str,
-    new_status: &str,
-    silent: bool,
-    src: &str,
-) {
+pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: bool, src: &str) {
     let old = {
         let mut m = s.status.lock().await;
         m.insert(pane.to_string(), new_status.to_string())
@@ -47,9 +41,7 @@ pub async fn observe_status(
     }
 
     // Fresh settles restart the done→idle display decay clock.
-    if old.as_deref() != Some(new_status)
-        && matches!(new_status, "idle" | "done" | "blocked")
-    {
+    if old.as_deref() != Some(new_status) && matches!(new_status, "idle" | "done" | "blocked") {
         s.settled_at
             .lock()
             .await
@@ -95,9 +87,7 @@ pub async fn observe_status(
         .map(|t| t.elapsed().as_secs())
         .unwrap_or(0);
     let display = crate::topics::names::display_status(new_status, settled_age);
-    s.topics
-        .sync_topic(pane, &kind, raw_space, display)
-        .await;
+    s.topics.sync_topic(pane, &kind, raw_space, display).await;
 
     if silent {
         // Boot seed only — but an already-blocked pane genuinely needs
@@ -109,10 +99,10 @@ pub async fn observe_status(
             s.seen.lock().await.insert(pane.to_string(), screen);
             if let Some(forum) = s.cfg.forum {
                 let thread = s.topics.all_mappings().get(pane).copied();
-                send_blocked_card(&s, forum, thread, pane).await;
+                send_blocked_card(s, forum, thread, pane).await;
             } else {
                 for id in &s.cfg.owners {
-                    send_blocked_card(&s, *id, None, pane).await;
+                    send_blocked_card(s, *id, None, pane).await;
                 }
             }
         }
@@ -194,11 +184,15 @@ pub async fn observe_status(
     if s.cfg.forum.is_none() {
         s.seen.lock().await.insert(pane.to_string(), screen);
         if !fresh_body.is_empty() {
-            post_spontaneous_card(&s, pane, &kind, raw_space, new_status, &fresh_body).await;
+            post_spontaneous_card(s, pane, &kind, raw_space, new_status, &fresh_body).await;
             return;
         }
         let hint = "";
-        let verb = if new_status == "idle" { "ready" } else { new_status };
+        let verb = if new_status == "idle" {
+            "ready"
+        } else {
+            new_status
+        };
         let mut text = format!("{} {}: {kind} @ {space_label}", emoji(new_status), verb);
         if !title.is_empty() {
             let short: String = title.chars().take(60).collect();
@@ -206,8 +200,8 @@ pub async fn observe_status(
         }
         text.push_str(hint);
         for id in &s.cfg.owners {
-            let mid = s.tg
-                .send_msg(
+            let mid =
+                s.tg.send_msg(
                     *id,
                     None,
                     &text,

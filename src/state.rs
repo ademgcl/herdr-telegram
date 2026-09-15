@@ -1,10 +1,3 @@
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tokio::sync::Mutex;
 use crate::{
     config::Cfg,
     jobs::job::Job,
@@ -13,6 +6,13 @@ use crate::{
     topics::TopicManager,
     types::Res,
 };
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::Mutex;
 
 pub struct State {
     pub cfg: Cfg,
@@ -172,7 +172,8 @@ impl State {
         }
     }
 
-    pub async fn cancel_all_jobs(&self) -> usize {        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
+    pub async fn cancel_all_jobs(&self) -> usize {
+        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
         self.clear_all_pending().await;
         let count = jobs.len();
         for job in jobs.values() {
@@ -184,11 +185,19 @@ impl State {
 
     /// Record a submitted prompt durably (cleared on settle/cancel).
     pub async fn remember_pending(&self, pane: &str, chat: i64, thread: Option<i64>, prompt: &str) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut map = self.pending.lock().await;
         map.insert(
             pane.to_string(),
-            PendingPrompt { chat, thread, prompt: prompt.to_string(), started_unix: now },
+            PendingPrompt {
+                chat,
+                thread,
+                prompt: prompt.to_string(),
+                started_unix: now,
+            },
         );
         persist::save_file(&persist::store_path(), &map);
     }

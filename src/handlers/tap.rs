@@ -1,13 +1,18 @@
+use crate::{
+    handlers::dialog::{
+        blocked_card_text, blocked_kb, dialog_sig, parse_options, refresh_blocked_card,
+        waiting_lines,
+    },
+    handlers::interactive::{keys_for, opt_keys},
+    herdr::client::{
+        get_agent, read_screen_visible, send_agent_keys, send_pane_input, send_pane_keys,
+    },
+    state::AppState,
+};
+use serde_json::Value;
 /// Button taps and typed answers for blocked dialogs (see dialog.rs for
 /// card building/posting). Split out to respect the 300-line file cap.
 use std::time::Duration;
-use serde_json::Value;
-use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, parse_options, refresh_blocked_card, waiting_lines},
-    handlers::interactive::{keys_for, opt_keys},
-    herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_input, send_pane_keys},
-    state::AppState,
-};
 
 /// Post-tap screen: a new dialog, a resumed agent, or an unchanged one.
 #[derive(Debug, PartialEq)]
@@ -51,24 +56,25 @@ enum TapCall {
 /// Send the tap's keys and re-read. Returns what to classify — never
 /// touches Telegram itself (the caller owns the card).
 async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
-    let (nav, confirm, label): (Vec<&str>, Vec<&str>, String) = if let Some(rest) = action.strip_prefix("opt") {
-        match rest.parse::<usize>() {
-            // opt_keys is the single source of truth; Enter goes separately
-            // so the TUI gets a render beat after navigating (else Enter
-            // confirms the stale first highlight — the old Tab bug).
-            Ok(i) if i < 6 => {
-                let mut full = opt_keys(i);
-                let confirm = vec![full.pop().unwrap()];
-                (full, confirm, format!("option {}", i + 1))
+    let (nav, confirm, label): (Vec<&str>, Vec<&str>, String) =
+        if let Some(rest) = action.strip_prefix("opt") {
+            match rest.parse::<usize>() {
+                // opt_keys is the single source of truth; Enter goes separately
+                // so the TUI gets a render beat after navigating (else Enter
+                // confirms the stale first highlight — the old Tab bug).
+                Ok(i) if i < 6 => {
+                    let mut full = opt_keys(i);
+                    let confirm = vec![full.pop().unwrap()];
+                    (full, confirm, format!("option {}", i + 1))
+                }
+                _ => return TapCall::Unknown,
             }
-            _ => return TapCall::Unknown,
-        }
-    } else {
-        match keys_for(action) {
-            Some(keys) => (Vec::new(), keys.to_vec(), action.to_string()),
-            None => return TapCall::Unknown,
-        }
-    };
+        } else {
+            match keys_for(action) {
+                Some(keys) => (Vec::new(), keys.to_vec(), action.to_string()),
+                None => return TapCall::Unknown,
+            }
+        };
     let before = read_screen_visible(socket, pane, 30).await;
     if !nav.is_empty() {
         if send_agent_keys(socket, pane, &nav).await.is_err() {
@@ -84,8 +90,20 @@ async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
     // Ground truth for "resumed": fresh status beats screen heuristics
     // (a working screen full of prose is not a dialog, and a lagging
     // status flip is covered by the observation layer's sig check).
-    let still_blocked = get_agent(socket, pane).await.map(|a| a.status == "blocked").unwrap_or(true);
-    TapCall::Landed(TapSend { nav, confirm, label }, before, after, still_blocked)
+    let still_blocked = get_agent(socket, pane)
+        .await
+        .map(|a| a.status == "blocked")
+        .unwrap_or(true);
+    TapCall::Landed(
+        TapSend {
+            nav,
+            confirm,
+            label,
+        },
+        before,
+        after,
+        still_blocked,
+    )
 }
 
 /// Button-tap entry point: sends keys, then brings the TAPPED card up
@@ -93,10 +111,27 @@ async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
 /// resumed agent gets its buttons stripped (stale taps must never inject
 /// keys into live work). Feedback rides the card edit; only ambiguous
 /// outcomes send a message.
-pub async fn answer_tap(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>, pane: &str, action: &str) {
+pub async fn answer_tap(
+    s: &AppState,
+    chat: i64,
+    msg_id: i64,
+    thread: Option<i64>,
+    pane: &str,
+    action: &str,
+) {
     if action == "type" {
-        s.typewait.lock().await.insert((chat, thread), pane.to_string());
-        let mid = s.tg.send_msg(chat, thread, "⌨️ type your answer as the next message (⏎ sends it)", None).await;
+        s.typewait
+            .lock()
+            .await
+            .insert((chat, thread), pane.to_string());
+        let mid =
+            s.tg.send_msg(
+                chat,
+                thread,
+                "⌨️ type your answer as the next message (⏎ sends it)",
+                None,
+            )
+            .await;
         s.remember(chat, mid, pane).await;
         return;
     }
@@ -109,36 +144,54 @@ pub async fn answer_tap(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64
             s.remember(chat, mid, pane).await;
         }
         TapCall::KeysFailed => {
-            let mid = s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None).await;
+            let mid =
+                s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
+                    .await;
             s.remember(chat, mid, pane).await;
         }
-        TapCall::Landed(send, before, after, still_blocked) => match classify_tap(&before, &after, still_blocked) {
-            TapResult::NewDialog => {
-                let q = waiting_lines(&after);
-                let opts = parse_options(&after);
-                s.tg.edit_msg(chat, msg_id, &blocked_card_text(&q), Some(blocked_kb(pane, &opts))).await;
-                s.blocked_sig.lock().await.insert(pane.to_string(), q);
-                s.remember(chat, Some(msg_id), pane).await;
+        TapCall::Landed(send, before, after, still_blocked) => {
+            match classify_tap(&before, &after, still_blocked) {
+                TapResult::NewDialog => {
+                    let q = waiting_lines(&after);
+                    let opts = parse_options(&after);
+                    s.tg.edit_msg(
+                        chat,
+                        msg_id,
+                        &blocked_card_text(&q),
+                        Some(blocked_kb(pane, &opts)),
+                    )
+                    .await;
+                    s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                    s.remember(chat, Some(msg_id), pane).await;
+                }
+                TapResult::Resumed => {
+                    let no_kb = Some(Value::Array(Vec::new()));
+                    s.tg.edit_msg(
+                        chat,
+                        msg_id,
+                        &format!("✅ {} answered — agent resumed [{pane}]", send.label),
+                        no_kb,
+                    )
+                    .await;
+                    s.remember(chat, Some(msg_id), pane).await;
+                }
+                TapResult::Unchanged => {
+                    let mut shown = send.nav.clone();
+                    shown.extend(send.confirm.iter().cloned());
+                    let sent = shown.join("+");
+                    let before_opts = parse_options(&before);
+                    let text = if before_opts.is_empty() {
+                        format!("⌨️ sent {sent} — check the pane")
+                    } else {
+                        format!(
+                            "⚠️ sent {sent} but the dialog still shows — highlight may have moved; try Esc or answer on the PC"
+                        )
+                    };
+                    let mid = s.tg.send_msg(chat, thread, &text, None).await;
+                    s.remember(chat, mid, pane).await;
+                }
             }
-            TapResult::Resumed => {
-                let no_kb = Some(Value::Array(Vec::new()));
-                s.tg.edit_msg(chat, msg_id, &format!("✅ {} answered — agent resumed [{pane}]", send.label), no_kb).await;
-                s.remember(chat, Some(msg_id), pane).await;
-            }
-            TapResult::Unchanged => {
-                let mut shown = send.nav.clone();
-                shown.extend(send.confirm.iter().cloned());
-                let sent = shown.join("+");
-                let before_opts = parse_options(&before);
-                let text = if before_opts.is_empty() {
-                    format!("⌨️ sent {sent} — check the pane")
-                } else {
-                    format!("⚠️ sent {sent} but the dialog still shows — highlight may have moved; try Esc or answer on the PC")
-                };
-                let mid = s.tg.send_msg(chat, thread, &text, None).await;
-                s.remember(chat, mid, pane).await;
-            }
-        },
+        }
     }
 }
 
@@ -151,9 +204,15 @@ pub async fn answer_tap(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64
 pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), String> {
     let socket = &s.cfg.socket;
     let before = read_screen_visible(socket, pane, 30).await;
-    send_pane_input(socket, pane, text).await.map_err(|e| e.to_string())?;
+    send_pane_input(socket, pane, text)
+        .await
+        .map_err(|e| e.to_string())?;
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    if get_agent(socket, pane).await.map(|a| a.status == "blocked").unwrap_or(true) {
+    if get_agent(socket, pane)
+        .await
+        .map(|a| a.status == "blocked")
+        .unwrap_or(true)
+    {
         let after = read_screen_visible(socket, pane, 30).await;
         if dialog_stalled(&before, &after) {
             return Err("text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into());
@@ -184,8 +243,13 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
             send_pane_keys(&s.cfg.socket, &pane, &keys).await
         };
         match r {
-            Ok(_) => { s.tg.send_msg(chat, thread, "keys sent", None).await; }
-            Err(e) => { s.tg.send_msg(chat, thread, &format!("keys failed: {e}"), None).await; }
+            Ok(_) => {
+                s.tg.send_msg(chat, thread, "keys sent", None).await;
+            }
+            Err(e) => {
+                s.tg.send_msg(chat, thread, &format!("keys failed: {e}"), None)
+                    .await;
+            }
         }
         return true;
     }
@@ -210,7 +274,10 @@ mod tests {
     fn test_classify_new_dialog_on_turnover() {
         // allow → confirm: option sets differ while still blocked → new
         // card, never "resumed".
-        let before = v(&["△ Permission required", "Allow once   Allow always   Reject"]);
+        let before = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
         let after = v(&["Confirm apply?", "Confirm   Cancel"]);
         assert_eq!(classify_tap(&before, &after, true), TapResult::NewDialog);
     }
@@ -226,14 +293,20 @@ mod tests {
     fn test_classify_resumed_when_no_longer_blocked() {
         // Ground truth is status: whatever the screen shows, a moved-on
         // agent means resumed.
-        let before = v(&["△ Permission required", "Allow once   Allow always   Reject"]);
+        let before = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
         let after = v(&["⠋ working…", "editing src/main.rs"]);
         assert_eq!(classify_tap(&before, &after, false), TapResult::Resumed);
     }
 
     #[test]
     fn test_classify_unchanged_same_dialog() {
-        let dlg = v(&["△ Permission required", "Allow once   Allow always   Reject"]);
+        let dlg = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
         assert_eq!(classify_tap(&dlg, &dlg, true), TapResult::Unchanged);
         // Unreadable screen never touches the card, either way.
         assert_eq!(classify_tap(&v(&["x"]), &[], true), TapResult::Unchanged);
@@ -242,10 +315,17 @@ mod tests {
 
     #[test]
     fn test_dialog_stalled_same_dialog() {
-        let dlg = v(&["△ Permission required", "Allow once   Allow always   Reject"]);
+        let dlg = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
         assert!(dialog_stalled(&dlg, &dlg));
         // Typed text echoing into the field counts as progress.
-        let filled = v(&["△ Permission required", "Allow once   Allow always   Reject", "my reason"]);
+        let filled = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+            "my reason",
+        ]);
         assert!(!dialog_stalled(&dlg, &filled));
         // Unreadable screens never fail the send.
         assert!(!dialog_stalled(&[], &dlg));

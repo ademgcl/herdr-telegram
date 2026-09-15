@@ -1,12 +1,8 @@
-use std::{
-    collections::HashMap,
-    sync::Mutex,
-    time::Instant,
-};
 use crate::{
     telegram::client::TelegramClient,
     topics::{names, storage::TopicStorage},
 };
+use std::{collections::HashMap, sync::Mutex, time::Instant};
 
 pub struct TopicManager {
     forum_id: Option<i64>,
@@ -84,7 +80,13 @@ impl TopicManager {
     /// Everything is silent (never notifies) and cache-guarded (no
     /// redundant API calls). Safe to call on every observation — icon
     /// swaps are cheap and notification-free.
-    pub async fn sync_topic(&self, pane: &str, kind: &str, space: &str, status: &str) -> Option<i64> {
+    pub async fn sync_topic(
+        &self,
+        pane: &str,
+        kind: &str,
+        space: &str,
+        status: &str,
+    ) -> Option<i64> {
         let thread = self.ensure_topic(pane, kind, space).await?;
         let forum = self.forum_id?;
         let icon = names::icon_emoji_id(status).to_string();
@@ -95,7 +97,10 @@ impl TopicManager {
         if due {
             match self.tg.set_topic_icon(forum, thread, &icon).await {
                 Ok(()) => {
-                    self.last_icon.lock().unwrap().insert(pane.to_string(), icon);
+                    self.last_icon
+                        .lock()
+                        .unwrap()
+                        .insert(pane.to_string(), icon);
                 }
                 Err(e) => {
                     if crate::telegram::client::topic_missing(&e.to_string()) {
@@ -131,7 +136,10 @@ impl TopicManager {
     /// no API call, just the echo loop-guard.
     pub fn note_title(&self, pane: &str, title: &str) {
         self.storage.set_title(pane, title);
-        self.last_title_write.lock().unwrap().insert(pane.to_string(), Instant::now());
+        self.last_title_write
+            .lock()
+            .unwrap()
+            .insert(pane.to_string(), Instant::now());
     }
 
     /// herdr→telegram half: rename the topic when the pane's desired
@@ -141,18 +149,23 @@ impl TopicManager {
         if self.storage.get_title(pane).as_deref() == Some(desired) {
             return;
         }
-        if let Some(t) = self.last_title_write.lock().unwrap().get(pane) {
-            if t.elapsed() < std::time::Duration::from_secs(5) {
-                println!("[topics] skip rename {pane}: recent title write");
-                return;
-            }
+        if let Some(t) = self.last_title_write.lock().unwrap().get(pane)
+            && t.elapsed() < std::time::Duration::from_secs(5)
+        {
+            println!("[topics] skip rename {pane}: recent title write");
+            return;
         }
-        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else { return };
+        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+            return;
+        };
         match self.tg.set_topic_title(forum, thread, desired).await {
             Ok(()) => {
                 println!("[topics] renamed topic #{thread} ({pane}) to {desired:?}");
                 self.storage.set_title(pane, desired);
-                self.last_title_write.lock().unwrap().insert(pane.to_string(), Instant::now());
+                self.last_title_write
+                    .lock()
+                    .unwrap()
+                    .insert(pane.to_string(), Instant::now());
             }
             Err(e) => {
                 if crate::telegram::client::topic_missing(&e.to_string()) {
@@ -162,7 +175,10 @@ impl TopicManager {
                     // Already showing it — converged, store and stay quiet
                     // instead of retry-spamming every watchdog tick.
                     self.storage.set_title(pane, desired);
-                    self.last_title_write.lock().unwrap().insert(pane.to_string(), Instant::now());
+                    self.last_title_write
+                        .lock()
+                        .unwrap()
+                        .insert(pane.to_string(), Instant::now());
                 } else {
                     eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}");
                 }

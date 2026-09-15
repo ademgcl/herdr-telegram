@@ -5,11 +5,19 @@ use crate::{state::AppState, types::AgentRow};
 pub fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow> {
     match spec {
         None | Some("") => {
-            if rows.len() == 1 { rows.first().cloned() } else { None }
+            if rows.len() == 1 {
+                rows.first().cloned()
+            } else {
+                None
+            }
         }
         Some(t) => rows.iter().find(|r| r.pane == t).cloned().or_else(|| {
             let m: Vec<_> = rows.iter().filter(|r| r.kind == t).collect();
-            if m.len() == 1 { m.first().map(|r| (*r).clone()) } else { None }
+            if m.len() == 1 {
+                m.first().map(|r| (*r).clone())
+            } else {
+                None
+            }
         }),
     }
 }

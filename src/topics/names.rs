@@ -1,6 +1,6 @@
-/// Stable short tags per pane (`o2`): kept as persisted ids; the
-/// VISIBLE title syncs 1:1 with herdr pane names (see `sync_title`).
-/// State lives on the topic ICON.
+//! Stable short tags per pane (`o2`): kept as persisted ids; the
+//! VISIBLE title syncs 1:1 with herdr pane names (see `sync_title`).
+//! State lives on the topic ICON.
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown
@@ -99,11 +99,11 @@ pub fn icon_emoji_id(status: &str) -> &'static str {
         // exists (new glyphs must be probe-verified), and 💬 honestly
         // reads "awaiting input". The 💲 text glyph in cards and menus
         // carries the shell-vs-agent distinction.
-        "shell" => "5417915203100613993", // 💬
-        "done" => "5237699328843200968",    // ✅
-        "blocked" => "5379748062124056162", // ❗️
+        "shell" => "5417915203100613993",                      // 💬
+        "done" => "5237699328843200968",                       // ✅
+        "blocked" => "5379748062124056162",                    // ❗️
         "closed" | "dead" | "exited" => "5408906741125490282", // 🏁
-        _ => "5377316857231450742",         // ❓
+        _ => "5377316857231450742",                            // ❓
     }
 }
 
@@ -128,9 +128,9 @@ mod tests {
     #[test]
     fn test_codes_unique() {
         let kinds = [
-            "pi", "claude", "codex", "gemini", "cursor", "devin", "agy",
-            "cline", "opencode", "copilot", "kimi", "kiro", "droid", "amp",
-            "grok", "hermes", "kilo", "qodercli", "qwen", "maki",
+            "pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline", "opencode",
+            "copilot", "kimi", "kiro", "droid", "amp", "grok", "hermes", "kilo", "qodercli",
+            "qwen", "maki",
         ];
         let mut seen = std::collections::HashSet::new();
         for k in kinds {
@@ -187,6 +187,9 @@ mod tests {
         assert_eq!(sync_title(Some("api"), "w8:p1"), "api");
         assert_eq!(sync_title(None, "w8:p1"), "w8:p1");
         assert_eq!(sync_title(Some("  "), "w8:p1"), "w8:p1");
-        assert_eq!(sync_title(Some(&"x".repeat(200)), "w8:p1").chars().count(), 128);
+        assert_eq!(
+            sync_title(Some(&"x".repeat(200)), "w8:p1").chars().count(),
+            128
+        );
     }
 }

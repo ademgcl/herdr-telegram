@@ -1,4 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
 use super::runner::watch_job;
 use crate::{
     herdr::client::{get_agent, read_screen},
@@ -6,6 +5,7 @@ use crate::{
     jobs::job::Job,
     state::AppState,
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Boot recovery: re-arm watchers for prompts orphaned by a restart so
 /// their replies still land. Dead panes and >24h-old entries are dropped.
@@ -15,7 +15,10 @@ pub async fn recover_pending(s: &AppState) {
     if entries.is_empty() {
         return;
     }
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     for (pane, pp) in entries {
         if now.saturating_sub(pp.started_unix) > 86400 {
             println!("[recover] dropping stale {pane}");
@@ -28,17 +31,33 @@ pub async fn recover_pending(s: &AppState) {
                 .unwrap_or_default()
                 .contains(&pane);
             if alive {
-                if let Ok(tail) = crate::herdr::client::read_shell_output(&s.cfg.socket, &pane, 60).await {
+                if let Ok(tail) =
+                    crate::herdr::client::read_shell_output(&s.cfg.socket, &pane, 60).await
+                {
                     let tail = tail.trim().to_string();
                     if !tail.is_empty() {
-                        report(s, pp.chat, pp.thread, &pane, &format!("recovered after restart:\n{tail}")).await;
+                        report(
+                            s,
+                            pp.chat,
+                            pp.thread,
+                            &pane,
+                            &format!("recovered after restart:\n{tail}"),
+                        )
+                        .await;
                     }
                 }
                 s.clear_pending(&pane).await;
                 println!("[recover] shell recovered {pane}");
                 continue;
             }
-            report(s, pp.chat, pp.thread, &pane, &format!("pane gone before reply arrived [{pane}]")).await;
+            report(
+                s,
+                pp.chat,
+                pp.thread,
+                &pane,
+                &format!("pane gone before reply arrived [{pane}]"),
+            )
+            .await;
             println!("[recover] pane gone, dropping {pane}");
             s.clear_pending(&pane).await;
             continue;

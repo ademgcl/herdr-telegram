@@ -43,7 +43,13 @@ mod tests {
     fn test_columns_split() {
         assert_eq!(split_columns("Allow once   Allow always   Reject").len(), 3);
         assert_eq!(split_columns("Yes\tNo"), vec!["Yes", "No"]);
-        assert_eq!(split_columns("single phrase here"), vec!["single phrase here"]);
-        assert_eq!(split_columns("  padded   columns  "), vec!["padded", "columns"]);
+        assert_eq!(
+            split_columns("single phrase here"),
+            vec!["single phrase here"]
+        );
+        assert_eq!(
+            split_columns("  padded   columns  "),
+            vec!["padded", "columns"]
+        );
     }
 }

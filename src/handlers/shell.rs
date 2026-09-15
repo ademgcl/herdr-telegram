@@ -7,8 +7,8 @@ use tokio::time::{Duration, sleep};
 
 use crate::{
     herdr::client::{
-        create_tab, ensure_tg_space, get_agent, list_panes, list_workspaces,
-        read_shell_output, send_agent_keys, send_pane_input,
+        create_tab, ensure_tg_space, get_agent, list_panes, list_workspaces, read_shell_output,
+        send_agent_keys, send_pane_input,
     },
     herdr::labels::pane_facts,
     state::AppState,
@@ -27,7 +27,9 @@ pub fn format_shell_reply(cmd: &str, output: &str) -> String {
 
 /// Read one shell snapshot (best effort).
 async fn shell_snapshot(s: &AppState, pane: &str) -> String {
-    read_shell_output(&s.cfg.socket, pane, 60).await.unwrap_or_default()
+    read_shell_output(&s.cfg.socket, pane, 60)
+        .await
+        .unwrap_or_default()
 }
 
 /// Wait for the shell to settle after submitting: poll until two
@@ -61,9 +63,13 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         s.clear_pending(pane).await;
-        s.tg
-            .send_msg(chat, thread, &format!("⚠️ pane gone or unreachable: {e}"), None)
-            .await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            &format!("⚠️ pane gone or unreachable: {e}"),
+            None,
+        )
+        .await;
         return;
     }
     // Durable intent: a restart mid-settle recovers the tail instead of
@@ -75,7 +81,9 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         .map(|l| l.trim_end().to_string())
         .collect::<Vec<_>>();
     let tail = tail_fit(&lines, 3500);
-    let mid = s.tg.send_msg(chat, thread, &format_shell_reply(cmd, &tail), None).await;
+    let mid =
+        s.tg.send_msg(chat, thread, &format_shell_reply(cmd, &tail), None)
+            .await;
     s.remember(chat, mid, pane).await;
     s.clear_pending(pane).await;
 }
@@ -88,35 +96,45 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         Err(_) => {
             // Dead pane (topic lingering) vs live shell — only the latter
             // gets the shell card.
-            if !list_panes(&s.cfg.socket).await.unwrap_or_default().contains(&pane.to_string()) {
-                s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None).await;
+            if !list_panes(&s.cfg.socket)
+                .await
+                .unwrap_or_default()
+                .contains(&pane.to_string())
+            {
+                s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None)
+                    .await;
                 return;
             }
-            let mid = s
-                .tg
-                .send_msg(chat, thread, &shell_card_text(pane), None)
-                .await;
+            let mid =
+                s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
+                    .await;
             s.remember(chat, mid, pane).await;
             s.set_focus(pane).await;
             return;
         }
     };
     if !matches!(agent.status.as_str(), "idle" | "done") {
-        s.tg
-            .send_msg(
-                chat,
-                thread,
-                &format!("⛔ {} is {} — wait for idle (never quit live work)", pane, agent.status),
-                None,
-            )
-            .await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            &format!(
+                "⛔ {} is {} — wait for idle (never quit live work)",
+                pane, agent.status
+            ),
+            None,
+        )
+        .await;
         return;
     }
     s.keywait.lock().await.remove(&(chat, thread));
     s.runwait.lock().await.remove(&(chat, thread));
     s.typewait.lock().await.remove(&(chat, thread));
-    if send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"]).await.is_err() {
-        s.tg.send_msg(chat, thread, "⚠️ quit keys failed — quit on the PC", None).await;
+    if send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"])
+        .await
+        .is_err()
+    {
+        s.tg.send_msg(chat, thread, "⚠️ quit keys failed — quit on the PC", None)
+            .await;
         return;
     }
     // Confirm herdr sees a shell (agent_not_found) before claiming it.
@@ -129,18 +147,27 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         }
     }
     if !shelled {
-        s.tg
-            .send_msg(chat, thread, &format!("⚠️ still in {} — try again or quit on the PC", agent.kind), None)
-            .await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            &format!("⚠️ still in {} — try again or quit on the PC", agent.kind),
+            None,
+        )
+        .await;
         return;
     }
     s.cancel_jobs_for(pane).await;
     s.clear_pane(pane).await;
     // Badge shell NOW (not on the next watchdog cycle) so a fast
     // re-enter still hushes correctly in the notifier.
-    s.status.lock().await.insert(pane.to_string(), "shell".to_string());
+    s.status
+        .lock()
+        .await
+        .insert(pane.to_string(), "shell".to_string());
     s.topics.mark_shell(pane).await;
-    let mid = s.tg.send_msg(chat, thread, &shell_card_text(pane), None).await;
+    let mid =
+        s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
+            .await;
     s.remember(chat, mid, pane).await;
     s.set_focus(pane).await;
 }
@@ -155,7 +182,13 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
     match pane {
         Some(p) => run_shell_cmd(s, chat, None, &p, text).await,
         None => {
-            s.tg.send_msg(chat, None, "who? tap an agent in /agents, or reply to its last message", None).await;
+            s.tg.send_msg(
+                chat,
+                None,
+                "who? tap an agent in /agents, or reply to its last message",
+                None,
+            )
+            .await;
         }
     }
 }
@@ -184,8 +217,13 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
     let space = ws_label(&spaces, &ws_id).to_string();
     // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
     s.topics.sync_topic(&pane, "shell", &space, "shell").await;
-    s.status.lock().await.insert(pane.clone(), "shell".to_string());
-    let mid = s.tg.send_msg(chat, thread, &shell_card_text(&pane), None).await;
+    s.status
+        .lock()
+        .await
+        .insert(pane.clone(), "shell".to_string());
+    let mid =
+        s.tg.send_msg(chat, thread, &shell_card_text(&pane), None)
+            .await;
     s.remember(chat, mid, &pane).await;
     s.set_focus(&pane).await;
 }
@@ -196,17 +234,27 @@ pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
     let new = match crate::herdr::client::split_pane(&s.cfg.socket, pane, dir).await {
         Ok(p) => p,
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ split failed: {e}"), None).await;
+            s.tg.send_msg(chat, thread, &format!("⚠️ split failed: {e}"), None)
+                .await;
             return;
         }
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let ws_id = pane_facts(&s.cfg.socket).await.ok().and_then(|m| m.get(pane).map(|f| f.ws.clone())).unwrap_or_default();
+    let ws_id = pane_facts(&s.cfg.socket)
+        .await
+        .ok()
+        .and_then(|m| m.get(pane).map(|f| f.ws.clone()))
+        .unwrap_or_default();
     let space = ws_label(&spaces, &ws_id).to_string();
     let space = if space.is_empty() { pane } else { &space };
     s.topics.sync_topic(&new, "shell", space, "shell").await;
-    s.status.lock().await.insert(new.clone(), "shell".to_string());
-    let mid = s.tg.send_msg(chat, thread, &shell_card_text(&new), None).await;
+    s.status
+        .lock()
+        .await
+        .insert(new.clone(), "shell".to_string());
+    let mid =
+        s.tg.send_msg(chat, thread, &shell_card_text(&new), None)
+            .await;
     s.remember(chat, mid, &new).await;
     s.set_focus(&new).await;
 }
@@ -228,7 +276,13 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     // Fresh shells start slow (rc files, version managers) — settle first.
     let before = shell_snapshot(s, &pane).await;
     let cmd = cmd.trim();
-    s.tg.send_msg(chat, thread, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
+    s.tg.send_msg(
+        chat,
+        thread,
+        &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"),
+        None,
+    )
+    .await;
     if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
         s.clear_pending(&pane).await;
         s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
@@ -236,8 +290,14 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     }
     s.remember_pending(&pane, chat, thread, cmd).await;
     let out = await_shell_settle(s, &pane, &before).await;
-    let body = if out.trim().is_empty() { "(no output yet)".into() } else { out };
-    let mid = s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(&pane))).await;
+    let body = if out.trim().is_empty() {
+        "(no output yet)".into()
+    } else {
+        out
+    };
+    let mid =
+        s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(&pane)))
+            .await;
     s.remember(chat, mid, &pane).await;
     s.clear_pending(&pane).await;
 }
@@ -252,7 +312,10 @@ mod tests {
             format_shell_reply("pwd", "/Users/adem/projects").as_str(),
             "$ pwd\n/Users/adem/projects"
         );
-        assert_eq!(format_shell_reply("true", "  \n ").as_str(), "$ true\n(no output)");
+        assert_eq!(
+            format_shell_reply("true", "  \n ").as_str(),
+            "$ true\n(no output)"
+        );
     }
 
     #[test]

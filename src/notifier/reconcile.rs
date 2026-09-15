@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-use std::time::{Duration, Instant};
 use crate::{
     handlers::titles::sync_titles,
     herdr::client::{list_agents, list_panes, read_screen_adaptive},
@@ -7,6 +5,8 @@ use crate::{
     notifier::status::observe_status,
     state::AppState,
 };
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 /// Re-remind while a background limit stall persists (prompt-owned
 /// panes alert once per episode from their watcher instead).
@@ -20,7 +20,9 @@ const LIMIT_STUCK_SECS: u64 = 90;
 const LIMIT_CLEAR_MISSES: u32 = 2;
 
 pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
-    let Ok(rows) = list_agents(&s.cfg.socket).await else { return };
+    let Ok(rows) = list_agents(&s.cfg.socket).await else {
+        return;
+    };
 
     let mut live_panes = HashSet::new();
 
@@ -54,7 +56,10 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
             let panes = list_panes(&s.cfg.socket).await.unwrap_or_default();
             for pane in missing {
                 if panes.contains(&pane) {
-                    s.status.lock().await.insert(pane.clone(), "shell".to_string());
+                    s.status
+                        .lock()
+                        .await
+                        .insert(pane.clone(), "shell".to_string());
                     // Agent gone (shell reuse): its stall episode dies here
                     // or the next agent on this pane name inherits stale
                     // dedup (see status.rs working→* clear).

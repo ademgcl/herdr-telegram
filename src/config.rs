@@ -1,5 +1,5 @@
-use std::env;
 use crate::types::Res;
+use std::env;
 
 #[derive(Clone)]
 pub struct Cfg {
@@ -10,13 +10,17 @@ pub struct Cfg {
 }
 
 pub fn load_env_file() {
-    let Ok(txt) = std::fs::read_to_string(".env") else { return };
+    let Ok(txt) = std::fs::read_to_string(".env") else {
+        return;
+    };
     for line in txt.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || !line.contains('=') {
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         let k = k.trim();
         let mut v = v.trim().to_string();
         if v.len() >= 2

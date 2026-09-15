@@ -1,8 +1,6 @@
-use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use tokio::sync::{Mutex, Notify};
 

@@ -1,9 +1,9 @@
-use serde_json::{json, Value};
+use crate::types::Res;
+use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
 };
-use crate::types::Res;
 
 /// Events a prompt watcher cares about, pushed by herdr.
 pub enum WatchEvent {
@@ -51,7 +51,9 @@ impl EvStream {
             if n == 0 {
                 return None;
             }
-            let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else { continue };
+            let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
             // NOTE: wire names are dotted (same as subscription types).
             match ev["event"].as_str() {
                 Some("pane.scroll_changed") => return Some(WatchEvent::Output),

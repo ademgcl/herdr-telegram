@@ -1,6 +1,6 @@
-use std::time::Duration;
-use serde_json::{json, Value};
 use crate::{types::Res, ui::fit_msg};
+use serde_json::{Value, json};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct TelegramClient {
@@ -22,7 +22,13 @@ impl TelegramClient {
 
     pub async fn call(&self, method: &str, body: Value, timeout: Duration) -> Res<Value> {
         let url = format!("https://api.telegram.org/bot{}/{}", self.token, method);
-        let resp = self.http.post(&url).json(&body).timeout(timeout).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .timeout(timeout)
+            .send()
+            .await?;
         let v: Value = resp.json().await?;
         if v["ok"].as_bool() != Some(true) {
             let desc = v["description"].as_str().unwrap_or("telegram error");
@@ -59,11 +65,18 @@ impl TelegramClient {
         }
 
         for attempt in 0..3 {
-            match self.call("sendMessage", params.clone(), Duration::from_secs(15)).await {
+            match self
+                .call("sendMessage", params.clone(), Duration::from_secs(15))
+                .await
+            {
                 Ok(v) => return v["message_id"].as_i64(),
                 Err(e) => {
                     let msg = e.to_string();
-                    eprintln!("sendMessage failed (attempt {}): {}", attempt + 1, self.redact(&msg));
+                    eprintln!(
+                        "sendMessage failed (attempt {}): {}",
+                        attempt + 1,
+                        self.redact(&msg)
+                    );
                     if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
                         tokio::time::sleep(wait).await;
                         continue;
@@ -111,7 +124,10 @@ impl TelegramClient {
             params["reply_markup"] = json!({"inline_keyboard": kb});
         }
         for attempt in 0..3 {
-            match self.call("editMessageText", params.clone(), Duration::from_secs(15)).await {
+            match self
+                .call("editMessageText", params.clone(), Duration::from_secs(15))
+                .await
+            {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     let msg = e.to_string();

@@ -1,10 +1,10 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use serde_json::Value;
 use crate::{
     handlers::{handle_callback, handle_dm_message, handle_forum_message},
     state::AppState,
     types::STALE_SECS,
 };
+use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn handle_update(s: AppState, u: &Value) {
     let kind = if u.get("callback_query").is_some() {
@@ -30,7 +30,9 @@ pub async fn handle_update(s: AppState, u: &Value) {
         let chat_id = chat["id"].as_i64().unwrap_or(0);
         let title = chat["title"].as_str().unwrap_or("");
         if s.cfg.owners.contains(&from) {
-            println!("[telegram] bot added/updated in group '{title}' (ID: {chat_id}) by owner {from}");
+            println!(
+                "[telegram] bot added/updated in group '{title}' (ID: {chat_id}) by owner {from}"
+            );
         }
         return;
     }
@@ -44,9 +46,14 @@ pub async fn handle_update(s: AppState, u: &Value) {
     let from = msg["from"]["id"].as_i64();
     let chat_id = msg["chat"]["id"].as_i64();
     let chat_type = msg["chat"]["type"].as_str().unwrap_or("");
-    let text = msg["text"].as_str().or_else(|| msg["caption"].as_str()).unwrap_or("");
+    let text = msg["text"]
+        .as_str()
+        .or_else(|| msg["caption"].as_str())
+        .unwrap_or("");
 
-    let (Some(from), Some(chat_id)) = (from, chat_id) else { return };
+    let (Some(from), Some(chat_id)) = (from, chat_id) else {
+        return;
+    };
 
     if !s.cfg.owners.contains(&from) {
         return; // Silently ignore non-owners
@@ -85,7 +92,10 @@ pub async fn handle_update(s: AppState, u: &Value) {
                 handle_forum_message(s, chat_id, msg).await;
             }
         } else {
-            println!("[telegram] message in group {chat_id} ('{}') without TELEGRAM_FORUM_CHAT_ID", msg["chat"]["title"].as_str().unwrap_or(""));
+            println!(
+                "[telegram] message in group {chat_id} ('{}') without TELEGRAM_FORUM_CHAT_ID",
+                msg["chat"]["title"].as_str().unwrap_or("")
+            );
             if !s.nagged.lock().await.insert(chat_id) {
                 return;
             }

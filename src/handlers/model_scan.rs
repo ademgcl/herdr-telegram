@@ -54,8 +54,15 @@ pub fn picker_rows(screen: &[String]) -> Vec<ModelRow> {
         if provider.split_whitespace().count() > 3 || provider.chars().count() > 24 {
             continue;
         }
-        let free = cols.get(2).map(|c| c.eq_ignore_ascii_case("free")).unwrap_or(false);
-        rows.push(ModelRow { name, provider, free });
+        let free = cols
+            .get(2)
+            .map(|c| c.eq_ignore_ascii_case("free"))
+            .unwrap_or(false);
+        rows.push(ModelRow {
+            name,
+            provider,
+            free,
+        });
     }
     rows
 }
@@ -176,8 +183,8 @@ mod tests {
         let rows = picker_rows(&screen);
         // The ▣-led row is rejected (no valid name column).
         assert!(
-            rows.iter().any(|r| r.name == "Ling 3.0 Flash Fin Free"
-                && r.provider == "OpenCode Zen")
+            rows.iter()
+                .any(|r| r.name == "Ling 3.0 Flash Fin Free" && r.provider == "OpenCode Zen")
         );
         assert!(!rows.iter().any(|r| r.name.contains("chatter")));
         assert!(!rows.iter().any(|r| r.name.contains("ctrl+p")));
@@ -217,9 +224,17 @@ mod tests {
             "     Hi.    Muse Spark 1.3 Free                     OpenCode Zen",
             "     ▣      Connect provider ctrl+a  Favorite ctrl+f",
         ]);
-        assert!(picker_hit(&screen, "muse spark 1.3 free zen", "muse spark 1.3 free"));
+        assert!(picker_hit(
+            &screen,
+            "muse spark 1.3 free zen",
+            "muse spark 1.3 free"
+        ));
         // No Nemotron row: echo remainder ("tho") must not self-match.
-        assert!(!picker_hit(&screen, "nemotron 3 ultra free zen", "nemotron 3 ultra free"));
+        assert!(!picker_hit(
+            &screen,
+            "nemotron 3 ultra free zen",
+            "nemotron 3 ultra free"
+        ));
         assert!(!picker_hit(&screen, "muse spark 1.3 free zen", ""));
     }
 }

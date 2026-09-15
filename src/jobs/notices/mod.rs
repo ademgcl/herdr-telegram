@@ -129,8 +129,18 @@ const WEAK: &[(&str, &str)] = &[
 /// prose like "retrying the layout pass" would page. Genuine retry UI
 /// (`[retrying attempt #N]`) is STRONG and needs no context.
 const CONTEXT: &[&str] = &[
-    "error", "fail", "exceed", "denied", "unable", "cannot",
-    "could not", "sorry", "⚠", "⛔", "❗", "🚫",
+    "error",
+    "fail",
+    "exceed",
+    "denied",
+    "unable",
+    "cannot",
+    "could not",
+    "sorry",
+    "⚠",
+    "⛔",
+    "❗",
+    "🚫",
 ];
 
 /// Scan a raw pane screen for limit/quota/provider stalls. Strong hits
@@ -260,8 +270,12 @@ mod tests {
 
     #[test]
     fn test_fatal_markers_case_insensitive() {
-        assert!(is_provider_failure_line("ERROR FROM PROVIDER (console) boom"));
-        assert!(is_provider_failure_line("  ┃ Error from provider (Console): fail"));
+        assert!(is_provider_failure_line(
+            "ERROR FROM PROVIDER (console) boom"
+        ));
+        assert!(is_provider_failure_line(
+            "  ┃ Error from provider (Console): fail"
+        ));
         assert!(!is_provider_failure_line("hello there"));
     }
 
@@ -288,8 +302,10 @@ mod tests {
 
     #[test]
     fn test_quota_retrying_in_still_rate_limit() {
-        let hit = detect_limit(&v(&["Free usage exceeded, subscribe to Go [retrying in 42s]"]))
-            .expect("quota must detect");
+        let hit = detect_limit(&v(&[
+            "Free usage exceeded, subscribe to Go [retrying in 42s]",
+        ]))
+        .expect("quota must detect");
         assert_eq!(hit.kind, "rate-limit");
     }
 }

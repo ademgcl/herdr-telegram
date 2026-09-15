@@ -1,9 +1,9 @@
 //! Pane display labels + workspace placement: the user-set name synced
 //! 1:1 with forum topic titles (`pane.rename` sets it, `pane.list`
 //! serves it, absent when cleared). Read-only except via `rename_pane`.
-use std::collections::HashMap;
-use serde_json::{json, Value};
 use crate::{herdr::client::rpc, types::Res};
+use serde_json::{Value, json};
+use std::collections::HashMap;
 
 /// What title sync needs per pane: display label (if any) + workspace.
 pub struct PaneFacts {
@@ -37,7 +37,12 @@ pub fn parse_facts(v: &Value) -> HashMap<String, PaneFacts> {
 
 /// Set (or with `None`, clear) a pane's display label.
 pub async fn rename_pane(socket: &str, pane: &str, label: Option<&str>) -> Res<()> {
-    rpc(socket, "pane.rename", json!({"pane_id": pane, "label": label})).await?;
+    rpc(
+        socket,
+        "pane.rename",
+        json!({"pane_id": pane, "label": label}),
+    )
+    .await?;
     Ok(())
 }
 

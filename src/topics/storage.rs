@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
     path::PathBuf,
     sync::Mutex,
 };
-use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Default)]
 struct Store {
@@ -36,10 +36,7 @@ impl TopicStorage {
         let path = PathBuf::from("topics.state");
         let home = env::var("HOME").unwrap_or_default();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/topics.json"));
-        if !path.exists()
-            && legacy.exists()
-            && std::fs::copy(&legacy, &path).is_ok()
-        {
+        if !path.exists() && legacy.exists() && std::fs::copy(&legacy, &path).is_ok() {
             println!("[topics] migrated {} → topics.state", legacy.display());
         }
         Self::at(path)
@@ -54,7 +51,9 @@ impl TopicStorage {
     }
 
     fn read_from_disk(path: &PathBuf) -> Store {
-        let Ok(txt) = fs::read_to_string(path) else { return Store::default() };
+        let Ok(txt) = fs::read_to_string(path) else {
+            return Store::default();
+        };
         // Legacy flat map {pane: thread} FIRST: without
         // deny_unknown_fields it would parse as an empty Store and wipe
         // every mapping. A current-format file always carries non-integer
@@ -169,7 +168,6 @@ impl TopicStorage {
     pub fn all_mappings(&self) -> HashMap<String, i64> {
         self.store.lock().unwrap().topics.clone()
     }
-
 }
 
 #[cfg(test)]
@@ -180,13 +178,15 @@ mod tests {
     fn test_store_roundtrip_and_migration() {
         // Legacy flat map migrates through the real read path; current
         // format (incl. unknown future fields) reads as-is.
-        let leg = std::env::temp_dir().join(format!("herdr-tg-test-legacy-{}.json", std::process::id()));
+        let leg =
+            std::env::temp_dir().join(format!("herdr-tg-test-legacy-{}.json", std::process::id()));
         std::fs::write(&leg, r#"{"w1:p1": 42}"#).unwrap();
         let st = TopicStorage::at(leg.clone());
         assert_eq!(st.get_thread("w1:p1"), Some(42));
         let _ = std::fs::remove_file(&leg);
 
-        let cur = std::env::temp_dir().join(format!("herdr-tg-test-cur-{}.json", std::process::id()));
+        let cur =
+            std::env::temp_dir().join(format!("herdr-tg-test-cur-{}.json", std::process::id()));
         std::fs::write(&cur, r#"{"topics": {"w2:p2": 7}, "future_field": true}"#).unwrap();
         let st2 = TopicStorage::at(cur.clone());
         assert_eq!(st2.get_thread("w2:p2"), Some(7));

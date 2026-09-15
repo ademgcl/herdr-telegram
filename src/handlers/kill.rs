@@ -11,7 +11,9 @@ use crate::{
 
 /// Pure confirm copy so tests cover it without I/O.
 pub fn kill_confirm_text(pane: &str, desc: &str) -> String {
-    format!("☠️ kill {pane} ({desc})?\nThis closes the pane completely — agent or shell, work and all.")
+    format!(
+        "☠️ kill {pane} ({desc})?\nThis closes the pane completely — agent or shell, work and all."
+    )
 }
 
 /// Describe the pane for the confirm card, or None when already gone.
@@ -19,7 +21,11 @@ async fn describe(s: &AppState, pane: &str) -> Option<String> {
     if let Ok(a) = get_agent(&s.cfg.socket, pane).await {
         return Some(format!("{}, {}", a.kind, a.status));
     }
-    if list_panes(&s.cfg.socket).await.unwrap_or_default().contains(&pane.to_string()) {
+    if list_panes(&s.cfg.socket)
+        .await
+        .unwrap_or_default()
+        .contains(&pane.to_string())
+    {
         return Some("shell".to_string());
     }
     None
@@ -28,14 +34,22 @@ async fn describe(s: &AppState, pane: &str) -> Option<String> {
 /// Ask: post the confirm card with Kill/Keep buttons.
 pub async fn ask_kill(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     let Some(desc) = describe(s, pane).await else {
-        s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is already gone"), None).await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            &format!("⚠️ pane {pane} is already gone"),
+            None,
+        )
+        .await;
         return;
     };
     let kb = json!([[
         {"text": "☠️ Kill", "callback_data": format!("X:kill:{pane}")},
         {"text": "Keep", "callback_data": format!("X:keep:{pane}")},
     ]]);
-    let mid = s.tg.send_msg(chat, thread, &kill_confirm_text(pane, &desc), Some(kb)).await;
+    let mid =
+        s.tg.send_msg(chat, thread, &kill_confirm_text(pane, &desc), Some(kb))
+            .await;
     s.remember(chat, mid, pane).await;
 }
 
@@ -44,7 +58,8 @@ pub async fn ask_kill(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) 
 /// would close it next cycle anyway).
 pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &str, pane: &str) {
     if action == "keep" {
-        s.tg.edit_msg(chat, msg_id, &format!("kept {pane}."), None).await;
+        s.tg.edit_msg(chat, msg_id, &format!("kept {pane}."), None)
+            .await;
         return;
     }
     if action != "kill" {
@@ -57,10 +72,12 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
             if s.topics.close_topic(pane).await {
                 s.topics.remove_mapping(pane);
             }
-            s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None).await;
+            s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None)
+                .await;
         }
         Err(e) => {
-            s.tg.edit_msg(chat, msg_id, &format!("⚠️ kill failed: {e}"), None).await;
+            s.tg.edit_msg(chat, msg_id, &format!("⚠️ kill failed: {e}"), None)
+                .await;
         }
     }
 }

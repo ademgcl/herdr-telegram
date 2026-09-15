@@ -14,8 +14,8 @@
 //! must hold for [`KIND_SWITCH_STABLE`] consecutive ticks before it
 //! counts as a new episode, so scroll-order oscillation between
 //! co-present banners never spams.
+use super::notices::{ERROR_KIND, LimitHit, is_stuck_gated};
 use std::time::{Duration, Instant};
-use super::notices::{is_stuck_gated, LimitHit, ERROR_KIND};
 
 /// Ticks with a gated (`error`/`provider`) banner and no settle before
 /// buzzing once.
@@ -38,7 +38,14 @@ pub struct BuzzEpisode {
 
 impl BuzzEpisode {
     pub fn new() -> Self {
-        Self { kind: None, since: None, alerted: false, misses: 0, pending_kind: None, pending_n: 0 }
+        Self {
+            kind: None,
+            since: None,
+            alerted: false,
+            misses: 0,
+            pending_kind: None,
+            pending_n: 0,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -76,7 +83,9 @@ impl BuzzEpisode {
             // Same episode: only a stuck, unalerted gated banner re-fires.
             if is_stuck_gated(hit.kind)
                 && !self.alerted
-                && self.since.is_some_and(|t| now.duration_since(t) >= Duration::from_secs(STUCK_SECS))
+                && self
+                    .since
+                    .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(STUCK_SECS))
             {
                 self.alerted = true;
                 return Some(hit);
@@ -101,7 +110,7 @@ impl BuzzEpisode {
         // New stable episode (banner returned after a confirmed clear,
         // or a kind held long enough to be genuine).
         self.kind = Some(hit.kind.to_string());
-        self.since = is_stuck_gated(hit.kind).then(|| now);
+        self.since = is_stuck_gated(hit.kind).then_some(now);
         self.alerted = false;
         self.pending_kind = None;
         self.pending_n = 0;
@@ -117,7 +126,10 @@ mod tests {
     use super::*;
 
     fn hit(kind: &'static str) -> LimitHit {
-        LimitHit { kind, excerpt: "x".into() }
+        LimitHit {
+            kind,
+            excerpt: "x".into(),
+        }
     }
 
     #[test]

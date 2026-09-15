@@ -1,6 +1,6 @@
-/// Free-Zen shortlist + footer parsing for the opencode `/models` picker.
-/// Pure — tested below. Live picker scanning lives in `model_scan`,
-/// async driving in `model`.
+//! Free-Zen shortlist + footer parsing for the opencode `/models` picker.
+//! Pure — tested below. Live picker scanning lives in `model_scan`,
+//! async driving in `model`.
 
 /// Free Zen models: display name EXACTLY as the `/models` picker shows it,
 /// id slug, and a short button label (Telegram buttons truncate past ~22
@@ -12,7 +12,11 @@
 /// Config form would be `opencode/<id>`; the picker matches on names.
 pub const FREE_ZEN: &[(&str, &str, &str)] = &[
     ("Big Pickle", "big-pickle", "Big Pickle"),
-    ("Muse Spark 1.3 Free", "muse-spark-1.3-free", "Muse Spark 1.3"),
+    (
+        "Muse Spark 1.3 Free",
+        "muse-spark-1.3-free",
+        "Muse Spark 1.3",
+    ),
     (
         "Ling 3.0 Flash Fin Free",
         "ling-3.0-flash-fin-free",
@@ -29,7 +33,11 @@ pub const FREE_ZEN: &[(&str, &str, &str)] = &[
         "Nemotron 3 Ultra",
     ),
     ("MiMo V2.5 Free", "mimo-v2.5-free", "MiMo V2.5"),
-    ("Muse Spark 1.2 Free", "muse-spark-1.2-free", "Muse Spark 1.2"),
+    (
+        "Muse Spark 1.2 Free",
+        "muse-spark-1.2-free",
+        "Muse Spark 1.2",
+    ),
 ];
 
 pub(crate) fn norm(s: &str) -> String {

@@ -1,8 +1,8 @@
 //! Buzzing card body for a limit/stall episode. Split from `notices`
-/// (300-line file limit): detection lives in `notices::mod`, rendering
-/// lives here and is re-exported (`crate::jobs::notices::limit_card_text`
-/// keeps working for `runner`/`reconcile`).
-use super::{LimitHit, ERROR_KIND};
+//! (300-line file limit): detection lives in `notices::mod`, rendering
+//! lives here and is re-exported (`crate::jobs::notices::limit_card_text`
+//! keeps working for `runner`/`reconcile`).
+use super::{ERROR_KIND, LimitHit};
 
 /// Buzzing card body for a limit episode. Names the pane so DM owners
 /// with several agents know which one stalled.
@@ -29,7 +29,9 @@ pub fn limit_card_text(pane: &str, hit: &LimitHit) -> String {
     if !hit.excerpt.is_empty() {
         text.push_str(&format!("\n\n> {}", hit.excerpt));
     }
-    text.push_str(&format!("\n\n{hint}\n• /read — full output\n• /cancel — stop the run"));
+    text.push_str(&format!(
+        "\n\n{hint}\n• /read — full output\n• /cancel — stop the run"
+    ));
     text
 }
 
@@ -53,7 +55,8 @@ mod tests {
     fn test_provider_card_text() {
         let hit = LimitHit {
             kind: "provider",
-            excerpt: "Provider response headers timed out after 300000ms [retrying attempt #1]".into(),
+            excerpt: "Provider response headers timed out after 300000ms [retrying attempt #1]"
+                .into(),
         };
         let text = limit_card_text("w8:p1", &hit);
         assert!(text.contains("w8:p1"));

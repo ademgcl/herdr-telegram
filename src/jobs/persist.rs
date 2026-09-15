@@ -1,11 +1,11 @@
 //! Durable prompt intent: which pane owes a reply where. Recorded on
 //! every submit, cleared on settle/cancel — boot re-arms watchers from
 //! it so restarts stop eating replies.
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PendingPrompt {
@@ -42,7 +42,10 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        PathBuf::from(format!("/tmp/herdr-tg-test-jobs-{}.json", std::process::id()))
+        PathBuf::from(format!(
+            "/tmp/herdr-tg-test-jobs-{}.json",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -52,7 +55,12 @@ mod tests {
         let mut m = HashMap::new();
         m.insert(
             "w8:p1".to_string(),
-            PendingPrompt { chat: 1, thread: Some(6), prompt: "hi".into(), started_unix: 42 },
+            PendingPrompt {
+                chat: 1,
+                thread: Some(6),
+                prompt: "hi".into(),
+                started_unix: 42,
+            },
         );
         save_file(&p, &m);
         let back = load_file(&p);

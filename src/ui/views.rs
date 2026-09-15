@@ -1,5 +1,5 @@
-use crate::types::{AgentDetail, AgentRow, WorkspaceInfo, MAX_MSG_UNITS};
 use super::emoji::{emoji, worst_status};
+use crate::types::{AgentDetail, AgentRow, MAX_MSG_UNITS, WorkspaceInfo};
 
 pub fn fit(text: &str, max_units: usize) -> String {
     if text.encode_utf16().count() <= max_units {
@@ -19,21 +19,26 @@ pub fn fit(text: &str, max_units: usize) -> String {
     let mut units = 0;
     let mut head_end = 0;
     for (i, ch) in text.char_indices() {
-        if units + ch.len_utf16() > head { break; }
+        if units + ch.len_utf16() > head {
+            break;
+        }
         units += ch.len_utf16();
         head_end = i + ch.len_utf8();
     }
     let mut units = 0;
     let mut tail_start = text.len();
     for (i, ch) in text.char_indices().rev() {
-        if units + ch.len_utf16() > tail { break; }
+        if units + ch.len_utf16() > tail {
+            break;
+        }
         units += ch.len_utf16();
         tail_start = i;
     }
     format!("{}{marker}{}", &text[..head_end], &text[tail_start..])
 }
 
-pub fn ws_label<'a>(spaces: &'a [WorkspaceInfo], id: &'a str) -> &'a str {    spaces
+pub fn ws_label<'a>(spaces: &'a [WorkspaceInfo], id: &'a str) -> &'a str {
+    spaces
         .iter()
         .find(|s| s.id == id)
         .map(|s| s.label.as_str())
@@ -85,7 +90,12 @@ pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String 
             .map(|a| a.status.as_str())
             .collect();
         let emo = worst_status(mine.clone());
-        text.push_str(&format!("{emo} #{} {} — {} agent(s)\n", s.number, s.label, mine.len()));
+        text.push_str(&format!(
+            "{emo} #{} {} — {} agent(s)\n",
+            s.number,
+            s.label,
+            mine.len()
+        ));
     }
 
     text.push_str("\n🤖 agents\n");
@@ -117,7 +127,12 @@ pub fn build_ws_text(ws: &str, spaces: &[WorkspaceInfo], agents: &[AgentRow]) ->
     }
     for a in agents {
         let title: String = a.title.chars().take(36).collect();
-        text.push_str(&format!("{} {} [{}]\n   {title}\n", emoji(&a.status), a.kind, a.pane));
+        text.push_str(&format!(
+            "{} {} [{}]\n   {title}\n",
+            emoji(&a.status),
+            a.kind,
+            a.pane
+        ));
     }
     text
 }

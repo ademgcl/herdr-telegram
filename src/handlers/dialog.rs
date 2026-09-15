@@ -1,3 +1,9 @@
+use crate::{
+    handlers::model_scan::split_columns,
+    herdr::client::{get_agent, read_screen_visible},
+    jobs::{filter::deframe, segment::final_block, stream::join_trimmed},
+    state::AppState,
+};
 /// Blocked-pane dialogs (permission confirms, pickers, y/n prompts).
 /// herdr rejects `agent.prompt` on blocked panes, so answers go through
 /// keys/buttons/typed text. Two staleness traps live here:
@@ -7,21 +13,23 @@
 /// * taps landing mid-turnover: [`answer_tap`] swaps the tapped card in
 ///   place, strips dead buttons on resume, and never leaves first-dialog
 ///   buttons armed over a second dialog.
-use serde_json::{json, Value};
-use crate::{
-    handlers::model_scan::split_columns,
-    herdr::client::{get_agent, read_screen_visible},
-    jobs::{filter::deframe, segment::final_block, stream::join_trimmed},
-    state::AppState,
-};
+use serde_json::{Value, json};
 
 /// Lines that can never be options: key-hint rows and chrome-ish labels.
 /// NOTE: "confirm"/"cancel" are deliberately absent — real second
 /// dialogs read "Confirm   Cancel", and hint rows carrying those words
 /// always also carry ctrl/enter/esc/select (filtered on those instead).
 const HINT_WORDS: &[&str] = &[
-    "ctrl", "enter", "select", "fullscreen", "esc", "shortcut", "navigate",
-    "dismiss", "back", "quit",
+    "ctrl",
+    "enter",
+    "select",
+    "fullscreen",
+    "esc",
+    "shortcut",
+    "navigate",
+    "dismiss",
+    "back",
+    "quit",
 ];
 
 /// Selectable option labels out of a question card: the first line
@@ -42,7 +50,7 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
             && parts.len() <= 4
             && parts.iter().all(|p| {
                 let len = p.chars().count();
-                len >= 2 && len <= 24 && p.split_whitespace().count() <= 3
+                (2..=24).contains(&len) && p.split_whitespace().count() <= 3
             });
         if short {
             return parts;
@@ -107,7 +115,14 @@ pub(crate) fn blocked_card_text(q: &str) -> String {
 async fn send_with(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, screen: &[String]) {
     let q = waiting_lines(screen);
     let options = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
-    let mid = s.tg.send_msg(chat, thread, &blocked_card_text(&q), Some(blocked_kb(pane, &options))).await;
+    let mid =
+        s.tg.send_msg(
+            chat,
+            thread,
+            &blocked_card_text(&q),
+            Some(blocked_kb(pane, &options)),
+        )
+        .await;
     s.blocked_sig.lock().await.insert(pane.to_string(), q);
     s.remember(chat, mid, pane).await;
 }
@@ -141,7 +156,13 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         return false;
     }
     let sig = dialog_sig(&screen);
-    if s.blocked_sig.lock().await.get(pane).map(|v| v == &sig).unwrap_or(false) {
+    if s.blocked_sig
+        .lock()
+        .await
+        .get(pane)
+        .map(|v| v == &sig)
+        .unwrap_or(false)
+    {
         return false;
     }
     s.seen.lock().await.insert(pane.to_string(), screen.clone());
@@ -174,7 +195,10 @@ mod tests {
             "Allow once   Allow always   Reject",
             "ctrl+f fullscreen  ⇆ select  enter confirm",
         ]);
-        assert_eq!(parse_options(&lines), vec!["Allow once", "Allow always", "Reject"]);
+        assert_eq!(
+            parse_options(&lines),
+            vec!["Allow once", "Allow always", "Reject"]
+        );
     }
 
     #[test]

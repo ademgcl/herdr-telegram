@@ -1,3 +1,8 @@
+use crate::{
+    handlers::dialog::send_blocked_card, herdr::client::read_screen_adaptive, jobs::job::Job,
+    jobs::segment::final_block, jobs::stream::join_trimmed, notifier::observe_status,
+    state::AppState, types::MAX_MSG_UNITS, ui::chunks,
+};
 /// Prompt result finalization: turn the live message into the final card.
 /// Split from `runner` (300-line file limit). `watch_job` calls
 /// `finalize` on settle; `enqueue_prompt` reports submit errors.
@@ -5,17 +10,6 @@
 /// watcher loop retries instead of retiring the intent.
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use crate::{
-    handlers::dialog::send_blocked_card,
-    herdr::client::read_screen_adaptive,
-    jobs::job::Job,
-    jobs::segment::final_block,
-    jobs::stream::join_trimmed,
-    notifier::observe_status,
-    state::AppState,
-    types::MAX_MSG_UNITS,
-    ui::chunks,
-};
 
 /// Turn the live message into the final result card from the generic,
 /// provider-agnostic screen stream, arbitrated against one settled
@@ -28,7 +22,7 @@ pub async fn finalize(
     job: &Arc<Job>,
     settled: &str,
     live_mid: &mut Option<i64>,
-    acc: &mut Vec<String>,
+    acc: &mut [String],
 ) -> bool {
     // Fresh reply only: the last segment after tool calls, reasoning
     // headers and the prompt echo — earlier turns and intermediate work
@@ -58,9 +52,15 @@ pub async fn finalize(
         let (chat, th) = *job.dest.lock().await;
         // Reuse the live message slot when there is one.
         if let Some(mid) = live_mid.take() {
-            s.tg.edit_msg(chat, mid, "⛔ blocked — needs input (see next message)", None).await;
+            s.tg.edit_msg(
+                chat,
+                mid,
+                "⛔ blocked — needs input (see next message)",
+                None,
+            )
+            .await;
         }
-        send_blocked_card(&s, chat, th, pane).await;
+        send_blocked_card(s, chat, th, pane).await;
         // Silent icon sync (later observations dedupe via blocked_sig).
         observe_status(s, pane, settled, true, "job").await;
         s.last_done
@@ -95,7 +95,11 @@ pub async fn finalize(
         .insert(pane.to_string(), std::time::Instant::now());
     s.seen.lock().await.insert(pane.to_string(), snapshot);
     let (chat, th) = *job.dest.lock().await;
-    println!("[prompt] finalize {pane}: {} part(s), body {} chars", parts.len(), body.len());
+    println!(
+        "[prompt] finalize {pane}: {} part(s), body {} chars",
+        parts.len(),
+        body.len()
+    );
     for (i, part) in parts.iter().enumerate() {
         match (i, *live_mid) {
             (0, Some(mid)) => {
@@ -232,7 +236,10 @@ mod tests {
     fn test_starved_stream_yields_to_settled_screen() {
         let acc = v(&["  pass cleanly."]);
         let body = select_final_body(&acc, &agy_screen(), "understand the project");
-        assert!(body.contains("Let me know"), "full answer delivered: {body:?}");
+        assert!(
+            body.contains("Let me know"),
+            "full answer delivered: {body:?}"
+        );
         assert!(body.len() > 100);
     }
 
@@ -243,7 +250,10 @@ mod tests {
         let mut screen = v(&["older turn prose from last week that goes on a bit"]);
         screen.extend(agy_screen());
         let body = select_final_body(&acc, &screen, "status?");
-        assert_eq!(body, "The project has three services, all green and deployed.");
+        assert_eq!(
+            body,
+            "The project has three services, all green and deployed."
+        );
     }
 
     #[test]
@@ -274,7 +284,10 @@ mod tests {
         let err = "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller";
         let screen = v(&["  ┃", &format!("  ┃  {err}"), "╹▀▀▀▀"]);
         let body = select_final_body(&acc, &screen, "do it");
-        assert!(body.contains("invalid_request_error"), "error surfaced: {body:?}");
+        assert!(
+            body.contains("invalid_request_error"),
+            "error surfaced: {body:?}"
+        );
         assert!(!body.contains("three services"));
     }
 }

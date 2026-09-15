@@ -9,7 +9,7 @@
 ///
 /// Default view is the 7-item free-Zen shortlist — never a full picker
 /// dump. Anything else goes through `/model <search>` (e.g. `/model gpt`).
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::time::{Duration, sleep};
 
 use super::model_parse::{FREE_ZEN, footer_model, norm};
@@ -23,9 +23,16 @@ use crate::{
 /// names a provider — avoids landing on same-name OpenRouter rows.
 pub fn search_filter(q: &str) -> String {
     let low = q.to_lowercase();
-    let providerish = ["zen", "openrouter", "anthropic", "openai", "google", "opencode"]
-        .iter()
-        .any(|p| low.contains(p));
+    let providerish = [
+        "zen",
+        "openrouter",
+        "anthropic",
+        "openai",
+        "google",
+        "opencode",
+    ]
+    .iter()
+    .any(|p| low.contains(p));
     if providerish {
         q.to_lowercase()
     } else {
@@ -94,22 +101,29 @@ pub async fn switch_by_filter(
     marker: &str,
 ) {
     s.set_focus(pane).await;
-    s.tg
-        .send_msg(chat, thread, &format!("⏳ switching {pane} → `{marker}`…"), None)
-        .await;
+    s.tg.send_msg(
+        chat,
+        thread,
+        &format!("⏳ switching {pane} → `{marker}`…"),
+        None,
+    )
+    .await;
     match switch_model(s, pane, filter, marker).await {
         // Set means set: plain confirmation, NO picker keyboard back —
         // re-offering options after success only confuses.
         Ok(footer) => {
-            let mid = s
-                .tg
-                .send_msg(chat, thread, &format!("✅ model set: `{footer}`\n[{pane}]"), None)
+            let mid =
+                s.tg.send_msg(
+                    chat,
+                    thread,
+                    &format!("✅ model set: `{footer}`\n[{pane}]"),
+                    None,
+                )
                 .await;
             s.remember(chat, mid, pane).await;
         }
         Err(e) => {
-            s.tg
-                .send_msg(chat, thread, &format!("⚠️ switch failed: {e}"), None)
+            s.tg.send_msg(chat, thread, &format!("⚠️ switch failed: {e}"), None)
                 .await;
         }
     }
@@ -188,7 +202,9 @@ async fn switch_inner(
     // text shares terminal rows with picker rows and shifts columns.
     if !picker_hit(&screen, filter, marker) {
         close_picker(s, pane).await;
-        return Err(format!("no model matches '{filter}' — stale card? run /model again for a fresh list"));
+        return Err(format!(
+            "no model matches '{filter}' — stale card? run /model again for a fresh list"
+        ));
     }
     // Re-check idleness: typing must never leak into a working session.
     let busy = get_agent(&s.cfg.socket, pane)
@@ -232,8 +248,8 @@ pub async fn current_model(s: &AppState, pane: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model_parse::free_tap;
+    use super::*;
 
     #[test]
     fn test_search_filter_prefers_zen() {
@@ -254,13 +270,20 @@ mod tests {
         // 7 free models, 2 per row → 4 rows; pane survives splitn(3).
         assert_eq!(kb.as_array().unwrap().len(), 4);
         let data = kb[0][0]["callback_data"].as_str().unwrap();
-        assert_eq!(data.splitn(3, ':').collect::<Vec<_>>(), vec!["M", "0", "w1:p1"]);
+        assert_eq!(
+            data.splitn(3, ':').collect::<Vec<_>>(),
+            vec!["M", "0", "w1:p1"]
+        );
         // Button labels are the shorts — full names never fit.
         assert_eq!(kb[0][0]["text"].as_str().unwrap(), "Big Pickle");
         assert_eq!(kb[0][1]["text"].as_str().unwrap(), "Muse Spark 1.3");
-        assert!(kb.as_array().unwrap().iter().flat_map(|r| r.as_array().unwrap()).all(|b| {
-            b["text"].as_str().unwrap().chars().count() <= 20
-        }));
+        assert!(
+            kb.as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|r| r.as_array().unwrap())
+                .all(|b| { b["text"].as_str().unwrap().chars().count() <= 20 })
+        );
     }
 
     #[test]

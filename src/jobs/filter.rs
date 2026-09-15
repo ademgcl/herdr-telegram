@@ -1,8 +1,8 @@
-/// Provider-agnostic TUI chrome filtering.
-///
-/// herdr exposes only raw terminal text for every agent; frame chrome,
-/// footers and progress noise are dropped here (see segment.rs for reply
-/// extraction out of multi-turn scrollback).
+//! Provider-agnostic TUI chrome filtering.
+//!
+//! herdr exposes only raw terminal text for every agent; frame chrome,
+//! footers and progress noise are dropped here (see segment.rs for reply
+//! extraction out of multi-turn scrollback).
 
 /// Substrings that only appear in TUI footers, status bars and frame
 /// chrome across providers. Kept narrow (key-hint combos, middle-dot
@@ -44,13 +44,33 @@ const CHROME_MARKERS: &[&str] = &[
 /// collapsed sections and herdr/bot log lines. Anchored (not contains) so
 /// markdown prose, code and lists survive.
 const CHROME_PREFIXES: &[&str] = &[
-    "→", "←", "●", "⎿", "☰", "❯", "›",
-    "Thought", "+ Thought",
-    "Thinking", "Working…", "Working...",
+    "→",
+    "←",
+    "●",
+    "⎿",
+    "☰",
+    "❯",
+    "›",
+    "Thought",
+    "+ Thought",
+    "Thinking",
+    "Working…",
+    "Working...",
     "Click to expand",
-    "Todos", "# Todos",
-    "[✓]", "[•]", "[x]", "[X]", "[ ]",
-    "[herdr]", "[tg]", "[forum]", "[watcher]", "[prompt]", "[events]", "[alert]",
+    "Todos",
+    "# Todos",
+    "[✓]",
+    "[•]",
+    "[x]",
+    "[X]",
+    "[ ]",
+    "[herdr]",
+    "[tg]",
+    "[forum]",
+    "[watcher]",
+    "[prompt]",
+    "[events]",
+    "[alert]",
 ];
 
 /// Spinner braille frames (⠋⠙⠹…) — pure progress, never content.
@@ -113,11 +133,8 @@ pub fn chrome_filtered(lines: &[String]) -> Vec<String> {
 /// extraction — NOT the live stream (there, frames usefully mark noise).
 pub fn deframe(line: &str) -> String {
     let mut t = line.trim();
-    loop {
-        match t.strip_prefix(|c: char| matches!(c, '┃' | '│' | '|')) {
-            Some(rest) => t = rest.trim_start(),
-            None => break,
-        }
+    while let Some(rest) = t.strip_prefix(|c: char| matches!(c, '┃' | '│' | '|')) {
+        t = rest.trim_start();
     }
     t.to_string()
 }
@@ -161,9 +178,13 @@ mod tests {
 
     #[test]
     fn test_chrome_strips_agy_tui() {
-        assert!(is_chrome("────────────────────────────────────────────────"));
+        assert!(is_chrome(
+            "────────────────────────────────────────────────"
+        ));
         assert!(is_chrome(">"));
-        assert!(is_chrome("? for shortcuts             Gemini 3.8 Flash · high"));
+        assert!(is_chrome(
+            "? for shortcuts             Gemini 3.8 Flash · high"
+        ));
         // …but quoted/diff/table content and ASCII rules survive.
         assert!(!is_chrome("> quoted text"));
         assert!(!is_chrome("> added line"));

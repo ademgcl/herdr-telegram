@@ -1,22 +1,22 @@
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use serde_json::json;
-use tokio::time::{Duration, Instant};
+use crate::herdr::client::read_screen_adaptive;
+use crate::jobs::episode::BuzzEpisode;
+use crate::jobs::notices::{detect_limit, limit_card_text};
+use crate::notifier::LIMIT_REMIND_SECS;
 use crate::{
     handlers::dialog::send_blocked_card,
     herdr::client::{get_agent, read_screen, rpc_t},
     jobs::finalize::{edit_live, finalize, report},
     jobs::job::Job,
     jobs::segment::final_block,
-    jobs::stream::{delta, EvStream, WatchEvent},
+    jobs::stream::{EvStream, WatchEvent, delta},
     state::AppState,
-    types::{AgentRow, PromptRequest, LIVE_EDIT_COOLDOWN_SECS},
+    types::{AgentRow, LIVE_EDIT_COOLDOWN_SECS, PromptRequest},
     ui::tail_fit,
 };
-use crate::herdr::client::read_screen_adaptive;
-use crate::jobs::notices::{detect_limit, limit_card_text};
-use crate::jobs::episode::BuzzEpisode;
-use crate::notifier::LIMIT_REMIND_SECS;
+use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tokio::time::{Duration, Instant};
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
@@ -76,22 +76,24 @@ pub async fn enqueue_prompt(
         job.cancel.notify_waiters();
         let msg = e.to_string();
         if msg.contains("blocked") {
-            send_blocked_card(
+            send_blocked_card(&s, req.chat_id, req.message_thread_id, &pane).await;
+        } else {
+            report(
                 &s,
                 req.chat_id,
                 req.message_thread_id,
                 &pane,
+                &format!("⚠️ error: {e}"),
             )
             .await;
-        } else {
-            report(&s, req.chat_id, req.message_thread_id, &pane, &format!("⚠️ error: {e}")).await;
         }
         s.clear_pending(&pane).await;
         return;
     }
     // Delivered: durable intent so a restart re-arms this watcher instead
     // of eating the reply.
-    s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text).await;
+    s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
+        .await;
 }
 
 /// Watch the agent via herdr push-events: every output burst updates one live
@@ -164,7 +166,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             Err(e) => {
                 fails += 1;
                 if fails >= 12 {
-                    println!("[watcher] {pane} unreachable x{fails} ({e}) - backing off 60s, intent kept");
+                    println!(
+                        "[watcher] {pane} unreachable x{fails} ({e}) - backing off 60s, intent kept"
+                    );
                     tokio::time::sleep(Duration::from_secs(60)).await;
                     fails = 0;
                 }
@@ -221,14 +225,17 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                         true
                     }
                     _ => {
-                        map.insert(pane.clone(), (hit.kind.to_string(), std::time::Instant::now()));
+                        map.insert(
+                            pane.clone(),
+                            (hit.kind.to_string(), std::time::Instant::now()),
+                        );
                         false
                     }
                 }
             };
             if !dup {
                 let (chat, th) = *job.dest.lock().await;
-                let text = limit_card_text(&pane, &hit);
+                let text = limit_card_text(&pane, hit);
                 report(&s, chat, th, &pane, &text).await;
                 println!("[prompt] limit alert {pane}: {}", hit.kind);
             }
@@ -250,8 +257,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if fresh.is_empty() {
             continue;
         }
-    // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
-    // are resolved at display time so only the fresh reply is shown.
+        // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
+        // are resolved at display time so only the fresh reply is shown.
         acc.extend(fresh.iter().cloned());
         if acc.len() > 400 {
             let drop = acc.len() - 400;
@@ -280,7 +287,11 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
     // Retire only if the map still points at THIS watcher (no newer job took over)
     let mut map = s.jobs.lock().await;
-    if map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
+    if map
+        .get(&pane)
+        .map(|j| Arc::ptr_eq(j, &job))
+        .unwrap_or(false)
+    {
         map.remove(&pane);
     }
 }

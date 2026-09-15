@@ -9,7 +9,6 @@ mod topics;
 mod types;
 mod ui;
 
-use std::time::Duration;
 use crate::{
     config::cfg_from_env,
     herdr::{event_task, ping},
@@ -17,8 +16,9 @@ use crate::{
     notifier::reconcile,
     state::State,
     telegram::{get_updates, handle_update},
-    types::{Res, HERDR_PROTOCOL, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
+    types::{HERDR_PROTOCOL, Res, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
 };
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Res<()> {
@@ -45,7 +45,9 @@ async fn main() -> Res<()> {
                 if attempt == 5 {
                     break;
                 }
-                eprintln!("[herdr] ping failed (attempt {attempt}/5): {ping_err} — retrying in 10s");
+                eprintln!(
+                    "[herdr] ping failed (attempt {attempt}/5): {ping_err} — retrying in 10s"
+                );
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }

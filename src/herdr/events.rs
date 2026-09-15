@@ -1,14 +1,14 @@
-use std::time::Duration;
-use serde_json::{json, Value};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-};
 use crate::{
     herdr::client::list_agents,
     notifier::{observe_status, reconcile},
     state::AppState,
     types::Res,
+};
+use serde_json::{Value, json};
+use std::time::Duration;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::UnixStream,
 };
 
 pub async fn event_task(s: AppState) {
@@ -31,7 +31,9 @@ pub async fn event_task(s: AppState) {
 
 async fn run_stream(s: &AppState) -> Res<&'static str> {
     let started = tokio::time::Instant::now();
-    let agents = list_agents(&s.cfg.socket).await.map_err(|e| e.to_string())?;
+    let agents = list_agents(&s.cfg.socket)
+        .await
+        .map_err(|e| e.to_string())?;
     let subs: Vec<Value> = agents
         .iter()
         .map(|a| json!({"type": "pane.agent_status_changed", "pane_id": a.pane}))
@@ -66,14 +68,18 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
             return Ok("refresh");
         }
         let mut line = String::new();
-        let n = match tokio::time::timeout(Duration::from_secs(90), reader.read_line(&mut line)).await {
+        let n = match tokio::time::timeout(Duration::from_secs(90), reader.read_line(&mut line))
+            .await
+        {
             Err(_) => return Ok("idle timeout"),
             Ok(res) => res?,
         };
         if n == 0 {
             return Ok("connection closed");
         }
-        let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
         // NOTE: wire name is dotted ("pane.agent_status_changed", same as
         // the subscription type) — NOT underscored.
         if ev["event"].as_str() == Some("pane.agent_status_changed")

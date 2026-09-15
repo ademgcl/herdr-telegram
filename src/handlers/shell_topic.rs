@@ -16,11 +16,18 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     let cmd = bare_cmd(raw_cmd);
 
     if cmd == "/help" {
-        s.tg.send_msg(chat, Some(thread_id), &shell_help_text(pane), None).await;
+        s.tg.send_msg(chat, Some(thread_id), &shell_help_text(pane), None)
+            .await;
         return;
     }
     if cmd == "/quit" {
-        s.tg.send_msg(chat, Some(thread_id), "already in shell — type any command.", None).await;
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            "already in shell — type any command.",
+            None,
+        )
+        .await;
         return;
     }
     if cmd == "/kill" {
@@ -28,8 +35,15 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if cmd == "/split" {
-        let dir = match arg { "" | "right" => "right", "down" => "down", _ => {
-            s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]`", None).await; return; } };
+        let dir = match arg {
+            "" | "right" => "right",
+            "down" => "down",
+            _ => {
+                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]`", None)
+                    .await;
+                return;
+            }
+        };
         super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
         return;
     }
@@ -38,44 +52,82 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         s.runwait.lock().await.remove(&(chat, Some(thread_id)));
         s.typewait.lock().await.remove(&(chat, Some(thread_id)));
         let n = s.cancel_jobs_for(pane).await;
-        let msg = if n { "✋ cancelled pane job" } else { "shell mode — nothing running" };
+        let msg = if n {
+            "✋ cancelled pane job"
+        } else {
+            "shell mode — nothing running"
+        };
         s.tg.send_msg(chat, Some(thread_id), msg, None).await;
         return;
     }
-    if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await { return; }
+    if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
+        return;
+    }
     if cmd == "/read" || cmd == "/output" {
         let lines = arg.parse::<u32>().unwrap_or(60);
         match read_shell_output(&s.cfg.socket, pane, lines).await {
             Ok(out) => {
-                let body = if out.trim().is_empty() { "(no output)".into() } else { out };
+                let body = if out.trim().is_empty() {
+                    "(no output)".into()
+                } else {
+                    out
+                };
                 s.tg.send_msg(chat, Some(thread_id), &body, None).await;
             }
-            Err(e) => { s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None).await; }
+            Err(e) => {
+                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
+                    .await;
+            }
         }
         return;
     }
     if cmd == "/keys" {
         if arg.is_empty() {
-            s.tg.send_msg(chat, Some(thread_id), "usage: `/keys y enter`", None).await;
+            s.tg.send_msg(chat, Some(thread_id), "usage: `/keys y enter`", None)
+                .await;
             return;
         }
         let keys: Vec<&str> = arg.split_whitespace().collect();
         match send_pane_keys(&s.cfg.socket, pane, &keys).await {
-            Ok(_) => { s.tg.send_msg(chat, Some(thread_id), "⌨️ keys sent", None).await; }
-            Err(e) => { s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None).await; }
+            Ok(_) => {
+                s.tg.send_msg(chat, Some(thread_id), "⌨️ keys sent", None)
+                    .await;
+            }
+            Err(e) => {
+                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
+                    .await;
+            }
         }
         return;
     }
     if cmd == "/status" {
-        s.tg.send_msg(chat, Some(thread_id), &super::shell::shell_card_text(pane), None).await;
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            &super::shell::shell_card_text(pane),
+            None,
+        )
+        .await;
         return;
     }
     if cmd == "/model" {
-        s.tg.send_msg(chat, Some(thread_id), "no agent here — type `opencode` to start one.", None).await;
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            "no agent here — type `opencode` to start one.",
+            None,
+        )
+        .await;
         return;
     }
     if cmd.starts_with('/') {
-        s.tg.send_msg(chat, Some(thread_id), "unknown shell command — `/help` lists them.", None).await;
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            "unknown shell command — `/help` lists them.",
+            None,
+        )
+        .await;
         return;
     }
     // Bare message in a shell topic -> run it.
