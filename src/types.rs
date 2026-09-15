@@ -25,6 +25,7 @@ pub struct AgentDetail {
     pub status: String,
     pub ws: String,
     pub cwd: String,
+    pub branch: Option<String>,
 }
 
 impl From<AgentDetail> for AgentRow {

@@ -1,6 +1,9 @@
 use super::emoji::{emoji, worst_status};
 use crate::types::{AgentDetail, AgentRow, MAX_MSG_UNITS, WorkspaceInfo};
 
+#[cfg(test)]
+mod tests;
+
 pub fn fit(text: &str, max_units: usize) -> String {
     if text.encode_utf16().count() <= max_units {
         return text.to_string();
@@ -139,13 +142,18 @@ pub fn build_ws_text(ws: &str, spaces: &[WorkspaceInfo], agents: &[AgentRow]) ->
 }
 
 pub fn build_agent_card_text(a: &AgentDetail) -> String {
+    let branch_line = match &a.branch {
+        Some(b) => format!("\nbranch: 🌿 {b}"),
+        None => String::new(),
+    };
     format!(
-        "{} {} [{}]\nstatus: {}\nspace: {}\ncwd: {}\ntitle: {}",
+        "{} {} [{}]\nstatus: {}\nspace: {}{}\ncwd: {}\ntitle: {}",
         emoji(&a.status),
         a.kind,
         a.pane,
         a.status,
         a.ws,
+        branch_line,
         a.cwd,
         a.title,
     )
@@ -221,60 +229,4 @@ pub fn shell_help_text(pane: &str) -> String {
          • `/status` — shell card\n\
          • ✏️ rename this topic = renames the herdr pane (kept in sync)"
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_fit_short_text() {
-        let short = "Hello World";
-        assert_eq!(fit(short, 100), short);
-    }
-
-    #[test]
-    fn test_fit_truncation() {
-        let long = "A".repeat(100);
-        let fitted = fit(&long, 40);
-        assert!(fitted.contains("… [truncated] …"));
-        assert!(fitted.encode_utf16().count() <= 40);
-    }
-
-    #[test]
-    fn test_fit_non_ascii_no_panic() {
-        let s = format!("{}{}", "\u{1F600}".repeat(40), "\u{4E2D}".repeat(40));
-        let fitted = fit(&s, 40);
-        assert!(fitted.encode_utf16().count() <= 40);
-        assert!(fitted.contains("… [truncated] …"));
-    }
-
-    #[test]
-    fn test_topic_help_text() {
-        let help = topic_help_text("w1:p1", "claude");
-        assert!(help.contains("claude"));
-        assert!(help.contains("w1:p1"));
-        let shell = shell_help_text("w1:p1");
-        assert!(shell.contains("w1:p1"));
-        assert!(shell.contains("opencode"));
-    }
-
-    #[test]
-    fn test_ws_label() {
-        let spaces = vec![
-            WorkspaceInfo {
-                id: "w1".to_string(),
-                label: "shop".to_string(),
-                number: 1,
-            },
-            WorkspaceInfo {
-                id: "w2".to_string(),
-                label: "  ".to_string(),
-                number: 2,
-            },
-        ];
-        assert_eq!(ws_label(&spaces, "w1"), "shop");
-        assert_eq!(ws_label(&spaces, "w2"), "w2");
-        assert_eq!(ws_label(&spaces, "w3"), "w3");
-    }
 }

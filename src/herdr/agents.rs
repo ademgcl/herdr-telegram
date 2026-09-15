@@ -22,18 +22,91 @@ pub async fn list_agents(socket: &str) -> Res<Vec<AgentRow>> {
 pub async fn get_agent(socket: &str, pane: &str) -> Res<AgentDetail> {
     let v = rpc(socket, "agent.get", json!({"target": pane})).await?;
     let a = &v["agent"];
+    let cwd: String = a["foreground_cwd"]
+        .as_str()
+        .or(a["cwd"].as_str())
+        .unwrap_or("")
+        .into();
+    let branch = derive_branch(a, &cwd).await;
     Ok(AgentDetail {
         kind: a["agent"].as_str().unwrap_or("?").into(),
         pane: a["pane_id"].as_str().unwrap_or(pane).into(),
         title: a["terminal_title_stripped"].as_str().unwrap_or("").into(),
         status: a["agent_status"].as_str().unwrap_or("unknown").into(),
         ws: a["workspace_id"].as_str().unwrap_or("?").into(),
-        cwd: a["foreground_cwd"]
-            .as_str()
-            .or(a["cwd"].as_str())
-            .unwrap_or("")
-            .into(),
+        cwd,
+        branch,
     })
+}
+
+/// Pure parser for .git/HEAD content (e.g. `ref: refs/heads/main\n`).
+pub fn parse_branch_from_head(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+        let b = branch.trim();
+        if !b.is_empty() {
+            return Some(b.to_string());
+        }
+    } else if trimmed.len() >= 7 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        let short = &trimmed[..7.min(trimmed.len())];
+        return Some(format!("HEAD ({short})"));
+    }
+    None
+}
+
+/// Derive the git branch for an agent pane:
+/// 1. Direct field in herdr response (`branch` or `git_branch`).
+/// 2. Fast filesystem check on `.git/HEAD` or git worktree file.
+/// 3. Subprocess fallback with timeout: `git -C <cwd> branch --show-current`.
+pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
+    if let Some(b) = a["branch"].as_str().or_else(|| a["git_branch"].as_str()) {
+        let b = b.trim();
+        if !b.is_empty() {
+            return Some(b.to_string());
+        }
+    }
+
+    let path = cwd.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let cwd_path = std::path::Path::new(path);
+    let git_entry = cwd_path.join(".git");
+    if git_entry.is_dir() {
+        if let Ok(content) = tokio::fs::read_to_string(git_entry.join("HEAD")).await
+            && let Some(b) = parse_branch_from_head(&content)
+        {
+            return Some(b);
+        }
+    } else if git_entry.is_file()
+        && let Ok(content) = tokio::fs::read_to_string(&git_entry).await
+        && let Some(gitdir) = content.trim().strip_prefix("gitdir:")
+        && let Ok(head_content) =
+            tokio::fs::read_to_string(std::path::Path::new(gitdir.trim()).join("HEAD")).await
+        && let Some(b) = parse_branch_from_head(&head_content)
+    {
+        return Some(b);
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("git")
+            .args(["-C", path, "branch", "--show-current"])
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    if output.status.success() {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+
+    None
 }
 
 pub async fn read_agent_output(socket: &str, pane: &str, lines: u32) -> Res<String> {
@@ -67,4 +140,52 @@ pub async fn send_agent_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()>
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_branch_from_head() {
+        assert_eq!(
+            parse_branch_from_head("ref: refs/heads/main\n"),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            parse_branch_from_head("ref: refs/heads/feature/d7-branch"),
+            Some("feature/d7-branch".to_string())
+        );
+        assert_eq!(
+            parse_branch_from_head("3425da8982341234567890"),
+            Some("HEAD (3425da8)".to_string())
+        );
+        assert_eq!(parse_branch_from_head(""), None);
+        assert_eq!(parse_branch_from_head("invalid head"), None);
+    }
+
+    #[tokio::test]
+    async fn test_derive_branch_from_json() {
+        let a = json!({"branch": "feat-json"});
+        assert_eq!(derive_branch(&a, "").await, Some("feat-json".to_string()));
+        let a2 = json!({"git_branch": "feat-git-json"});
+        assert_eq!(
+            derive_branch(&a2, "").await,
+            Some("feat-git-json".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_derive_branch_from_filesystem() {
+        let a = json!({});
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let branch = derive_branch(&a, manifest_dir).await;
+        assert!(branch.is_some(), "should derive branch for this repo");
+    }
+
+    #[tokio::test]
+    async fn test_derive_branch_non_existent_dir() {
+        let a = json!({});
+        assert_eq!(derive_branch(&a, "/non/existent/path/xyz").await, None);
+    }
 }
