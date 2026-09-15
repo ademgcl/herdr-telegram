@@ -60,6 +60,24 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         }
     }
 
+    // Mode-independent dead-pane hygiene: DM-mode prompts can orphan
+    // jobs, durable intent, and per-pane maps for externally-closed
+    // panes (no topic mapping exists to trigger the forum close flow).
+    // Live panes are skipped; truly gone ones are cancelled + cleared.
+    {
+        let mut known: Vec<String> = s.jobs.lock().await.keys().cloned().collect();
+        known.extend(s.pending.lock().await.keys().cloned());
+        if !known.is_empty() {
+            let live = list_panes(&s.cfg.socket).await.unwrap_or_default();
+            for pane in known {
+                if !live.contains(&pane) {
+                    s.cancel_jobs_for(&pane).await;
+                    s.clear_pane(&pane).await;
+                }
+            }
+        }
+    }
+
     // 1:1 pane↔topic titles (herdr labels win here; native TG renames
     // flow back via forum_topic_edited). Self-guards when forum is off.
     sync_titles(s).await;

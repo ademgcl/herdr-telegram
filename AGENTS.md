@@ -61,7 +61,8 @@ src/
 │   ├── runner.rs           # Prompt submit + watcher (live → final card)
 │   ├── finalize.rs         # Settle arbitration: stream vs settled screen
 │   ├── notices.rs          # Limit/quota stall alerts
-│   ├── persist.rs          # Durable prompt intent (jobs.state) + boot recovery
+│   ├── persist.rs          # Durable prompt intent (jobs.state)
+│   ├── recover.rs          # Boot re-arm of orphaned watchers
 │   ├── segment.rs          # Fresh-reply extraction
 │   ├── stream.rs           # Event stream client, delta helpers
 │   └── filter.rs           # TUI chrome filtering
