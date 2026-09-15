@@ -34,6 +34,9 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if cmd == "/cancel" {
+        s.keywait.lock().await.remove(&(chat, Some(thread_id)));
+        s.runwait.lock().await.remove(&(chat, Some(thread_id)));
+        s.typewait.lock().await.remove(&(chat, Some(thread_id)));
         let n = s.cancel_jobs_for(pane).await;
         let msg = if n { "✋ cancelled pane job" } else { "shell mode — nothing running" };
         s.tg.send_msg(chat, Some(thread_id), msg, None).await;

@@ -58,9 +58,6 @@ async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> String {
 /// settles (see `await_shell_settle`).
 pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, cmd: &str) {
     s.set_focus(pane).await;
-    // Durable intent: a restart mid-settle recovers the tail instead of
-    // eating the reply (boot posts it once, then clears).
-    s.remember_pending(pane, chat, thread, cmd).await;
     let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         s.clear_pending(pane).await;
@@ -69,6 +66,9 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
             .await;
         return;
     }
+    // Durable intent: a restart mid-settle recovers the tail instead of
+    // eating the reply (boot posts it once, then clears).
+    s.remember_pending(pane, chat, thread, cmd).await;
     let out = await_shell_settle(s, pane, &before).await;
     let lines = out
         .lines()
@@ -226,13 +226,13 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     // Fresh shells start slow (rc files, version managers) — settle first.
     let before = shell_snapshot(s, &pane).await;
     let cmd = cmd.trim();
-    s.remember_pending(&pane, chat, thread, cmd).await;
     s.tg.send_msg(chat, thread, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
         s.clear_pending(&pane).await;
         s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
         return;
     }
+    s.remember_pending(&pane, chat, thread, cmd).await;
     let out = await_shell_settle(s, &pane, &before).await;
     let body = if out.trim().is_empty() { "(no output yet)".into() } else { out };
     let mid = s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(&pane))).await;

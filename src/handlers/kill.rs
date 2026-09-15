@@ -54,8 +54,9 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
         Ok(()) => {
             s.cancel_jobs_for(pane).await;
             s.clear_pane(pane).await;
-            s.topics.close_topic(pane).await;
-            s.topics.remove_mapping(pane);
+            if s.topics.close_topic(pane).await {
+                s.topics.remove_mapping(pane);
+            }
             s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None).await;
         }
         Err(e) => {

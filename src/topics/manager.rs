@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::Mutex,
+    time::Instant,
 };
 use crate::{
     telegram::client::TelegramClient,
@@ -13,6 +14,7 @@ pub struct TopicManager {
     tg: TelegramClient,
     /// Last icon set per pane — recolors fire only on real change.
     last_icon: Mutex<HashMap<String, String>>,
+    last_title_write: Mutex<HashMap<String, Instant>>,
 }
 
 impl TopicManager {
@@ -22,6 +24,7 @@ impl TopicManager {
             storage: TopicStorage::new(),
             tg,
             last_icon: Mutex::new(HashMap::new()),
+            last_title_write: Mutex::new(HashMap::new()),
         }
     }
 
@@ -35,6 +38,7 @@ impl TopicManager {
 
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
         self.last_icon.lock().unwrap().remove(pane);
+        self.last_title_write.lock().unwrap().remove(pane);
         self.storage.remove(pane)
     }
 
@@ -127,6 +131,7 @@ impl TopicManager {
     /// no API call, just the echo loop-guard.
     pub fn note_title(&self, pane: &str, title: &str) {
         self.storage.set_title(pane, title);
+        self.last_title_write.lock().unwrap().insert(pane.to_string(), Instant::now());
     }
 
     /// herdr→telegram half: rename the topic when the pane's desired
@@ -136,11 +141,18 @@ impl TopicManager {
         if self.storage.get_title(pane).as_deref() == Some(desired) {
             return;
         }
+        if let Some(t) = self.last_title_write.lock().unwrap().get(pane) {
+            if t.elapsed() < std::time::Duration::from_secs(5) {
+                println!("[topics] skip rename {pane}: recent title write");
+                return;
+            }
+        }
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else { return };
         match self.tg.set_topic_title(forum, thread, desired).await {
             Ok(()) => {
                 println!("[topics] renamed topic #{thread} ({pane}) to {desired:?}");
                 self.storage.set_title(pane, desired);
+                self.last_title_write.lock().unwrap().insert(pane.to_string(), Instant::now());
             }
             Err(e) => {
                 if crate::telegram::client::topic_missing(&e.to_string()) {
@@ -150,6 +162,7 @@ impl TopicManager {
                     // Already showing it — converged, store and stay quiet
                     // instead of retry-spamming every watchdog tick.
                     self.storage.set_title(pane, desired);
+                    self.last_title_write.lock().unwrap().insert(pane.to_string(), Instant::now());
                 } else {
                     eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}");
                 }

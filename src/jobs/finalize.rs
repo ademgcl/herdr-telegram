@@ -42,6 +42,10 @@ pub async fn finalize(
     let screen = read_screen_adaptive(&s.cfg.socket, pane).await;
     let body = select_final_body(acc, &screen, &prompt);
     let snapshot = screen;
+    if body.is_empty() && snapshot.is_empty() && acc.is_empty() {
+        println!("[prompt] finalize {pane}: read outage, keeping intent for retry");
+        return;
+    }
 
     // The card is the answer itself — never a status-word lead. Blocked
     // keeps the reply affordance. A blocked settle with no captured text
@@ -93,7 +97,11 @@ pub async fn finalize(
     println!("[prompt] finalize {pane}: {} part(s), body {} chars", parts.len(), body.len());
     for (i, part) in parts.iter().enumerate() {
         match (i, *live_mid) {
-            (0, Some(mid)) => s.tg.edit_msg(chat, mid, part, None).await,
+            (0, Some(mid)) => {
+                if s.tg.try_edit_msg(chat, mid, part, None).await.is_err() {
+                    report(s, chat, th, pane, part).await;
+                }
+            }
             _ => report(s, chat, th, pane, part).await,
         }
     }
@@ -134,7 +142,9 @@ pub async fn edit_live(
     text: &str,
 ) {
     if let Some(mid) = live_mid.take() {
-        s.tg.edit_msg(chat_id, mid, text, None).await;
+        if s.tg.try_edit_msg(chat_id, mid, text, None).await.is_err() {
+            report(s, chat_id, thread_id, pane, text).await;
+        }
     } else {
         report(s, chat_id, thread_id, pane, text).await;
     }

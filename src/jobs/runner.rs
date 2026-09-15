@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
 use tokio::time::{Duration, Instant};
 use crate::{
@@ -96,7 +95,7 @@ pub async fn enqueue_prompt(
 
 /// Watch the agent via herdr push-events: every output burst updates one live
 /// Telegram message; settle turns it into the final result card.
-async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
+pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut live_mid: Option<i64> = None;
     let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
     // Raw output since the prompt — the fresh reply is extracted from
@@ -161,12 +160,12 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 fails = 0;
                 a
             }
-            Err(_) => {
+            Err(e) => {
                 fails += 1;
                 if fails >= 12 {
-                    job.mark_stopped();
-                    s.clear_pending(&pane).await;
-                    break;
+                    println!("[watcher] {pane} unreachable x{fails} ({e}) - backing off 60s, intent kept");
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    fails = 0;
                 }
                 continue;
             }
@@ -235,7 +234,11 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         s.tg.typing(chat, th).await;
         let text = format!("🔄 working…\n\n{}", tail_fit(&seg, 3200));
         match live_mid {
-            Some(mid) => s.tg.edit_msg(chat, mid, &text, None).await,
+            Some(mid) => {
+                if s.tg.try_edit_msg(chat, mid, &text, None).await.is_err() {
+                    live_mid = s.tg.send_msg(chat, th, &text, None).await;
+                }
+            }
             None => live_mid = s.tg.send_msg(chat, th, &text, None).await,
         }
         last_edit = Instant::now();
@@ -245,49 +248,5 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut map = s.jobs.lock().await;
     if map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
         map.remove(&pane);
-    }
-}
-
-/// Boot recovery: re-arm watchers for prompts orphaned by a restart so
-/// their replies still land. Dead panes and >24h-old entries are dropped.
-pub async fn recover_pending(s: &AppState) {
-    let entries: Vec<(String, crate::jobs::persist::PendingPrompt)> =
-        s.pending.lock().await.clone().into_iter().collect();
-    if entries.is_empty() {
-        return;
-    }
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    for (pane, pp) in entries {
-        if now.saturating_sub(pp.started_unix) > 86400 {
-            println!("[recover] dropping stale {pane}");
-            s.clear_pending(&pane).await;
-            continue;
-        }
-        if get_agent(&s.cfg.socket, &pane).await.is_err() {
-            let alive = crate::herdr::client::list_panes(&s.cfg.socket)
-                .await
-                .unwrap_or_default()
-                .contains(&pane);
-            if alive {
-                if let Ok(tail) = crate::herdr::client::read_shell_output(&s.cfg.socket, &pane, 60).await {
-                    let tail = tail.trim().to_string();
-                    if !tail.is_empty() {
-                        report(s, pp.chat, pp.thread, &pane, &format!("recovered after restart:\n{tail}")).await;
-                    }
-                }
-                s.clear_pending(&pane).await;
-                println!("[recover] shell recovered {pane}");
-                continue;
-            }
-            println!("[recover] pane gone, dropping {pane}");
-            s.clear_pending(&pane).await;
-            continue;
-        }
-        let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-        let job = Job::new(baseline, pp.chat, pp.thread);
-        *job.prompt.lock().await = pp.prompt.clone();
-        s.jobs.lock().await.insert(pane.clone(), job.clone());
-        tokio::spawn(watch_job(s.clone(), pane.clone(), job));
-        println!("[recover] re-armed {pane}");
     }
 }

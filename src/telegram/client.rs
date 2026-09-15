@@ -70,7 +70,7 @@ impl TelegramClient {
                     }
                     let retryable = e
                         .downcast_ref::<reqwest::Error>()
-                        .map(|re| re.is_connect())
+                        .map(|re| re.is_connect() || re.is_timeout())
                         .unwrap_or(false);
                     if !retryable || attempt == 2 {
                         break;
@@ -89,6 +89,18 @@ impl TelegramClient {
         text: &str,
         keyboard: Option<Value>,
     ) {
+        let _ = self.try_edit_msg(chat_id, message_id, text, keyboard).await;
+    }
+
+    /// Fallible edit for live/final cards: caller falls back to a fresh
+    /// send when the message is gone (deleted topic, etc.).
+    pub async fn try_edit_msg(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+        keyboard: Option<Value>,
+    ) -> Res<()> {
         let body = fit_msg(text);
         let mut params = json!({
             "chat_id": chat_id,
@@ -100,11 +112,11 @@ impl TelegramClient {
         }
         for attempt in 0..3 {
             match self.call("editMessageText", params.clone(), Duration::from_secs(15)).await {
-                Ok(_) => return,
+                Ok(_) => return Ok(()),
                 Err(e) => {
                     let msg = e.to_string();
                     if msg.contains("message is not modified") {
-                        return;
+                        return Ok(());
                     }
                     if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
                         tokio::time::sleep(wait).await;
@@ -112,11 +124,12 @@ impl TelegramClient {
                     }
                     if attempt == 2 {
                         eprintln!("editMessageText failed: {}", self.redact(&msg));
-                        return;
+                        return Err(msg.into());
                     }
                 }
             }
         }
+        Err("editMessageText retries exhausted".into())
     }
 
     /// "typing…" indicator — lasts ~5s, repeat to sustain. Zero clutter.

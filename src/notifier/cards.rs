@@ -84,7 +84,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .unwrap_or(0);
     let display = display_status(&settled, settled_age);
     s.topics.sync_topic(&pane, &kind, raw_space, display).await;
-    if body.is_empty() {
+    if body.chars().count() < 10 {
         return;
     }
     post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await;

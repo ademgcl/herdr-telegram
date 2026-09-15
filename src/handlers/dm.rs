@@ -2,13 +2,13 @@ use serde_json::Value;
 use super::target::{dm_pane, resolve_target};
 use crate::{
     herdr::client::{
-        list_agents, list_workspaces,
-        read_agent_output, send_agent_keys,
+        get_agent, list_agents, list_workspaces,
+        read_agent_output, send_agent_keys, spawn_agent,
     },
     jobs::enqueue_prompt,
     state::AppState,
     ui::{
-        build_menu_text, help_text, main_menu_kb,
+        agent_card_kb, build_agent_card_text, build_menu_text, help_text, main_menu_kb, ws_label,
     },
 };
 
@@ -138,6 +138,34 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/spawn" {
+        let (kind, ws) = match arg.split_once(char::is_whitespace) {
+            Some((k, w)) => (k, Some(w)),
+            None if !arg.is_empty() => (arg, None),
+            _ => {
+                s.tg.send_msg(chat, None, "usage: /spawn <kind> [space] (e.g. /spawn opencode space-1)", None).await;
+                return;
+            }
+        };
+        s.tg.send_msg(chat, None, &format!("spawning {kind}..."), None).await;
+        match spawn_agent(&s.cfg.socket, kind, ws).await {
+            Ok(row) => {
+                let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+                let space = ws_label(&spaces, &row.ws);
+                if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space, &row.status).await {
+                    s.tg.send_msg(chat, None, &format!("Started {} [{}] in topic #{topic_th}", row.kind, row.pane), None).await;
+                } else {
+                    s.tg.send_msg(chat, None, &format!("Started {} [{}]", row.kind, row.pane), None).await;
+                }
+                s.set_focus(&row.pane).await;
+            }
+            Err(e) => {
+                s.tg.send_msg(chat, None, &format!("spawn failed: {e}"), None).await;
+            }
+        }
+        return;
+    }
+
     if cmd == "/model" {
         // `/model [target] [search]` — first token is a target only when it
         // resolves to a pane/kind; otherwise the whole arg is the search.
@@ -183,6 +211,34 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/status" {
+        let mut pane = match resolve_target(&rows, if arg.is_empty() { None } else { Some(arg) }) {
+            Some(r) => Some(r.pane),
+            None if !arg.is_empty() => None,
+            None => reply_pane.clone(),
+        };
+        if pane.is_none() {
+            if let Some(f) = s.get_focus().await.filter(|f| rows.iter().any(|r| &r.pane == f)) {
+                pane = Some(f);
+            } else {
+                pane = resolve_target(&rows, Some("")).map(|r| r.pane);
+            }
+        }
+        let Some(pane) = pane else {
+            s.tg.send_msg(chat, None, "unknown target — see /agents", None).await;
+            return;
+        };
+        match get_agent(&s.cfg.socket, &pane).await {
+            Ok(agent) => {
+                let mid = s.tg.send_msg(chat, None, &build_agent_card_text(&agent), Some(agent_card_kb(&pane, &agent.ws))).await;
+                s.remember(chat, mid, &pane).await;
+                s.set_focus(&pane).await;
+            }
+            Err(e) => { s.tg.send_msg(chat, None, &format!("status failed: {e}"), None).await; }
+        }
+        return;
+    }
+
     if cmd.starts_with('/') {
         s.tg.send_msg(chat, None, "unknown command — /help", None).await;
         return;
@@ -200,7 +256,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
 
     // Bare text prompt routing
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let explicit = if rest.is_empty() { None } else { resolve_target(&rows, Some(head)).map(|r| (r, rest.to_string())) };
+    let explicit = if rest.is_empty() || rows.len() <= 1 { None } else { resolve_target(&rows, Some(head)).map(|r| (r, rest.to_string())) };
     let via_reply = reply_pane.as_deref().and_then(|p| rows.iter().find(|r| r.pane == p)).cloned();
     let via_focus = s.get_focus().await.and_then(|p| rows.iter().find(|r| r.pane == p)).cloned();
 

@@ -2,6 +2,7 @@ pub mod callback;
 pub mod dialog;
 pub mod dm;
 pub mod forum;
+pub mod general;
 pub mod interactive;
 pub mod kill;
 pub mod model;

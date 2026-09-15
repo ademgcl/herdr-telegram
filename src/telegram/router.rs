@@ -11,8 +11,12 @@ pub async fn handle_update(s: AppState, u: &Value) {
         "callback"
     } else if u.get("my_chat_member").is_some() {
         "my_chat_member"
-    } else {
+    } else if u.get("message").is_some() {
         "message"
+    } else if u.get("edited_message").is_some() {
+        "edited_message"
+    } else {
+        "unknown"
     };
     println!("[tg] update {kind}");
     if u.get("callback_query").is_some() {
@@ -33,7 +37,7 @@ pub async fn handle_update(s: AppState, u: &Value) {
 
     let msg = &u["message"];
     if msg.is_null() {
-        println!("[tg] ignoring unknown update kind");
+        println!("[tg] ignoring unknown update kind: {kind}");
         return;
     }
 

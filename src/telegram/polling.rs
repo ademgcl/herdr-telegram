@@ -10,7 +10,7 @@ pub async fn get_updates(tg: &TelegramClient, offset: u64, poll_secs: i64) -> Re
                 "offset": offset,
                 "timeout": poll_secs,
                 "limit": 100,
-                "allowed_updates": ["message", "callback_query", "my_chat_member"],
+                "allowed_updates": ["message", "edited_message", "callback_query", "my_chat_member"],
             }),
             Duration::from_secs(poll_secs as u64 + 10),
         )

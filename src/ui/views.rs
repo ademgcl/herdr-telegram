@@ -21,7 +21,7 @@ pub fn fit(text: &str, max_units: usize) -> String {
     for (i, ch) in text.char_indices() {
         if units + ch.len_utf16() > head { break; }
         units += ch.len_utf16();
-        head_end = i + ch.len_utf16();
+        head_end = i + ch.len_utf8();
     }
     let mut units = 0;
     let mut tail_start = text.len();
@@ -217,6 +217,14 @@ mod tests {
         let fitted = fit(&long, 40);
         assert!(fitted.contains("… [truncated] …"));
         assert!(fitted.encode_utf16().count() <= 40);
+    }
+
+    #[test]
+    fn test_fit_non_ascii_no_panic() {
+        let s = format!("{}{}", "\u{1F600}".repeat(40), "\u{4E2D}".repeat(40));
+        let fitted = fit(&s, 40);
+        assert!(fitted.encode_utf16().count() <= 40);
+        assert!(fitted.contains("… [truncated] …"));
     }
 
     #[test]

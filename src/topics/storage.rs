@@ -68,7 +68,17 @@ impl TopicStorage {
                 pins: HashMap::new(),
             };
         }
-        serde_json::from_str::<Store>(&txt).unwrap_or_default()
+        serde_json::from_str::<Store>(&txt).unwrap_or_else(|_| {
+            if !txt.trim().is_empty() {
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
+                let _ = fs::copy(path, &bak);
+            }
+            Store::default()
+        })
     }
 
     fn save(&self, s: &Store) {

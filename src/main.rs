@@ -32,7 +32,27 @@ async fn main() -> Res<()> {
     let s = State::new(cfg)?;
 
     // Verify Herdr connectivity and protocol
-    let pong = ping(&s.cfg.socket).await?;
+    let mut pong = None;
+    let mut ping_err = String::new();
+    for attempt in 1..=5 {
+        match ping(&s.cfg.socket).await {
+            Ok(p) => {
+                pong = Some(p);
+                break;
+            }
+            Err(e) => {
+                ping_err = e.to_string();
+                if attempt == 5 {
+                    break;
+                }
+                eprintln!("[herdr] ping failed (attempt {attempt}/5): {ping_err} — retrying in 10s");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+    let Some(pong) = pong else {
+        return Err(format!("herdr ping failed after 5 attempts: {ping_err}").into());
+    };
     println!(
         "[herdr] server v{}, protocol {} (bot built against protocol {HERDR_PROTOCOL})",
         pong["version"], pong["protocol"]
@@ -92,7 +112,7 @@ async fn main() -> Res<()> {
                         }
                     }
                     Err(e) => {
-                        let msg = e.to_string();
+                        let msg = s.tg.redact(&e.to_string());
                         if msg.contains("Conflict") {
                             eprintln!("[tg] poll conflict (overlap), backing off 30s: {msg}");
                             tokio::time::sleep(Duration::from_secs(30)).await;

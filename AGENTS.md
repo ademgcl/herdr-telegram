@@ -35,11 +35,12 @@ src/
 │   ├── mod.rs              # Re-exports
 │   ├── storage.rs          # Pane↔thread map in topics.state
 │   ├── names.rs            # Tags, 1:1 title rule, icons, done→idle decay
-│   └── manager.rs          # Creation (pane-id named), icon + title sync, lifecycle
+│   └── manager.rs          # Creation (friendly tag·space named), icon + title sync, lifecycle
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
 │   ├── dm.rs               # DM messages + commands
 │   ├── forum.rs            # Topic messages + commands
+│   ├── general.rs          # General-topic commands
 │   ├── callback.rs         # Inline keyboard callbacks
 │   ├── dialog.rs           # Blocked cards, content-addressed refresh
 │   ├── tap.rs              # Taps (in-place update) + typed answers
@@ -56,6 +57,7 @@ src/
 ├── jobs/                   # Agent prompt execution
 │   ├── mod.rs              # Re-exports
 │   ├── job.rs              # Per-pane job state, cancel notify
+│   ├── episode.rs          # Stall-episode gate for mid-run alerts
 │   ├── runner.rs           # Prompt submit + watcher (live → final card)
 │   ├── finalize.rs         # Settle arbitration: stream vs settled screen
 │   ├── notices.rs          # Limit/quota stall alerts
@@ -80,13 +82,13 @@ src/
 ## 3. Forum Topics (`TELEGRAM_FORUM_CHAT_ID` set)
 
 - One topic per pane (agents and shells alike).
-- Titles sync 1:1 with herdr pane names: pane label when set, else the unique pane id (`w8:p1`). Last synced title persists in `topics.state`.
+- Titles sync 1:1 with herdr pane names: pane label when set, else the friendly default (`o2 · tg`). Last synced title persists in `topics.state`.
 - Either side renames: native topic rename → `pane.rename`; herdr-side rename → topic renamed on the ≤60s watchdog. Stored-title compare both ways, so edits converge without loops.
 - Known limit: a rename made while the bot is down can diverge (no read API for topic names) — last-observed-writer wins; redelivered updates heal it.
 - State lives on the **icon**, synced silently (never notifies): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown. Fresh `done` decays to idle after 15 quiet min.
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
-- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/cancel` `/help`.
+- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`.
 - General topic: `/agents` `/spawn` `/space` `/shell` `/help`.
 - Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 

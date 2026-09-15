@@ -30,6 +30,7 @@ pub async fn event_task(s: AppState) {
 }
 
 async fn run_stream(s: &AppState) -> Res<&'static str> {
+    let started = tokio::time::Instant::now();
     let agents = list_agents(&s.cfg.socket).await.map_err(|e| e.to_string())?;
     let subs: Vec<Value> = agents
         .iter()
@@ -61,6 +62,9 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
     }
 
     loop {
+        if started.elapsed() > Duration::from_secs(300) {
+            return Ok("refresh");
+        }
         let mut line = String::new();
         let n = match tokio::time::timeout(Duration::from_secs(90), reader.read_line(&mut line)).await {
             Err(_) => return Ok("idle timeout"),

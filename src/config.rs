@@ -1,7 +1,7 @@
 use std::env;
 use crate::types::Res;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Cfg {
     pub token: String,
     pub socket: String,

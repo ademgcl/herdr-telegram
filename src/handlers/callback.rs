@@ -1,7 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 use crate::{
-    types::STALE_SECS,
     herdr::client::{
         create_workspace, get_agent, list_agents, list_workspaces,
         read_agent_output, read_pane_output, spawn_agent,
@@ -16,6 +15,7 @@ use crate::{
 pub async fn handle_callback(s: AppState, cbq: &Value) {
     let Some(from) = cbq["from"]["id"].as_i64() else { return };
     if !s.cfg.owners.contains(&from) {
+        println!("[callback] ignoring non-owner tap from {from}");
         return;
     }
     let chat = cbq["message"]["chat"]["id"].as_i64();
@@ -31,7 +31,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     let thread = cbq["message"]["message_thread_id"].as_i64();
     let date = cbq["message"]["date"].as_u64().unwrap_or(0);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    if now.saturating_sub(date) > STALE_SECS {
+    if now.saturating_sub(date) > 86400 {
         println!("[callback] dropping stale tap");
         return;
     }
@@ -42,9 +42,11 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     match (head, rest) {
         ("n", None) => {
             s.tg.edit_msg(chat, msg_id, "spawn which agent?", Some(spawn_kb(None))).await;
+            s.targets.lock().await.remove(&(chat, msg_id));
         }
         ("n", Some(ws)) => {
             s.tg.edit_msg(chat, msg_id, &format!("spawn into {ws}: which agent?"), Some(spawn_kb(Some(ws)))).await;
+            s.targets.lock().await.remove(&(chat, msg_id));
         }
         ("N", None) => handle_new_space(&s, chat, msg_id, thread).await,
         ("k", Some(r)) => match r.split_once(':') {
@@ -63,18 +65,21 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         ("p", Some(pane)) => {
             let out = read_pane_output(&s.cfg.socket, pane, 120).await.unwrap_or_default();
             let body = if out.is_empty() { "(no output)".into() } else { out };
-            s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(pane))).await;
+            let mid = s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(pane))).await;
+            s.remember(chat, mid, pane).await;
         }
         ("m", None) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
             s.tg.edit_msg(chat, msg_id, &build_menu_text(&spaces, &agents), Some(main_menu_kb(&spaces, &agents))).await;
+            s.targets.lock().await.remove(&(chat, msg_id));
         }
         ("w", Some(ws)) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
             let my_agents: Vec<_> = agents.into_iter().filter(|a| a.ws == *ws).collect();
             s.tg.edit_msg(chat, msg_id, &build_ws_text(ws, &spaces, &my_agents), Some(workspace_kb(ws, &my_agents))).await;
+            s.targets.lock().await.remove(&(chat, msg_id));
         }
         ("a", Some(pane)) => {
             s.remember(chat, Some(msg_id), pane).await;
