@@ -60,6 +60,13 @@ pub async fn observe_status(
     if old.as_deref() == Some("blocked") && new_status != "blocked" {
         s.blocked_sig.lock().await.remove(pane);
     }
+    // Leaving working behind — any stall episode (limit alert, stuck
+    // timer, absence streak) dies with it so the next working stall
+    // always re-alerts fresh instead of being suppressed by the prior
+    // episode's 30-min remind window / stale stuck timer.
+    if old.as_deref() == Some("working") && new_status != "working" {
+        s.clear_limit_episode(pane).await;
+    }
 
     // Agent identity once per observation — shared by pins, cards and
     // alerts below.

@@ -53,9 +53,19 @@ pub struct State {
     pub settled_at: Mutex<HashMap<String, std::time::Instant>>,
     /// Last rate-limit episode alerted per pane: (kind, alerted_at).
     /// Watchdog-owned (prompt watchers dedupe locally): entries are
-    /// cleared when the pattern leaves the screen so the next episode
-    /// re-alerts, and re-reminded after a long stall.
+    /// cleared after consecutive confirmed-clean reads so the next episode
+    /// re-alerts, and re-reminded after a long stall. Empty/outage reads
+    /// preserve the entry (unknown ≠ clean) so flaps never re-alert.
     pub limit_alert: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// First sight of the current gated (`provider`/`error`) banner per
+    /// pane: (kind, first_seen). Drives the stuck gate on the 60s watchdog
+    /// cadence (transient blips stay silent, persistent stalls buzz once).
+    /// Cleared with the episode (confirmed-clean or pane clear).
+    pub limit_seen: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// Consecutive confirmed-clean (non-empty, banner-free) watchdog reads
+    /// per pane. The episode clears after 2 — a single scroll/RPC flap
+    /// never re-arms the alert.
+    pub limit_miss: Mutex<HashMap<String, u32>>,
     /// Last displayed blocked-dialog signature per pane (question +
     /// options). Consecutive dialogs often arrive with NO status change
     /// (blocked→blocked), so content — not just transitions — decides
@@ -109,6 +119,8 @@ impl State {
             modelop: Mutex::new(HashSet::new()),
             settled_at: Mutex::new(HashMap::new()),
             limit_alert: Mutex::new(HashMap::new()),
+            limit_seen: Mutex::new(HashMap::new()),
+            limit_miss: Mutex::new(HashMap::new()),
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashSet::new()),
         }))
@@ -196,6 +208,15 @@ impl State {
         }
     }
 
+    /// End one pane's stall episode (limit alert, stuck timer, absence
+    /// streak) — called when the pane leaves `working`, so the next stall
+    /// re-alerts fresh instead of inheriting the prior episode's dedup.
+    pub async fn clear_limit_episode(&self, pane: &str) {
+        self.limit_alert.lock().await.remove(pane);
+        self.limit_seen.lock().await.remove(pane);
+        self.limit_miss.lock().await.remove(pane);
+    }
+
     pub async fn clear_pane(&self, pane: &str) {
         self.status.lock().await.remove(pane);
         self.last_done.lock().await.remove(pane);
@@ -203,7 +224,7 @@ impl State {
         self.last_change.lock().await.remove(pane);
         self.debounce.lock().await.remove(pane);
         self.settled_at.lock().await.remove(pane);
-        self.limit_alert.lock().await.remove(pane);
+        self.clear_limit_episode(pane).await;
         self.blocked_sig.lock().await.remove(pane);
         self.modelop.lock().await.remove(pane);
         self.blockop.lock().await.remove(pane);

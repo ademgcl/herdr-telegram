@@ -44,6 +44,13 @@ pub async fn recover_pending(s: &AppState) {
             continue;
         }
         let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+        // Defensive: never run two watchers on one pane (two episodes =
+        // double alerts for the same stall). Boot runs once with an empty
+        // map, but a re-entrant call must not duplicate.
+        if s.jobs.lock().await.contains_key(&pane) {
+            println!("[recover] already watched {pane}, skipping");
+            continue;
+        }
         let job = Job::new(baseline, pp.chat, pp.thread);
         *job.prompt.lock().await = pp.prompt.clone();
         s.jobs.lock().await.insert(pane.clone(), job.clone());

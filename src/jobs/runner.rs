@@ -16,6 +16,7 @@ use crate::{
 use crate::herdr::client::read_screen_adaptive;
 use crate::jobs::notices::{detect_limit, limit_card_text};
 use crate::jobs::episode::BuzzEpisode;
+use crate::notifier::LIMIT_REMIND_SECS;
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
@@ -197,12 +198,40 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // and post one NEW (buzzing) card per episode.
         // (Runs on the raw screen, before chrome filtering, and outside
         // the edit cooldown so stalls surface even when nothing streams.)
+        // Empty read = outage/unknown: preserve the episode (never reset
+        // dedup on a failed read) and retry next tick.
         let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
-        if let Some(hit) = episode.tick(detect_limit(&screen).as_ref(), std::time::Instant::now()) {
-            let (chat, th) = *job.dest.lock().await;
-            let text = limit_card_text(&pane, &hit);
-            report(&s, chat, th, &pane, &text).await;
-            println!("[prompt] limit alert {pane}: {}", hit.kind);
+        if screen.is_empty() {
+            episode.note_empty();
+        } else if let Some(hit) =
+            episode.tick(detect_limit(&screen).as_ref(), std::time::Instant::now())
+        {
+            // Cross-path dedup: the watchdog shares `limit_alert` — if it
+            // (or a prior watcher) already buzzed this kind within the
+            // remind window, stay silent so handoffs never double-page.
+            // Check + claim hold one lock guard (atomic): concurrent
+            // watchdog ticks then see the claim and stay silent too.
+            let dup = {
+                let mut map = s.limit_alert.lock().await;
+                match map.get(&pane) {
+                    Some((k, t))
+                        if k == hit.kind
+                            && t.elapsed() < Duration::from_secs(LIMIT_REMIND_SECS) =>
+                    {
+                        true
+                    }
+                    _ => {
+                        map.insert(pane.clone(), (hit.kind.to_string(), std::time::Instant::now()));
+                        false
+                    }
+                }
+            };
+            if !dup {
+                let (chat, th) = *job.dest.lock().await;
+                let text = limit_card_text(&pane, &hit);
+                report(&s, chat, th, &pane, &text).await;
+                println!("[prompt] limit alert {pane}: {}", hit.kind);
+            }
         }
 
         // Stream whatever is new into the live message
