@@ -45,7 +45,10 @@ src/
 │   ├── mod.rs              # Re-exports
 │   ├── storage/            # Pane↔thread map in topics.state (mod.rs + tests.rs)
 │   ├── names.rs            # Tags, titles, context icons
-│   └── manager.rs          # Creation (friendly tag·space named), icon + title sync, lifecycle
+│   ├── manager/            # Topic lifecycle (mod.rs + lifecycle.rs + titles.rs)
+│   │   ├── mod.rs          # Creation (friendly tag·space named), ensure + icon sync
+│   │   ├── lifecycle.rs    # Reopen/close/delete, shell badge, identity restore
+│   │   └── titles.rs       # 1:1 title sync both directions, stable tags
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
 │   ├── dm.rs               # DM dispatcher (waiters → commands → prompt)
