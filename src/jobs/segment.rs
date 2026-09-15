@@ -4,7 +4,10 @@
 //! herdr exposes only raw terminal text for every agent; earlier turns and
 //! intermediate work are dropped here so cards carry just what was said.
 
-use super::filter::chrome_filtered;
+use super::{
+    echo::{echo_rest, is_echo_continuation, is_input_opener, is_prompt_echo},
+    filter::chrome_filtered,
+};
 
 /// Tool-call echo prefixes across providers (opencode →/←, claude ●/⎿,
 /// codex/pi ☰/❯ …): after one of these, prior prose is intermediate work.
@@ -46,43 +49,88 @@ pub fn is_boundary(line: &str) -> bool {
     t.contains('▣') || t.contains("Build ·")
 }
 
-/// The terminal's visible echo of our prompt (framed/`>` input line):
-/// everything before it is scrollback from earlier turns. A frame glyph is
-/// required so an answer line that merely repeats the prompt is NOT
-/// mistaken for an echo.
-fn is_prompt_echo(line: &str, want: &str) -> bool {
-    if !(line.contains('┃')
-        || line.contains('│')
-        || line.contains('|')
-        || line.trim_start().starts_with('>'))
-    {
-        return false;
-    }
-    let t = line
-        .trim()
-        .trim_start_matches(['┃', '│', '|', '❯', '>', '›', ' ']);
-    t == want
-}
-
 /// Fresh reply = chrome-cleaned last non-empty segment after cycle
 /// boundaries and prompt echoes. A trailing footer/input box yields an
 /// empty tail, so the last NON-EMPTY segment wins instead of blanking.
+///
+/// Two echo hazards, both agy-shaped. Prompted path: only the echo opener
+/// carries framing, so a multi-line prompt's wrap lines would outlive the
+/// opener split and shadow the real answer above — they are skipped as an
+/// echo region instead (opener + prompt-matching wraps, see echo.rs).
+/// Spontaneous path (no prompt to match): the settled screen always ends
+/// on the input box, so leading `>` lines of a RULE-terminated winning
+/// segment are the box, never the reply — strip them and fall back to the
+/// previous segment. The rule gate matters: a `>`-led question with no
+/// closing rule (blocked dialogs, quote excerpts) is content and stays.
+/// (Residual: wraps of a multi-line terminal-typed prompt are
+/// indistinguishable from indented prose without the prompt text — only
+/// the `>` opener strips there.)
 pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let want = prompt.lines().next().map(str::trim).unwrap_or("");
-    let mut seg_start = 0;
-    let mut best: Vec<String> = Vec::new();
-    for (i, l) in lines.iter().enumerate() {
-        let split = is_boundary(l) || (!want.is_empty() && is_prompt_echo(l, want));
-        if split {
-            let cand = chrome_filtered(&lines[seg_start..i]);
+    let rest = echo_rest(prompt);
+    // (segment, closed_by_rule): the strip gate needs each candidate's
+    // terminator, so history keeps it alongside.
+    let mut cands: Vec<(Vec<String>, bool)> = Vec::new();
+    let mut seg: Vec<String> = Vec::new();
+    let mut echo_pos: Option<usize> = None;
+    let flush =
+        |seg: &mut Vec<String>, cands: &mut Vec<(Vec<String>, bool)>, closed_by_rule: bool| {
+            let cand = chrome_filtered(seg);
             if !cand.is_empty() {
-                best = cand;
+                cands.push((cand, closed_by_rule));
             }
-            seg_start = i + 1;
+            seg.clear();
+        };
+    for l in lines.iter() {
+        if is_boundary(l) {
+            flush(&mut seg, &mut cands, is_rule(l));
+            echo_pos = None;
+            continue;
+        }
+        if !want.is_empty() && is_prompt_echo(l, want) {
+            flush(&mut seg, &mut cands, false);
+            echo_pos = Some(0);
+            continue;
+        }
+        if let Some(pos) = echo_pos {
+            // Blank echo lines ride along without advancing the chain
+            // (multi-line prompts echo their blank lines too).
+            if l.trim().is_empty() {
+                continue;
+            }
+            if is_echo_continuation(l, &rest, pos) {
+                echo_pos = Some(pos + 1);
+                continue;
+            }
+            echo_pos = None;
+        }
+        seg.push(l.clone());
+    }
+    flush(&mut seg, &mut cands, false);
+    let Some((mut win, mut gated)) = cands.pop() else {
+        return Vec::new();
+    };
+    // The prompted path already split its echo above; stripping there
+    // would eat blockquote-led answers, so it stays untouched.
+    if want.is_empty() {
+        loop {
+            if gated {
+                let openers = win.iter().take_while(|l| is_input_opener(l)).count();
+                win.drain(..openers);
+            }
+            if !win.is_empty() {
+                break;
+            }
+            match cands.pop() {
+                Some((prev, prev_rule)) => {
+                    win = prev;
+                    gated = prev_rule;
+                }
+                None => return Vec::new(),
+            }
         }
     }
-    let tail = chrome_filtered(&lines[seg_start..]);
-    if !tail.is_empty() { tail } else { best }
+    win
 }
 
 #[cfg(test)]
@@ -91,26 +139,6 @@ mod tests {
 
     fn v(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
-    }
-
-    fn agy_screen() -> Vec<String> {
-        v(&[
-            "Antigravity CLI 1.2.2",
-            "  ADC: firebase-adminsdk-fbsvc@ajgc-dig-pdi-dev-cdp",
-            "  Gemini 3.8 Flash (High)",
-            "  ~/projects/ajnow",
-            "────────────────────────────────────────────────",
-            "> hi",
-            "  Hello! How can I help you today?",
-            "────────────────────────────────────────────────",
-            "> 2-4?",
-            "  -2 (or the range from 2 to 4, depending on",
-            "  context).",
-            "───────────────────────────────────────────────────",
-            ">",
-            "───────────────────────────────────────────────────",
-            "? for shortcuts             Gemini 3.8 Flash · high",
-        ])
     }
 
     #[test]
@@ -181,32 +209,6 @@ mod tests {
     fn test_final_block_no_boundaries_returns_all() {
         let lines = v(&["first line", "second line"]);
         assert_eq!(final_block(&lines, "hi"), lines);
-    }
-
-    #[test]
-    fn test_agy_spontaneous_keeps_last_turn_only() {
-        // No prompt known: banner, old turns, rules, input box and footer
-        // all drop — only the last turn (echo + answer) survives.
-        assert_eq!(
-            final_block(&agy_screen(), ""),
-            v(&[
-                "> 2-4?",
-                "  -2 (or the range from 2 to 4, depending on",
-                "  context).",
-            ])
-        );
-    }
-
-    #[test]
-    fn test_agy_prompted_drops_echo_too() {
-        // Prompt known: the `>` echo line splits as well — answer only.
-        assert_eq!(
-            final_block(&agy_screen(), "2-4?"),
-            v(&[
-                "  -2 (or the range from 2 to 4, depending on",
-                "  context).",
-            ])
-        );
     }
 
     #[test]

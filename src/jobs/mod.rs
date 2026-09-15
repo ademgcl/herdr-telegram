@@ -1,4 +1,5 @@
 pub mod arbitrate;
+pub mod echo;
 pub mod enqueue;
 pub mod episode;
 pub mod filter;
