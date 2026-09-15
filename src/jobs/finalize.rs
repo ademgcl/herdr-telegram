@@ -61,7 +61,7 @@ pub async fn finalize(
             s.tg.edit_msg(chat, mid, "⛔ blocked — needs input (see next message)", None).await;
         }
         send_blocked_card(&s, chat, th, pane).await;
-        // Silent icon sync (card dedupes via blocked_sig, inserted above).
+        // Silent icon sync (later observations dedupe via blocked_sig).
         observe_status(s, pane, settled, true, "job").await;
         s.last_done
             .lock()
@@ -83,9 +83,9 @@ pub async fn finalize(
     let parts = chunks(&text, MAX_MSG_UNITS);
 
     observe_status(s, pane, settled, true, "job").await;
-    if settled != "blocked" {
-        s.blocked_sig.lock().await.remove(pane);
-    }
+    // Leaving blocked state clears the dialog signature (blocked path
+    // returns above, so this only runs for settled non-blocked).
+    s.blocked_sig.lock().await.remove(pane);
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.

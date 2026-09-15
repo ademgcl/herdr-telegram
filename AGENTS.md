@@ -89,7 +89,7 @@ src/
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
 - In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`.
-- General topic: `/agents` `/spawn` `/space` `/shell` `/help`.
+- General topic: `/agents` `/spawn` `/space` `/shell` `/cancel` `/help`.
 - Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 
 ---
