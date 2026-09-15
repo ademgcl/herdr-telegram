@@ -114,8 +114,11 @@ async fn handle_topic_agent_message(
         return;
     }
 
-    // An armed typed-answer waiter wins over every command: the next
-    // message belongs to the waiting prompt (DM/General parity).
+    // An armed typed-answer waiter wins over every command except
+    // /cancel (checked above): the next message belongs to the waiting
+    // prompt. Intentional parity with DM/General — a literal "/kill" can
+    // itself be the answer a dialog is waiting for. A race
+    // lost to a resume falls through to prompt routing below.
     if let Some(wpane) = s.typewait.lock().await.remove(&(chat, Some(thread_id))) {
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => {
@@ -126,13 +129,15 @@ async fn handle_topic_agent_message(
                     None,
                 )
                 .await;
+                return;
             }
+            Err(super::tap::TypeError::Resumed) => {}
             Err(e) => {
                 s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None)
                     .await;
+                return;
             }
         }
-        return;
     }
 
     if cmd == "/quit" {
@@ -173,7 +178,7 @@ async fn handle_topic_agent_message(
     // (Typewait is consumed above, before commands.)
 
     if cmd == "/read" || cmd == "/output" {
-        let lines = arg.parse::<u32>().unwrap_or(80);
+        let lines = arg.parse::<u32>().map(|n| n.clamp(1, 400)).unwrap_or(80);
         match read_agent_output(&s.cfg.socket, pane, lines).await {
             Ok(out) => {
                 let body = if out.is_empty() {

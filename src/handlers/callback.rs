@@ -1,7 +1,6 @@
+use super::callback_parse::{gone_card, live_target, pane_live, split_action, split_head};
 use crate::{
-    herdr::client::{
-        get_agent, list_agents, list_panes, list_workspaces, read_agent_output, read_pane_output,
-    },
+    herdr::client::{get_agent, list_agents, list_workspaces, read_agent_output, read_pane_output},
     state::AppState,
     ui::{
         agent_card_kb, btn, build_agent_card_text, build_menu_text, build_ws_text, main_menu_kb,
@@ -10,58 +9,6 @@ use crate::{
 };
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-/// True when the pane still exists (agent or shell). Stale card taps
-/// must never arm waiters, move focus, or remember targets for dead
-/// panes — the next message would route into the void.
-async fn pane_live(s: &AppState, pane: &str) -> bool {
-    if get_agent(&s.cfg.socket, pane).await.is_ok() {
-        return true;
-    }
-    // Fail-open: a failed list call must not read as "dead" (every stale
-    // tap would false-gone during a herdr blip); the tap itself then
-    // fails gracefully with a visible error.
-    list_panes(&s.cfg.socket)
-        .await
-        .map(|l| l.contains(&pane.to_string()))
-        .unwrap_or(true)
-}
-
-/// Dead pane tapped: retire the stale card, route nothing.
-async fn gone_card(s: &AppState, chat: i64, msg_id: i64, pane: &str) {
-    s.tg.edit_msg(chat, msg_id, &format!("pane {pane} is gone"), None)
-        .await;
-    s.targets.lock().await.remove(&(chat, msg_id));
-}
-
-/// Dead-pane guard for `B:`/`M:`/`X:` taps: parse the pane out of the
-/// rest and retire the stale card when it is gone. Returns false when
-/// the caller must stop.
-async fn live_target(s: &AppState, chat: i64, msg_id: i64, r: &str) -> bool {
-    match split_action(r) {
-        Some((_, pane)) if !pane_live(s, pane).await => {
-            gone_card(s, chat, msg_id, pane).await;
-            false
-        }
-        _ => true,
-    }
-}
-
-/// First routing cut: `B:opt2:wG:p1` → `("B", Some("opt2:wG:p1"))`.
-/// Pure so the colon rules are unit-tested, not just eyeballed.
-pub(crate) fn split_head(data: &str) -> (&str, Option<&str>) {
-    match data.split_once(':') {
-        Some((h, r)) => (h, Some(r)),
-        None => (data, None),
-    }
-}
-
-/// Second cut for pane-carrying actions: `opt2:wG:p1` →
-/// `Some(("opt2", "wG:p1"))`. Pane ids contain ':' so only the FIRST
-/// colon splits — multi-split thinking must never creep in.
-pub(crate) fn split_action(rest: &str) -> Option<(&str, &str)> {
-    rest.split_once(':')
-}
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
     let Some(from) = cbq["from"]["id"].as_i64() else {
@@ -89,7 +36,9 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    if now.saturating_sub(date) > 86400 {
+    // Stale cards must not re-execute (days-old spawn-confirm/kill taps):
+    // one gate covers both relic (86400s+) and merely outdated taps.
+    if now.saturating_sub(date) > crate::types::STALE_SECS {
         println!("[callback] dropping stale tap");
         return;
     }
@@ -122,6 +71,10 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 gone_card(&s, chat, msg_id, pane).await;
                 return;
             }
+            // Exclusive waiter: a sibling run/type waiter for this key
+            // would otherwise win the next message instead.
+            s.runwait.lock().await.remove(&(chat, thread));
+            s.typewait.lock().await.remove(&(chat, thread));
             s.keywait
                 .lock()
                 .await
@@ -143,6 +96,9 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 s.targets.lock().await.remove(&(chat, msg_id));
                 return;
             }
+            // Exclusive waiter (see K arm).
+            s.keywait.lock().await.remove(&(chat, thread));
+            s.typewait.lock().await.remove(&(chat, thread));
             s.runwait
                 .lock()
                 .await
@@ -270,25 +226,5 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
         }
         _ => {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_split_head() {
-        assert_eq!(split_head("n"), ("n", None));
-        assert_eq!(split_head("B:opt2:wG:p1"), ("B", Some("opt2:wG:p1")));
-        assert_eq!(split_head("X:kill:w1:p2"), ("X", Some("kill:w1:p2")));
-    }
-
-    #[test]
-    fn test_split_action_keeps_pane_whole() {
-        // Pane ids contain ':' — only the first colon splits.
-        assert_eq!(split_action("opt2:wG:p1"), Some(("opt2", "wG:p1")));
-        assert_eq!(split_action("kill:w1:p2"), Some(("kill", "w1:p2")));
-        assert_eq!(split_action("allow"), None);
     }
 }

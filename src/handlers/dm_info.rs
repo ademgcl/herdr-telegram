@@ -29,10 +29,12 @@ pub(crate) async fn handle_keys(
     // replied-to card. A stale reply never silently reroutes to a
     // different agent: shell/dead panes fail visibly inside send_keys.
     // An explicit pane with no keys is a usage error, not keys for the
-    // reply (typo guard).
+    // reply (typo guard) — as is a kind/pane-shaped word that matched
+    // nothing (ambiguous kinds must not become keystrokes elsewhere).
     let (pane, keys) = match resolve_target(rows, Some(t)) {
         Some(r) if !keys.is_empty() => (Some(r.pane), keys),
         Some(_) => (None, keys),
+        None if rows.iter().any(|r| r.kind == t) || t.contains(':') => (None, keys),
         None if reply_pane.is_some() && !arg.is_empty() => (reply_pane.clone(), arg),
         _ => (None, keys),
     };
@@ -162,8 +164,13 @@ pub(crate) async fn handle_status(
             s.set_focus(&pane).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, None, &format!("status failed: {e}"), None)
-                .await;
+            s.tg.send_msg(
+                chat,
+                None,
+                &format!("⚠️ status failed: {e} — try /agents"),
+                None,
+            )
+            .await;
         }
     }
 }

@@ -41,7 +41,12 @@ pub async fn resolve_ws(s: &AppState, spec: &str) -> Option<String> {
 
 pub async fn open_space(s: &AppState, chat: i64, thread: Option<i64>, label: &str) {
     let ws_id = match create_workspace(&s.cfg.socket, label).await {
-        Ok(id) => id,
+        Ok(id) if !id.is_empty() => id,
+        Ok(_) => {
+            s.tg.send_msg(chat, thread, "⚠️ space create returned no id", None)
+                .await;
+            return;
+        }
         Err(e) => {
             s.tg.send_msg(
                 chat,

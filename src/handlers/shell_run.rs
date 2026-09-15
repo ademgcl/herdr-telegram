@@ -1,8 +1,8 @@
 use super::shell_common::{await_shell_settle, format_shell_reply, shell_snapshot};
 use crate::{
-    herdr::client::{create_tab, send_pane_input},
+    herdr::client::{create_tab, list_workspaces, send_pane_input},
     state::AppState,
-    ui::{pane_output_kb, tail_fit},
+    ui::{pane_output_kb, tail_fit, ws_label},
 };
 
 /// Run one shell line in `pane` and report its tail once the shell
@@ -43,15 +43,30 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
 }
 
 /// Workspace shell-run (⌨️ run cmd button): fresh tab in `ws`, run one
-/// command, report output with a refresh button.
+/// command, report output with a refresh button. The tab gets a topic,
+/// shell status and focus like any shell — otherwise every run leaks an
+/// orphan tab nobody can see.
 pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws: &str, cmd: &str) {
     let pane = match create_tab(&s.cfg.socket, ws).await {
-        Ok(p) => p,
+        Ok(p) if !p.is_empty() => p,
+        Ok(_) => {
+            s.tg.send_msg(chat, thread, "⚠️ tab.create returned no pane", None)
+                .await;
+            return;
+        }
         Err(e) => {
             s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
             return;
         }
     };
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let space = ws_label(&spaces, ws).to_string();
+    s.topics.sync_topic(&pane, "shell", &space, "shell").await;
+    s.status
+        .lock()
+        .await
+        .insert(pane.clone(), "shell".to_string());
+    s.set_focus(&pane).await;
     // Fresh shells start slow (rc files, version managers) — settle first.
     let before = shell_snapshot(s, &pane).await;
     let cmd = cmd.trim();

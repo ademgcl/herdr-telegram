@@ -37,7 +37,7 @@ launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev
 - Agent topic: plain text = prompt. `/read` `/output` `/model` `/quit` `/kill` `/keys` `/status` `/shell` `/space` `/split` `/cancel` `/help`
 - Spaces, agents, shells — the whole Herdr tree is drivable from chat: `/space [name]` makes a workspace and drops you in its shell topic.
 - Blocked agents post answer cards — tap a button or just type the answer.
-- Topics track state on their icon (custom emoji, not unicode): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown. Titles sync 1:1 with herdr pane names either way (rename the topic or the pane).
+- Topics track state on their icon (custom-emoji ID, renders as 💻/💬/✅/❗️/🏁/❓ — card glyphs differ). Titles sync 1:1 with herdr pane names either way (rename the topic or the pane).
 
 ## Security
 

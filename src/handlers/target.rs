@@ -12,11 +12,11 @@ pub fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow>
             }
         }
         Some(t) => rows.iter().find(|r| r.pane == t).cloned().or_else(|| {
-            let m: Vec<_> = rows.iter().filter(|r| r.kind == t).collect();
-            if m.len() == 1 {
-                m.first().map(|r| (*r).clone())
-            } else {
-                None
+            // Exactly one kind match — never prompt the wrong agent.
+            let mut it = rows.iter().filter(|r| r.kind == t);
+            match (it.next(), it.next()) {
+                (Some(r), None) => Some(r.clone()),
+                _ => None,
             }
         }),
     }
@@ -81,5 +81,27 @@ mod tests {
         }];
         let found = resolve_target(&rows, None);
         assert_eq!(found.unwrap().pane, "w1:p1");
+    }
+
+    #[test]
+    fn test_resolve_ambiguous_kind_fails_closed() {
+        let rows = vec![
+            AgentRow {
+                kind: "opencode".into(),
+                pane: "w1:p1".into(),
+                title: "".into(),
+                status: "idle".into(),
+                ws: "w1".into(),
+            },
+            AgentRow {
+                kind: "opencode".into(),
+                pane: "w1:p2".into(),
+                title: "".into(),
+                status: "idle".into(),
+                ws: "w1".into(),
+            },
+        ];
+        assert!(resolve_target(&rows, Some("opencode")).is_none());
+        assert!(resolve_target(&rows, Some("")).is_none());
     }
 }

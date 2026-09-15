@@ -135,18 +135,21 @@ pub(crate) async fn handle_general_forum_message(
     // in the same topic belongs to the waiter (typewait is keyed by
     // (chat, thread)). Checked before commands so the answer can't be
     // eaten by General's fallback and leak onto a later unrelated message.
+    // A race lost to a resume falls through to normal routing below.
     if let Some(wpane) = s.typewait.lock().await.remove(&(chat, thread_id)) {
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => {
                 s.tg.send_msg(chat, thread_id, &format!("⌨️ typed into {wpane} + ⏎"), None)
                     .await;
+                return;
             }
+            Err(super::tap::TypeError::Resumed) => {}
             Err(e) => {
                 s.tg.send_msg(chat, thread_id, &format!("⚠️ type failed: {e}"), None)
                     .await;
+                return;
             }
         }
-        return;
     }
 
     if cmd == "/model" {

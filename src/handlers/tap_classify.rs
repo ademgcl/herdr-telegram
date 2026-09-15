@@ -21,7 +21,19 @@ pub fn classify_tap(before: &[String], after: &[String], still_blocked: bool) ->
     if after.is_empty() {
         return TapResult::Unchanged;
     }
-    if parse_options(after) != parse_options(before) {
+    let opts_before = parse_options(before);
+    let opts_after = parse_options(after);
+    if opts_after.is_empty() {
+        // No options on screen: either the same option-less dialog (a
+        // changed question still counts as turnover) or the dialog
+        // vanished while status lags — never a *new* dialog, so a working
+        // screen never earns a ghost blocked card with live buttons.
+        if opts_before.is_empty() && dialog_sig(after) != dialog_sig(before) {
+            return TapResult::NewDialog;
+        }
+        return TapResult::Unchanged;
+    }
+    if opts_after != opts_before || dialog_sig(after) != dialog_sig(before) {
         return TapResult::NewDialog;
     }
     TapResult::Unchanged
@@ -82,6 +94,28 @@ mod tests {
         // Unreadable screen never touches the card, either way.
         assert_eq!(classify_tap(&v(&["x"]), &[], true), TapResult::Unchanged);
         assert_eq!(classify_tap(&v(&["x"]), &[], false), TapResult::Resumed);
+    }
+
+    #[test]
+    fn test_classify_question_only_turnover() {
+        // Text inputs have no options: a changed question still counts.
+        let before = v(&["Enter name:"]);
+        let after = v(&["Enter age:"]);
+        assert_eq!(classify_tap(&before, &after, true), TapResult::NewDialog);
+        // Same question, no options: unchanged.
+        assert_eq!(classify_tap(&before, &before, true), TapResult::Unchanged);
+    }
+
+    #[test]
+    fn test_classify_vanished_dialog_is_not_new() {
+        // Options gone while status lags blocked: the dialog vanished
+        // (working prose), never a new dialog — no ghost card.
+        let before = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
+        let after = v(&["⠋ working…", "editing src/main.rs"]);
+        assert_eq!(classify_tap(&before, &after, true), TapResult::Unchanged);
     }
 
     #[test]

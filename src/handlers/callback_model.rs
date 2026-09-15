@@ -34,7 +34,6 @@ pub(crate) async fn handle_model_tap(
     let Some((filter, marker)) = super::model_parse::free_tap(i) else {
         return;
     };
-    s.set_focus(pane).await;
     // Strip the buttons while switching: mid-switch taps can only collide.
     let no_kb = Some(Value::Array(Vec::new()));
     s.tg.edit_msg(
@@ -45,8 +44,11 @@ pub(crate) async fn handle_model_tap(
     )
     .await;
     match super::model::switch_model(s, pane, &filter, &marker).await {
-        // Set means set: plain confirmation, buttons stay off.
+        // Set means set: plain confirmation, buttons stay off. Focus
+        // follows success only — a failed switch must not stick focus
+        // to a pane that can't switch.
         Ok(footer) => {
+            s.set_focus(pane).await;
             s.tg.edit_msg(
                 chat,
                 msg_id,

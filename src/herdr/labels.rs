@@ -21,15 +21,22 @@ pub async fn pane_facts(socket: &str) -> Res<HashMap<String, PaneFacts>> {
 /// Pure parse so tests cover the shape without I/O.
 pub fn parse_facts(v: &Value) -> HashMap<String, PaneFacts> {
     let mut out = HashMap::new();
-    for p in v["panes"].as_array().cloned().unwrap_or_default() {
-        if let Some(id) = p["pane_id"].as_str() {
-            out.insert(
-                id.to_string(),
-                PaneFacts {
-                    label: p["label"].as_str().map(|s| s.to_string()),
-                    ws: p["workspace_id"].as_str().unwrap_or("").to_string(),
-                },
-            );
+    if let Some(arr) = v["panes"].as_array() {
+        for p in arr {
+            if let Some(id) = p["pane_id"].as_str() {
+                out.insert(
+                    id.to_string(),
+                    PaneFacts {
+                        // Cleared labels serve as "": treat as unset or title
+                        // sync renames the topic to "" (Telegram 400) forever.
+                        label: p["label"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string()),
+                        ws: p["workspace_id"].as_str().unwrap_or("").to_string(),
+                    },
+                );
+            }
         }
     }
     out
@@ -60,5 +67,14 @@ mod tests {
         assert_eq!(m["w8:p1"].label, Some("api".to_string()));
         assert_eq!(m["w8:p1"].ws, "w8");
         assert_eq!(m["w8:p3"].label, None);
+    }
+
+    #[test]
+    fn test_parse_facts_cleared_label_is_unset() {
+        let v: Value = serde_json::from_str(
+            r#"{"panes": [{"pane_id": "w8:p1", "label": "", "workspace_id": "w8"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_facts(&v)["w8:p1"].label, None);
     }
 }

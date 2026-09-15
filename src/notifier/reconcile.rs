@@ -1,6 +1,7 @@
 use crate::{
     handlers::titles::sync_titles,
-    herdr::client::{list_agents, list_panes, read_screen_adaptive},
+    herdr::client::{list_agents, list_panes, read_screen_adaptive, read_shell_output},
+    jobs::finalize::report,
     jobs::notices::{detect_limit, is_stuck_gated, limit_card_text},
     notifier::status::observe_status,
     state::AppState,
@@ -67,6 +68,30 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // dedup (see status.rs working→* clear).
                             s.clear_limit_episode(&pane).await;
                             s.topics.mark_shell(&pane).await;
+                            // A prompt owed to the vanished agent (quit on
+                            // the PC, no Telegram /quit) must not spin its
+                            // watcher in get_agent backoff forever: retire
+                            // it, surfacing the shell tail as the reply.
+                            let owed = s.pending.lock().await.get(&pane).cloned();
+                            if owed.is_some() || s.jobs.lock().await.contains_key(&pane) {
+                                s.cancel_jobs_for(&pane).await;
+                                if let Some(pp) = owed
+                                    && let Ok(tail) =
+                                        read_shell_output(&s.cfg.socket, &pane, 60).await
+                                {
+                                    let tail = tail.trim().to_string();
+                                    if !tail.is_empty() {
+                                        report(
+                                            s,
+                                            pp.chat,
+                                            pp.thread,
+                                            &pane,
+                                            &format!("agent quit to shell — last output:\n{tail}"),
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
                         // Dead-pane close is silent (no card), so it never waits
                         // for a non-silent tick — orphans from a restart close on
                         // the seed pass instead of lingering a full cycle.

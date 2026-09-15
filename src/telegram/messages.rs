@@ -20,7 +20,12 @@ impl TelegramClient {
             params["reply_markup"] = json!({"inline_keyboard": kb});
         }
 
-        for attempt in 0..3 {
+        // Flood-waits have their own budget: honoring a wait must not
+        // consume one of the 3 sends (that would drop long-waited
+        // messages, possibly final cards).
+        let mut sends = 0;
+        let mut waits = 0;
+        loop {
             match self
                 .call("sendMessage", params.clone(), Duration::from_secs(15))
                 .await
@@ -28,24 +33,29 @@ impl TelegramClient {
                 Ok(v) => return v["message_id"].as_i64(),
                 Err(e) => {
                     let msg = e.to_string();
-                    eprintln!(
-                        "sendMessage failed (attempt {}): {}",
-                        attempt + 1,
-                        self.redact(&msg)
-                    );
-                    // Flood-waits are honored up to 5 min: dropping a
-                    // long wait silently loses the message (possibly a
-                    // final card). Past that, one last attempt still runs
-                    // below instead of giving up outright.
-                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 300) {
+                    eprintln!("sendMessage failed: {}", self.redact(&msg));
+                    // Flood-waits are honored as-is under their own budget:
+                    // capping or mistreating them drops messages (possibly
+                    // final cards) or risks a ban. Long waits stall this
+                    // task, but the watcher's epoch checks abort after.
+                    if let Some(wait) = Self::retry_after(&msg) {
+                        waits += 1;
+                        if waits > 3 {
+                            break;
+                        }
                         tokio::time::sleep(wait).await;
                         continue;
                     }
+                    sends += 1;
                     let retryable = e
                         .downcast_ref::<reqwest::Error>()
-                        .map(|re| re.is_connect() || re.is_timeout())
+                        .map(|re| {
+                            re.is_connect()
+                                || re.is_timeout()
+                                || re.status().map(|s| s.is_server_error()).unwrap_or(false)
+                        })
                         .unwrap_or(false);
-                    if !retryable || attempt == 2 {
+                    if !retryable || sends >= 3 {
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -83,7 +93,9 @@ impl TelegramClient {
         if let Some(kb) = keyboard {
             params["reply_markup"] = json!({"inline_keyboard": kb});
         }
-        for attempt in 0..3 {
+        let mut sends = 0;
+        let mut waits = 0;
+        loop {
             match self
                 .call("editMessageText", params.clone(), Duration::from_secs(15))
                 .await
@@ -95,8 +107,10 @@ impl TelegramClient {
                         return Ok(());
                     }
                     // Known-fatal: retrying a deleted/uneditable message
-                    // just amplifies outage load.
-                    if msg.contains("message to edit not found")
+                    // just amplifies outage load. Dead topics fail fast via
+                    // the shared predicate instead of 3x per tick.
+                    if super::errors::topic_missing(&msg)
+                        || msg.contains("message to edit not found")
                         || msg.contains("message can't be edited")
                         || msg.contains("not enough rights")
                         || msg.contains("bot was blocked")
@@ -104,11 +118,16 @@ impl TelegramClient {
                         eprintln!("editMessageText fatal: {}", self.redact(&msg));
                         return Err(msg.into());
                     }
-                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 300) {
+                    if let Some(wait) = Self::retry_after(&msg) {
+                        waits += 1;
+                        if waits > 3 {
+                            return Err(msg.into());
+                        }
                         tokio::time::sleep(wait).await;
                         continue;
                     }
-                    if attempt == 2 {
+                    sends += 1;
+                    if sends >= 3 {
                         eprintln!("editMessageText failed: {}", self.redact(&msg));
                         return Err(msg.into());
                     }
@@ -116,7 +135,6 @@ impl TelegramClient {
                 }
             }
         }
-        Err("editMessageText retries exhausted".into())
     }
 
     /// "typing…" indicator — lasts ~5s, repeat to sustain. Zero clutter.

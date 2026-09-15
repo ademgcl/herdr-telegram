@@ -1,6 +1,6 @@
 use super::tap_classify::dialog_stalled;
 use crate::{
-    handlers::dialog::refresh_blocked_card,
+    handlers::dialog::{dialog_sig, refresh_blocked_card},
     herdr::client::{
         get_agent, read_screen_visible, send_agent_keys, send_pane_input, send_pane_keys,
     },
@@ -8,27 +8,56 @@ use crate::{
 };
 use std::time::Duration;
 
+/// A typed answer that lost its race: the agent resumed between the
+/// snapshot and the send, so the text must become a prompt instead of
+/// input injected into live work.
+#[derive(Debug, PartialEq)]
+pub enum TypeError {
+    Resumed,
+    Failed(String),
+}
+
+impl std::fmt::Display for TypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeError::Resumed => write!(f, "agent resumed while answering"),
+            TypeError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 /// Type free text into the waiting prompt (y/n answers, picker filters,
 /// text inputs) + Enter, atomically: split text/Enter round-trips get
 /// lost on redraw-heavy TUIs. Verified like button taps — a lying
 /// "typed" ack is worse than none. The answer may advance to a SECOND
 /// dialog with no status change, so re-check shortly and surface fresh
 /// buttons.
-pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), String> {
+pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeError> {
     let socket = &s.cfg.socket;
     let before = read_screen_visible(socket, pane, 30).await;
     // Own the card through send + verify: a same-`blocked` observation
     // mid-sleep must not post a duplicate card or race the baseline.
     // Single-flight like button taps: concurrent types interleave.
     if !s.blockop.lock().await.insert(pane.to_string()) {
-        return Err("answer already in flight — wait a beat".into());
+        return Err(TypeError::Failed(
+            "answer already in flight — wait a beat".into(),
+        ));
     }
-    let r = send_pane_input(socket, pane, text)
+    // The agent may have resumed between the snapshot and now: typing
+    // into live work injects the answer as stray input. Bail so the
+    // caller routes the text as a prompt instead. Unknown (read error)
+    // stays fail-open — an outage must not brick real answers.
+    if get_agent(socket, pane)
         .await
-        .map_err(|e| e.to_string());
-    if r.is_err() {
+        .map(|a| a.status != "blocked")
+        .unwrap_or(false)
+    {
         s.blockop.lock().await.remove(pane);
-        return r.map(|_| ());
+        return Err(TypeError::Resumed);
+    }
+    if let Err(e) = send_pane_input(socket, pane, text).await {
+        s.blockop.lock().await.remove(pane);
+        return Err(TypeError::Failed(e.to_string()));
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
     if get_agent(socket, pane)
@@ -39,8 +68,17 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), Strin
         let after = read_screen_visible(socket, pane, 30).await;
         if dialog_stalled(&before, &after) {
             s.blockop.lock().await.remove(pane);
-            return Err("text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into());
+            return Err(TypeError::Failed(
+                "text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into(),
+            ));
         }
+        // Advanced (possibly to a second dialog): anchor the signature so
+        // observers stay silent instead of double-posting before the
+        // delayed refresh below.
+        s.blocked_sig
+            .lock()
+            .await
+            .insert(pane.to_string(), dialog_sig(&after));
     }
     s.blockop.lock().await.remove(pane);
     let s2 = s.clone();

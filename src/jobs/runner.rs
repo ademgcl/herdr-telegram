@@ -122,7 +122,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 fails += 1;
                 if fails >= 12 {
                     println!(
-                        "[watcher] {pane} unreachable x{fails} ({e}) - backing off 60s, intent kept"
+                        "[watcher] {pane} unreachable 12x in a row ({e}) — backing off 60s, intent kept"
                     );
                     // Cancellable backoff: /cancel must not wait behind it.
                     // Same ownership rule as the cancel branch: a replaced
@@ -163,7 +163,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             if retry {
                 // Delivery/read outage: back off (capped) instead of
                 // retiring — the intent stays until /cancel or pane death.
-                tokio::time::sleep(Duration::from_secs(retry_wait)).await;
+                // Cancellable like the unreachable backoff above.
+                tokio::select! {
+                    _ = job.cancel.notified() => {
+                        job.mark_stopped();
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(retry_wait)) => {}
+                }
                 retry_wait = (retry_wait * 2).min(60);
                 continue;
             }

@@ -6,12 +6,14 @@ use serde_json::json;
 pub async fn list_workspaces(socket: &str) -> Res<Vec<WorkspaceInfo>> {
     let r = rpc(socket, "workspace.list", json!({})).await?;
     let mut out = Vec::new();
-    for w in r["workspaces"].as_array().cloned().unwrap_or_default() {
-        out.push(WorkspaceInfo {
-            id: w["workspace_id"].as_str().unwrap_or("?").into(),
-            label: w["label"].as_str().unwrap_or("?").into(),
-            number: w["number"].as_u64().unwrap_or(0),
-        });
+    if let Some(arr) = r["workspaces"].as_array() {
+        for w in arr {
+            out.push(WorkspaceInfo {
+                id: w["workspace_id"].as_str().unwrap_or("?").into(),
+                label: w["label"].as_str().unwrap_or("?").into(),
+                number: w["number"].as_u64().unwrap_or(0),
+            });
+        }
     }
     Ok(out)
 }
@@ -40,23 +42,33 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
         .as_str()
         .unwrap_or("")
         .to_string();
+    if pane.is_empty() {
+        return Err("tab.create returned no pane".into());
+    }
 
+    // Millis + pid: same-second double-spawns (double-tapped N) must not
+    // collide on the agent name.
     let name = format!(
         "tg-{kind}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs()
+            .as_millis()
     );
 
-    rpc_t(
+    if let Err(e) = rpc_t(
         socket,
         "agent.start",
         json!({"name": name, "kind": kind, "pane_id": pane}),
         90,
     )
-    .await?;
+    .await
+    {
+        // Don't leak the tab when the start fails (bad kind, etc.).
+        let _ = super::panes::close_pane(socket, &pane).await;
+        return Err(e);
+    }
 
     let detail = get_agent(socket, &pane).await?;
     Ok(detail.into())

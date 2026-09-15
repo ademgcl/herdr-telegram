@@ -228,6 +228,12 @@ impl State {
     /// Lives in `jobs.rs` (job lifecycle owns waiter cleanup).
     pub async fn clear_pane(&self, pane: &str) {
         self.clear_waiters(pane).await;
+        // A killed pane must not stay focused: the next bare message
+        // would route into the void instead of resolving fresh.
+        if self.focus.lock().await.as_deref() == Some(pane) {
+            *self.focus.lock().await = None;
+            let _ = std::fs::remove_file(Self::focus_file());
+        }
         self.status.lock().await.remove(pane);
         self.last_done.lock().await.remove(pane);
         self.seen.lock().await.remove(pane);

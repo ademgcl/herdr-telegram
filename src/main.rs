@@ -26,10 +26,13 @@ async fn main() -> Res<()> {
     // Single-host only (a TCP port can't see a second host polling the
     // same bot — that split-brains prompts). HERDR_TG_PORT overrides the
     // default so prod and dev can run side by side on one machine.
-    let port: u16 = std::env::var("HERDR_TG_PORT")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(SINGLE_INSTANCE_PORT);
+    let port: u16 = match std::env::var("HERDR_TG_PORT") {
+        Ok(v) => v
+            .trim()
+            .parse()
+            .map_err(|_| format!("HERDR_TG_PORT invalid: {v:?}"))?,
+        Err(_) => SINGLE_INSTANCE_PORT,
+    };
     let lock_addr = format!("127.0.0.1:{port}");
     let _guard = match tokio::net::TcpListener::bind(&lock_addr).await {
         Ok(l) => l,
@@ -120,6 +123,9 @@ async fn main() -> Res<()> {
     tokio::spawn(event_task(s.clone()));
 
     let mut watchdog_tick = tokio::time::interval(Duration::from_secs(60));
+    // The first interval tick fires immediately: consume it so boot isn't
+    // a double-scan (seed reconcile just ran above).
+    watchdog_tick.tick().await;
 
     loop {
         tokio::select! {
@@ -148,7 +154,16 @@ async fn main() -> Res<()> {
                                     *off = id + 1;
                                 }
                             }
-                            handle_update(s.clone(), &u).await;
+                            // Shutdown-aware: a long handler (spawn) must
+                            // not starve TERM into a SIGKILL + replay.
+                            tokio::select! {
+                                _ = shutdown_signal() => {
+                                    println!("[main] shutdown signal mid-batch — saving offset");
+                                    s.save_offset().await;
+                                    return Ok(());
+                                }
+                                _ = handle_update(s.clone(), &u) => {}
+                            }
                             // Durable ack per update (at-least-once otherwise:
                             // a mid-batch crash would replay handled prompts
                             // as duplicate submits).

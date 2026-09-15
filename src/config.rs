@@ -52,10 +52,17 @@ pub fn cfg_from_env() -> Res<Cfg> {
     }
     let mut owners = Vec::new();
     for (k, v) in env::vars() {
-        if (k == "TELEGRAM_CHAT_ID" || k.starts_with("TELEGRAM_CHAT_ID_"))
-            && let Ok(id) = v.trim().parse::<i64>()
-        {
-            owners.push(id);
+        if k == "TELEGRAM_CHAT_ID" || k.starts_with("TELEGRAM_CHAT_ID_") {
+            let v = v.trim();
+            match v.parse::<i64>() {
+                Ok(id) if id > 0 => owners.push(id),
+                // A group id here boots fine and answers nobody (sender
+                // ids are always positive) — fail loudly instead.
+                Ok(_) => return Err(format!("{k} must be a positive Telegram user id").into()),
+                Err(_) => {
+                    eprintln!("[config] ignoring {k}: not a numeric id ({v:?})");
+                }
+            }
         }
     }
     owners.sort_unstable();
@@ -65,32 +72,40 @@ pub fn cfg_from_env() -> Res<Cfg> {
     }
 
     let home = env::var("HOME").unwrap_or_default();
-    let socket = env::var("HERDR_SOCKET")
-        .map(|v| {
-            if v == "~" {
-                home.clone()
-            } else if let Some(rest) = v.strip_prefix("~/") {
-                format!("{home}/{rest}")
-            } else {
-                v
-            }
-        })
-        .unwrap_or_else(|_| format!("{home}/.config/herdr/herdr.sock"));
-    if socket.trim().is_empty() {
+    let raw_socket = env::var("HERDR_SOCKET").unwrap_or_default();
+    if raw_socket.trim().is_empty() && env::var_os("HERDR_SOCKET").is_some() {
         return Err("HERDR_SOCKET must not be empty".into());
     }
+    if raw_socket.trim() == "~" {
+        return Err("HERDR_SOCKET must be a socket path, not ~".into());
+    }
+    let socket = {
+        let v = raw_socket.trim();
+        if v.is_empty() {
+            format!("{home}/.config/herdr/herdr.sock")
+        } else if let Some(rest) = v.strip_prefix("~/") {
+            format!("{home}/{rest}")
+        } else {
+            v.to_string()
+        }
+    };
 
     let forum = env::var("TELEGRAM_FORUM_CHAT_ID")
         .or_else(|_| env::var("TELEGRAM_GROUP_CHAT_ID"))
         .ok()
         .and_then(|v| {
             let v = v.trim();
-            let n: i64 = v.parse().ok()?;
-            Some(if v.starts_with('-') {
-                n
-            } else {
-                -(1_000_000_000_000i64 + n)
-            })
+            match v.parse::<i64>() {
+                Ok(n) => Some(if v.starts_with('-') {
+                    n
+                } else {
+                    -(1_000_000_000_000i64 + n)
+                }),
+                Err(_) => {
+                    eprintln!("[config] ignoring forum id: not numeric ({v:?}) — DM-only mode");
+                    None
+                }
+            }
         });
 
     Ok(Cfg {

@@ -29,9 +29,12 @@ pub async fn handle_update(s: AppState, u: &Value) {
         let chat = &member["chat"];
         let chat_id = chat["id"].as_i64().unwrap_or(0);
         let title = chat["title"].as_str().unwrap_or("");
+        // Read the actual membership change: a kick/leave must not log as
+        // an add (the removal case is when this log matters most).
+        let status = member["new_chat_member"]["status"].as_str().unwrap_or("?");
         if s.cfg.owners.contains(&from) {
             println!(
-                "[telegram] bot added/updated in group '{title}' (ID: {chat_id}) by owner {from}"
+                "[telegram] bot membership {status} in group '{title}' (ID: {chat_id}) by owner {from}"
             );
         }
         return;

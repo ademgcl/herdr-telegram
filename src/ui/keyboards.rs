@@ -59,13 +59,11 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
     kb.push(vec![btn("➕ spawn agent", "n"), btn("🆕 new space", "N")]);
 
     for a in agents {
+        // Space names are user-controlled: cap like titles, or long names
+        // fail sendMessage with BUTTON_TEXT_INVALID.
+        let ws: String = ws_label(spaces, &a.ws).chars().take(28).collect();
         kb.push(vec![btn(
-            format!(
-                "{} {} @ {}",
-                emoji(&a.status),
-                a.kind,
-                ws_label(spaces, &a.ws)
-            ),
+            format!("{} {} @ {}", emoji(&a.status), a.kind, ws),
             &format!("a:{}", a.pane),
         )]);
     }

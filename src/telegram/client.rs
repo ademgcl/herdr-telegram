@@ -90,8 +90,24 @@ mod tests {
     }
 
     #[test]
-    fn redact_leaves_clean_input_unchanged() {
+    fn test_redact_leaves_clean_input_unchanged() {
         let c = test_client();
         assert_eq!(c.redact("connection reset"), "connection reset");
+    }
+
+    #[test]
+    fn test_retry_after_parsing() {
+        use std::time::Duration;
+        // +1s bias on top of the asked wait.
+        assert_eq!(
+            TelegramClient::retry_after("Too Many Requests: retry after 30"),
+            Some(Duration::from_secs(31))
+        );
+        assert_eq!(
+            TelegramClient::retry_after("retry after 0"),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(TelegramClient::retry_after("connection reset"), None);
+        assert_eq!(TelegramClient::retry_after("retry after many"), None);
     }
 }

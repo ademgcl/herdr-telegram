@@ -44,7 +44,14 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
         return Ok("no agents to watch");
     }
 
-    let conn = UnixStream::connect(&s.cfg.socket).await?;
+    let conn =
+        match tokio::time::timeout(Duration::from_secs(30), UnixStream::connect(&s.cfg.socket))
+            .await
+        {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => return Err("event stream connect timed out".into()),
+        };
     let (reader, mut writer) = conn.into_split();
     writer
         .write_all(
@@ -58,7 +65,16 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
 
     let mut reader = BufReader::new(reader);
     let mut ack = String::new();
-    reader.read_line(&mut ack).await?;
+    // Bounded like the watcher stream: a hung ack must return to the
+    // backoff loop, never wedge the task. Empty acks reject (blind loop).
+    match tokio::time::timeout(Duration::from_secs(30), reader.read_line(&mut ack)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => return Err("event subscribe ack timed out".into()),
+    }
+    if ack.trim().is_empty() {
+        return Err("event subscribe got empty ack".into());
+    }
     // Parsed rejection only (see ack_rejected): success acks may carry
     // `"error": null`, which a substring match misreads as rejection.
     if super::rpc::ack_rejected(&ack) {

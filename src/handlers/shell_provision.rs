@@ -1,9 +1,11 @@
 use super::shell_common::shell_card_text;
 use super::shell_run::run_shell_cmd;
 use crate::{
-    herdr::client::{create_tab, ensure_tg_space, list_workspaces},
+    herdr::client::{create_tab, ensure_tg_space, get_agent, list_workspaces},
     herdr::labels::pane_facts,
+    jobs::enqueue_prompt,
     state::AppState,
+    types::AgentRow,
     ui::ws_label,
 };
 
@@ -15,7 +17,30 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
         None => s.get_focus().await,
     };
     match pane {
-        Some(p) => run_shell_cmd(s, chat, None, &p, text).await,
+        Some(p) => {
+            // A live agent here takes prompts, not shell input: stale
+            // rows can omit fresh agents, and shell text must never be
+            // injected into an agent session.
+            match get_agent(&s.cfg.socket, &p).await {
+                Ok(a) => {
+                    enqueue_prompt(
+                        s.clone(),
+                        chat,
+                        None,
+                        AgentRow {
+                            kind: a.kind,
+                            pane: a.pane,
+                            title: a.title,
+                            status: a.status,
+                            ws: a.ws,
+                        },
+                        text.to_string(),
+                    )
+                    .await;
+                }
+                Err(_) => run_shell_cmd(s, chat, None, &p, text).await,
+            }
+        }
         None => {
             s.tg.send_msg(
                 chat,
@@ -49,7 +74,12 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
         },
     };
     let pane = match create_tab(&s.cfg.socket, &ws_id).await {
-        Ok(p) => p,
+        Ok(p) if !p.is_empty() => p,
+        Ok(_) => {
+            s.tg.send_msg(chat, thread, "⚠️ tab.create returned no pane", None)
+                .await;
+            return;
+        }
         Err(e) => {
             s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
             return;

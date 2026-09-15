@@ -20,6 +20,10 @@ pub async fn answer_tap(
     action: &str,
 ) {
     if action == "type" {
+        // Exclusive waiter: drop sibling run/key waiters for this key so
+        // the next message types instead of running.
+        s.runwait.lock().await.remove(&(chat, thread));
+        s.keywait.lock().await.remove(&(chat, thread));
         s.typewait
             .lock()
             .await

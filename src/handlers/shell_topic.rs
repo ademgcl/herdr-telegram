@@ -15,6 +15,11 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     };
     let cmd = bare_cmd(raw_cmd);
 
+    // Shell topics never consume typewaits (no blocked dialogs here): a
+    // waiter stranded on this thread (stale/crafted B:type) would sit
+    // forever, so drop it on entry.
+    s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+
     if cmd == "/help" {
         s.tg.send_msg(chat, Some(thread_id), &shell_help_text(pane), None)
             .await;
@@ -64,7 +69,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if cmd == "/read" || cmd == "/output" {
-        let lines = arg.parse::<u32>().unwrap_or(60);
+        let lines = arg.parse::<u32>().map(|n| n.clamp(1, 400)).unwrap_or(60);
         match read_shell_output(&s.cfg.socket, pane, lines).await {
             Ok(out) => {
                 let body = if out.trim().is_empty() {
