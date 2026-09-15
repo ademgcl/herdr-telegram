@@ -14,6 +14,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+mod jobs;
+
 pub struct State {
     pub cfg: Cfg,
     pub tg: TelegramClient,
@@ -78,13 +80,23 @@ pub struct State {
 
 pub type AppState = Arc<State>;
 
+/// Directory holding bot state files (jobs/focus/offset/topics).
+/// `HERDR_STATE_DIR` overrides it; default is the launch CWD (historic
+/// behavior). Launchd and manual runs MUST use the same one — split
+/// directories mean replayed prompts and orphaned intents.
+pub fn state_dir() -> PathBuf {
+    std::env::var("HERDR_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+}
+
 impl State {
     fn focus_file() -> PathBuf {
-        PathBuf::from("focus.state")
+        state_dir().join("focus.state")
     }
 
     fn offset_file() -> PathBuf {
-        PathBuf::from("offset.state")
+        state_dir().join("offset.state")
     }
 
     /// Persist the Telegram poll offset (atomic tmp+rename, like focus):
@@ -97,7 +109,11 @@ impl State {
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
         if std::fs::write(&tmp, off.to_string()).is_ok() {
-            let _ = std::fs::rename(&tmp, &file);
+            if std::fs::rename(&tmp, &file).is_err() {
+                eprintln!("[state] offset rename failed (disk full?)");
+            }
+        } else {
+            eprintln!("[state] offset write failed (disk full?)");
         }
     }
 
@@ -117,10 +133,29 @@ impl State {
             .filter(|s| !s.is_empty());
         // Offset survives restarts (see save_offset) — boot resumes the
         // poll stream instead of replaying the last 10 minutes of prompts.
-        let offset = std::fs::read_to_string(Self::offset_file())
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(0);
+        // Corrupt values back up like jobs.state; unparseable → 0 (the
+        // router's stale filter bounds the replay).
+        let offset = match std::fs::read_to_string(Self::offset_file()) {
+            Err(_) => 0,
+            Ok(txt) if txt.trim().is_empty() => 0,
+            Ok(txt) => match txt.trim().parse::<u64>() {
+                Ok(n) => n,
+                Err(_) => {
+                    let secs = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let bak = PathBuf::from(format!(
+                        "{}.corrupt-{}.bak",
+                        Self::offset_file().display(),
+                        secs
+                    ));
+                    let _ = std::fs::copy(Self::offset_file(), &bak);
+                    eprintln!("[main] corrupt offset.state backed up to {}", bak.display());
+                    0
+                }
+            },
+        };
         Ok(Arc::new(Self {
             cfg,
             tg,
@@ -173,7 +208,11 @@ impl State {
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
         if std::fs::write(&tmp, pane).is_ok() {
-            let _ = std::fs::rename(&tmp, &file);
+            if std::fs::rename(&tmp, &file).is_err() {
+                eprintln!("[state] focus rename failed (disk full?)");
+            }
+        } else {
+            eprintln!("[state] focus write failed (disk full?)");
         }
         *self.focus.lock().await = Some(pane.to_string());
     }
@@ -182,84 +221,11 @@ impl State {
         self.focus.lock().await.clone()
     }
 
-    /// Retire one pane's watcher (used by /quit: no agent left to watch).
-    pub async fn cancel_jobs_for(&self, pane: &str) -> bool {
-        let job = self.jobs.lock().await.remove(pane);
-        self.clear_pending(pane).await;
-        self.clear_waiters(pane).await;
-        match job {
-            Some(job) => {
-                job.mark_stopped();
-                job.cancel.notify_waiters();
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub async fn cancel_all_jobs(&self) -> usize {
-        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
-        self.clear_all_pending().await;
-        let count = jobs.len();
-        for job in jobs.values() {
-            job.mark_stopped();
-            job.cancel.notify_waiters();
-        }
-        count
-    }
-
-    /// Record a submitted prompt durably (cleared on settle/cancel).
-    pub async fn remember_pending(&self, pane: &str, chat: i64, thread: Option<i64>, prompt: &str) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let mut map = self.pending.lock().await;
-        map.insert(
-            pane.to_string(),
-            PendingPrompt {
-                chat,
-                thread,
-                prompt: prompt.to_string(),
-                started_unix: now,
-            },
-        );
-        persist::save_file(&persist::store_path(), &map);
-    }
-
-    pub async fn clear_pending(&self, pane: &str) {
-        let mut map = self.pending.lock().await;
-        if map.remove(pane).is_some() {
-            persist::save_file(&persist::store_path(), &map);
-        }
-    }
-
-    pub async fn clear_all_pending(&self) {
-        let mut map = self.pending.lock().await;
-        if !map.is_empty() {
-            map.clear();
-            persist::save_file(&persist::store_path(), &map);
-        }
-    }
-
-    /// End one pane's stall episode (limit alert, stuck timer, absence
-    /// streak) — called when the pane leaves `working`, so the next stall
-    /// re-alerts fresh instead of inheriting the prior episode's dedup.
-    pub async fn clear_limit_episode(&self, pane: &str) {
-        self.limit_alert.lock().await.remove(pane);
-        self.limit_seen.lock().await.remove(pane);
-        self.limit_miss.lock().await.remove(pane);
-    }
-
     /// Drop armed input waiters for a dead pane: a typewait surviving
     /// /kill would eat the owner's next message as typed input into a
     /// pane that no longer exists.
-    async fn clear_waiters(&self, pane: &str) {
-        self.typewait.lock().await.retain(|_, p| p != pane);
-        self.keywait.lock().await.retain(|_, p| p != pane);
-        self.runwait.lock().await.retain(|_, p| p != pane);
-    }
-
+    ///
+    /// Lives in `jobs.rs` (job lifecycle owns waiter cleanup).
     pub async fn clear_pane(&self, pane: &str) {
         self.clear_waiters(pane).await;
         self.status.lock().await.remove(pane);

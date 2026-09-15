@@ -59,12 +59,17 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
     let mut reader = BufReader::new(reader);
     let mut ack = String::new();
     reader.read_line(&mut ack).await?;
-    if ack.contains("\"error\"") {
+    // Parsed rejection only (see ack_rejected): success acks may carry
+    // `"error": null`, which a substring match misreads as rejection.
+    if super::rpc::ack_rejected(&ack) {
         return Err(format!("subscribe rejected: {}", ack.trim()).into());
     }
 
     loop {
-        if started.elapsed() > Duration::from_secs(300) {
+        // Refresh bound: a pane spawned mid-cycle isn't subscribed until
+        // the next resubscribe — 120s caps its event blindness (the
+        // watchdog still samples it meanwhile).
+        if started.elapsed() > Duration::from_secs(120) {
             return Ok("refresh");
         }
         let mut line = String::new();

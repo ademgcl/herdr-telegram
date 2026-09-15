@@ -22,6 +22,7 @@ where
     let mut has_idle = false;
     let mut has_done = false;
     let mut has_working = false;
+    let mut has_shell = false;
 
     for s in statuses {
         if s == "blocked" {
@@ -33,6 +34,8 @@ where
             has_done = true;
         } else if s == "idle" {
             has_idle = true;
+        } else if s == "shell" {
+            has_shell = true;
         }
     }
 
@@ -42,6 +45,9 @@ where
         "🏆"
     } else if has_idle {
         "🟢"
+    } else if has_shell {
+        // Shell-only space: available terminal, not an empty space.
+        "💲"
     } else {
         "▫️"
     }
@@ -68,6 +74,8 @@ mod tests {
         assert_eq!(worst_status(vec!["idle", "working"]), "🔄");
         assert_eq!(worst_status(vec!["idle", "done"]), "🏆");
         assert_eq!(worst_status(vec!["idle"]), "🟢");
+        assert_eq!(worst_status(vec!["shell"]), "💲");
+        assert_eq!(worst_status(vec!["shell", "closed"]), "💲");
         assert_eq!(worst_status(vec![]), "▫️");
     }
 }

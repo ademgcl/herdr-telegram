@@ -96,14 +96,22 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         if old.is_none() && new_status == "blocked" {
             println!("[alert] seed found {pane} blocked — posting answer card");
             let screen = read_screen_visible(&s.cfg.socket, pane, 80).await;
-            s.seen.lock().await.insert(pane.to_string(), screen);
-            if let Some(forum) = s.cfg.forum {
+            // Baseline follows delivery: a dropped seed card must stay
+            // "new" so the next observation posts it.
+            let posted = if let Some(forum) = s.cfg.forum {
                 let thread = s.topics.all_mappings().get(pane).copied();
-                send_blocked_card(s, forum, thread, pane).await;
+                send_blocked_card(s, forum, thread, pane).await
             } else {
+                let mut posted = false;
                 for id in &s.cfg.owners {
-                    send_blocked_card(s, *id, None, pane).await;
+                    if send_blocked_card(s, *id, None, pane).await {
+                        posted = true;
+                    }
                 }
+                posted
+            };
+            if posted {
+                s.seen.lock().await.insert(pane.to_string(), screen);
             }
         }
         return;
@@ -180,13 +188,17 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
 
-    // DM mode has no topics — legacy immediate pushes.
+    // DM mode has no topics — legacy immediate pushes. The baseline is
+    // consumed only on delivery so an outage replays the delta instead
+    // of eating it.
     if s.cfg.forum.is_none() {
-        s.seen.lock().await.insert(pane.to_string(), screen);
         if !fresh_body.is_empty() {
-            post_spontaneous_card(s, pane, &kind, raw_space, new_status, &fresh_body).await;
+            if post_spontaneous_card(s, pane, &kind, raw_space, new_status, &fresh_body).await {
+                s.seen.lock().await.insert(pane.to_string(), screen);
+            }
             return;
         }
+        s.seen.lock().await.insert(pane.to_string(), screen);
         let hint = "";
         let verb = if new_status == "idle" {
             "ready"

@@ -17,12 +17,24 @@ pub(crate) async fn handle_agents(s: &AppState, chat: i64, rows: &[AgentRow]) {
     .await;
 }
 
-pub(crate) async fn handle_keys(s: &AppState, chat: i64, rows: &[AgentRow], arg: &str) {
+pub(crate) async fn handle_keys(
+    s: &AppState,
+    chat: i64,
+    rows: &[AgentRow],
+    arg: &str,
+    reply_pane: &Option<String>,
+) {
     let (t, keys) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
-    let pane = if keys.is_empty() {
-        None
-    } else {
-        resolve_target(rows, Some(t)).map(|r| r.pane)
+    // Explicit `<pane|kind> <keys...>`, else the full arg is keys for the
+    // replied-to card. A stale reply never silently reroutes to a
+    // different agent: shell/dead panes fail visibly inside send_keys.
+    // An explicit pane with no keys is a usage error, not keys for the
+    // reply (typo guard).
+    let (pane, keys) = match resolve_target(rows, Some(t)) {
+        Some(r) if !keys.is_empty() => (Some(r.pane), keys),
+        Some(_) => (None, keys),
+        None if reply_pane.is_some() && !arg.is_empty() => (reply_pane.clone(), arg),
+        _ => (None, keys),
     };
     let Some(pane) = pane else {
         s.tg.send_msg(
@@ -34,8 +46,12 @@ pub(crate) async fn handle_keys(s: &AppState, chat: i64, rows: &[AgentRow], arg:
         .await;
         return;
     };
+    send_keys(s, chat, &pane, keys).await;
+}
+
+async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
     let key_list: Vec<&str> = keys.split_whitespace().collect();
-    match send_agent_keys(&s.cfg.socket, &pane, &key_list).await {
+    match send_agent_keys(&s.cfg.socket, pane, &key_list).await {
         Ok(_) => {
             s.tg.send_msg(chat, None, "⌨️ sent", None).await;
         }
@@ -45,15 +61,38 @@ pub(crate) async fn handle_keys(s: &AppState, chat: i64, rows: &[AgentRow], arg:
     }
 }
 
-pub(crate) async fn handle_read(s: &AppState, chat: i64, rows: &[AgentRow], arg: &str) {
-    let row = match resolve_target(rows, Some(arg)) {
+pub(crate) async fn handle_read(
+    s: &AppState,
+    chat: i64,
+    rows: &[AgentRow],
+    arg: &str,
+    reply_pane: &Option<String>,
+) {
+    // Target order matches /status: explicit arg, else replied-to card,
+    // else live focus, else the sole agent. An explicit but unknown arg
+    // errors — it must never answer for a different agent.
+    let mut row = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
         Some(r) => Some(r),
-        None if arg.is_empty() => s
+        None if !arg.is_empty() => {
+            s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+                .await;
+            return;
+        }
+        None => reply_pane
+            .as_deref()
+            .and_then(|p| rows.iter().find(|r| r.pane == p).cloned()),
+    };
+    if row.is_none() {
+        if let Some(f) = s
             .get_focus()
             .await
-            .and_then(|p| rows.iter().find(|r| r.pane == p).cloned()),
-        _ => None,
-    };
+            .filter(|f| rows.iter().any(|r| &r.pane == f))
+        {
+            row = rows.iter().find(|r| r.pane == f).cloned();
+        } else {
+            row = resolve_target(rows, Some(""));
+        }
+    }
     let Some(row) = row else {
         s.tg.send_msg(chat, None, "unknown target — see /agents", None)
             .await;
@@ -85,7 +124,12 @@ pub(crate) async fn handle_status(
 ) {
     let mut pane = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
         Some(r) => Some(r.pane),
-        None if !arg.is_empty() => None,
+        // Explicit but unknown: never show a different agent's card.
+        None if !arg.is_empty() => {
+            s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+                .await;
+            return;
+        }
         None => reply_pane.clone(),
     };
     if pane.is_none() {

@@ -15,6 +15,7 @@ const CHROME_MARKERS: &[&str] = &[
     "esc interrupt",
     "Thought ·",
     "Build ·",
+    "Plan ·",
     "Click to expand",
     "? for shortcuts",
     "% used",
@@ -149,6 +150,7 @@ mod tests {
         assert!(is_chrome("   Thought · 359ms"));
         assert!(is_chrome("+ Thought: 6.8s"));
         assert!(is_chrome("  ▣  Build · Muse Spark 1.3 Free · 1m 3s"));
+        assert!(is_chrome("  Plan · Ling · Zen · high"));
         assert!(is_chrome("╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀"));
         assert!(is_chrome("  ⠋ working…"));
         assert!(is_chrome("→Read src/telegram/router.rs"));

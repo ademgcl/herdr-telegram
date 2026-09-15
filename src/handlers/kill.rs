@@ -17,18 +17,18 @@ pub fn kill_confirm_text(pane: &str, desc: &str) -> String {
 }
 
 /// Describe the pane for the confirm card, or None when already gone.
+/// Fail-open: a failed pane list must not read as "gone" (every kill
+/// would false-gone during a herdr blip); the kill itself then fails
+/// gracefully with a visible error.
 async fn describe(s: &AppState, pane: &str) -> Option<String> {
     if let Ok(a) = get_agent(&s.cfg.socket, pane).await {
         return Some(format!("{}, {}", a.kind, a.status));
     }
-    if list_panes(&s.cfg.socket)
-        .await
-        .unwrap_or_default()
-        .contains(&pane.to_string())
-    {
-        return Some("shell".to_string());
+    match list_panes(&s.cfg.socket).await {
+        Ok(panes) if panes.contains(&pane.to_string()) => Some("shell".to_string()),
+        Ok(_) => None,
+        Err(_) => Some("unreachable — assuming live".to_string()),
     }
-    None
 }
 
 /// Ask: post the confirm card with Kill/Keep buttons.

@@ -20,7 +20,9 @@ src/
 ├── main.rs                 # Single-instance guard, init, main select loop
 ├── types.rs                # Core types, error alias, AgentRow, AgentDetail
 ├── config.rs               # Env loading & Cfg
-├── state.rs                # Thread-safe shared State
+├── state/                  # Thread-safe shared State
+│   ├── mod.rs              # State struct, files (focus/offset), routing
+│   └── jobs.rs             # Job retire, intent durability, pane cleanup
 ├── herdr/                  # Herdr communication layer
 │   ├── mod.rs              # Re-exports
 │   ├── client.rs           # Facade re-export (paths stable)
@@ -80,9 +82,11 @@ src/
 │   ├── mod.rs              # Re-exports
 │   ├── job.rs              # Per-pane job state, cancel notify
 │   ├── episode.rs          # Stall-episode gate for mid-run alerts
-│   ├── runner.rs           # Prompt submit + watcher (live → final card)
+│   ├── runner.rs           # Prompt watcher (live → final card)
+│   ├── enqueue.rs          # Prompt submit (deliver-first, last-wins books)
 │   ├── stall.rs            # Mid-run limit/stall watch (per-episode buzz)
-│   ├── finalize.rs         # Settle arbitration: stream vs settled screen
+│   ├── finalize.rs         # Final card post + delivery retry
+│   ├── arbitrate.rs        # Settle arbitration: stream vs settled screen
 │   ├── notices/            # Limit/quota stall alerts
 │   │   ├── mod.rs          # Re-exports
 │   │   ├── types.rs        # LimitHit, kinds, stuck gate
@@ -118,7 +122,7 @@ src/
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
 - In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`.
-- General topic: `/agents` `/spawn` `/space` `/shell` `/cancel` `/help`.
+- General topic: `/agents` `/spawn` `/space` `/shell` `/model` (redirect) `/start` `/cancel` `/help`.
 - Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 
 ---

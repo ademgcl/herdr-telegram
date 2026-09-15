@@ -49,25 +49,26 @@ impl TelegramClient {
     }
 
     pub async fn set_my_commands(&self) -> Res<()> {
-        let _ = self
-            .call(
-                "setMyCommands",
-                json!({"commands": [
-                    {"command": "agents", "description": "open control panel (spaces + agents)"},
-                    {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
-                    {"command": "space", "description": "new space + shell topic"},
-                    {"command": "model", "description": "current model + free-Zen picker"},
-                    {"command": "quit", "description": "drop the agent to a shell"},
-                    {"command": "kill", "description": "close the pane completely"},
-                    {"command": "shell", "description": "open a fresh shell pane"},
-                    {"command": "read", "description": "recent output of focused agent"},
-                    {"command": "cancel", "description": "abort pending prompts / keys-mode"},
-                    {"command": "keys", "description": "/keys <pane> y enter — send raw keys"},
-                    {"command": "help", "description": "how to drive agents from here"},
-                ]}),
-                Duration::from_secs(15),
-            )
-            .await;
+        self.call(
+            "setMyCommands",
+            json!({"commands": [
+                {"command": "agents", "description": "open control panel (spaces + agents)"},
+                {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
+                {"command": "space", "description": "new space + shell topic"},
+                {"command": "model", "description": "current model + free-Zen picker"},
+                {"command": "quit", "description": "drop the agent to a shell"},
+                {"command": "kill", "description": "close the pane completely"},
+                {"command": "shell", "description": "open a fresh shell pane"},
+                {"command": "read", "description": "recent output of focused agent"},
+                {"command": "output", "description": "alias of /read with line count"},
+                {"command": "status", "description": "agent card for focused agent"},
+                {"command": "cancel", "description": "abort pending prompts / keys-mode"},
+                {"command": "keys", "description": "/keys <pane> y enter — send raw keys"},
+                {"command": "help", "description": "how to drive agents from here"},
+            ]}),
+            Duration::from_secs(15),
+        )
+        .await?;
         Ok(())
     }
 }

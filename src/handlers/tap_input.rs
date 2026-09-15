@@ -17,9 +17,19 @@ use std::time::Duration;
 pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), String> {
     let socket = &s.cfg.socket;
     let before = read_screen_visible(socket, pane, 30).await;
-    send_pane_input(socket, pane, text)
+    // Own the card through send + verify: a same-`blocked` observation
+    // mid-sleep must not post a duplicate card or race the baseline.
+    // Single-flight like button taps: concurrent types interleave.
+    if !s.blockop.lock().await.insert(pane.to_string()) {
+        return Err("answer already in flight — wait a beat".into());
+    }
+    let r = send_pane_input(socket, pane, text)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string());
+    if r.is_err() {
+        s.blockop.lock().await.remove(pane);
+        return r.map(|_| ());
+    }
     tokio::time::sleep(Duration::from_millis(1500)).await;
     if get_agent(socket, pane)
         .await
@@ -28,9 +38,11 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), Strin
     {
         let after = read_screen_visible(socket, pane, 30).await;
         if dialog_stalled(&before, &after) {
+            s.blockop.lock().await.remove(pane);
             return Err("text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into());
         }
     }
+    s.blockop.lock().await.remove(pane);
     let s2 = s.clone();
     let pane2 = pane.to_string();
     tokio::spawn(async move {

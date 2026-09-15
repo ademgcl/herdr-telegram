@@ -26,6 +26,9 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         None => None,
     };
 
+    // /start, /help and /cancel precede armed waiters on purpose:
+    // they are the escape hatches out of a stuck waiter (the waiter
+    // stays armed otherwise, by design — the NEXT message serves it).
     if cmd == "/start" || cmd == "/help" {
         s.tg.send_msg(chat, None, help_text(), None).await;
         return;
@@ -72,23 +75,23 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
-    if cmd == "/keys" && !arg.is_empty() {
-        super::dm_info::handle_keys(&s, chat, &rows, arg).await;
+    if cmd == "/keys" {
+        super::dm_info::handle_keys(&s, chat, &rows, arg, &reply_pane).await;
         return;
     }
 
-    if cmd == "/read" {
-        super::dm_info::handle_read(&s, chat, &rows, arg).await;
+    if cmd == "/read" || cmd == "/output" {
+        super::dm_info::handle_read(&s, chat, &rows, arg, &reply_pane).await;
         return;
     }
 
     if cmd == "/quit" {
-        super::dm_lifecycle::handle_quit(&s, chat, &rows, arg).await;
+        super::dm_lifecycle::handle_quit(&s, chat, &rows, arg, &reply_pane).await;
         return;
     }
 
     if cmd == "/kill" {
-        super::dm_lifecycle::handle_kill(&s, chat, &rows, arg).await;
+        super::dm_lifecycle::handle_kill(&s, chat, &rows, arg, &reply_pane).await;
         return;
     }
 

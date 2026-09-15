@@ -12,12 +12,13 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         Ok(a) => a,
         Err(_) => {
             // Dead pane (topic lingering) vs live shell — only the latter
-            // gets the shell card.
-            if !list_panes(&s.cfg.socket)
+            // gets the shell card. Fail-open: a failed list call proceeds
+            // to the shell card (later commands fail visibly if truly dead).
+            let dead = list_panes(&s.cfg.socket)
                 .await
-                .unwrap_or_default()
-                .contains(&pane.to_string())
-            {
+                .map(|l| !l.contains(&pane.to_string()))
+                .unwrap_or(false);
+            if dead {
                 s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None)
                     .await;
                 return;
@@ -43,9 +44,9 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         .await;
         return;
     }
-    s.keywait.lock().await.remove(&(chat, thread));
-    s.runwait.lock().await.remove(&(chat, thread));
-    s.typewait.lock().await.remove(&(chat, thread));
+    // Waiters are NOT cleared here: a failed quit (keys, still-busy)
+    // must leave them armed for the retry. Success clears via
+    // cancel_jobs_for → clear_waiters below.
     if send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"])
         .await
         .is_err()

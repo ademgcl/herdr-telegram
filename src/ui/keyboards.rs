@@ -47,7 +47,10 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
                         .map(|a| a.status.as_str())
                         .collect();
                     let emo = worst_status(mine);
-                    btn(format!("{emo} {}", s.label), &format!("w:{}", s.id))
+                    // Space labels are user-controlled (/space): cap them
+                    // like titles below or long names fail sendMessage.
+                    let label: String = s.label.chars().take(28).collect();
+                    btn(format!("{emo} {label}"), &format!("w:{}", s.id))
                 })
                 .collect(),
         );

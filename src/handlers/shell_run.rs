@@ -25,6 +25,11 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     // eating the reply (boot posts it once, then clears).
     s.remember_pending(pane, chat, thread, cmd).await;
     let out = await_shell_settle(s, pane, &before).await;
+    // /cancel during the settle clears the intent: a stale card must not
+    // post for cancelled work.
+    if !s.pending.lock().await.contains_key(pane) {
+        return;
+    }
     let lines = out
         .lines()
         .map(|l| l.trim_end().to_string())
@@ -64,6 +69,11 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     }
     s.remember_pending(&pane, chat, thread, cmd).await;
     let out = await_shell_settle(s, &pane, &before).await;
+    // /cancel during the settle clears the intent: a stale card must not
+    // post for cancelled work.
+    if !s.pending.lock().await.contains_key(&pane) {
+        return;
+    }
     let body = if out.trim().is_empty() {
         "(no output yet)".into()
     } else {

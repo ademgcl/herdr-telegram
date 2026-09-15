@@ -114,6 +114,27 @@ async fn handle_topic_agent_message(
         return;
     }
 
+    // An armed typed-answer waiter wins over every command: the next
+    // message belongs to the waiting prompt (DM/General parity).
+    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, Some(thread_id))) {
+        match super::tap::type_text(&s, &wpane, text).await {
+            Ok(()) => {
+                s.tg.send_msg(
+                    chat,
+                    Some(thread_id),
+                    &format!("⌨️ typed into {wpane} + ⏎"),
+                    None,
+                )
+                .await;
+            }
+            Err(e) => {
+                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None)
+                    .await;
+            }
+        }
+        return;
+    }
+
     if cmd == "/quit" {
         super::shell::quit_to_shell(&s, chat, Some(thread_id), pane).await;
         return;
@@ -149,25 +170,7 @@ async fn handle_topic_agent_message(
         return;
     }
 
-    // Answering a waiting prompt (set by the ⌨️ button on blocked cards).
-    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, Some(thread_id))) {
-        match super::tap::type_text(&s, &wpane, text).await {
-            Ok(()) => {
-                s.tg.send_msg(
-                    chat,
-                    Some(thread_id),
-                    &format!("⌨️ typed into {wpane} + ⏎"),
-                    None,
-                )
-                .await;
-            }
-            Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None)
-                    .await;
-            }
-        }
-        return;
-    }
+    // (Typewait is consumed above, before commands.)
 
     if cmd == "/read" || cmd == "/output" {
         let lines = arg.parse::<u32>().unwrap_or(80);

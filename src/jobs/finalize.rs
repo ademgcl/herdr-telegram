@@ -1,13 +1,18 @@
 use crate::{
-    handlers::dialog::send_blocked_card, herdr::client::read_screen_adaptive, jobs::job::Job,
-    jobs::segment::final_block, jobs::stream::join_trimmed, notifier::observe_status,
-    state::AppState, types::MAX_MSG_UNITS, ui::chunks,
+    handlers::dialog::send_blocked_card,
+    herdr::client::read_screen_adaptive,
+    jobs::{arbitrate::select_final_body, job::Job},
+    notifier::observe_status,
+    state::AppState,
+    types::MAX_MSG_UNITS,
+    ui::chunks,
 };
 /// Prompt result finalization: turn the live message into the final card.
 /// Split from `runner` (300-line file limit). `watch_job` calls
 /// `finalize` on settle; `enqueue_prompt` reports submit errors.
-/// Returns true on read outage (nothing posted/cleared/stamped) so the
-/// watcher loop retries instead of retiring the intent.
+/// Returns true when nothing was delivered (read outage OR every card
+/// part failed to send) so the watcher loop retries instead of retiring
+/// the intent.
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -22,7 +27,7 @@ pub async fn finalize(
     job: &Arc<Job>,
     settled: &str,
     live_mid: &mut Option<i64>,
-    acc: &mut [String],
+    acc: &mut Vec<String>,
 ) -> bool {
     // Fresh reply only: the last segment after tool calls, reasoning
     // headers and the prompt echo — earlier turns and intermediate work
@@ -38,9 +43,22 @@ pub async fn finalize(
     let screen = read_screen_adaptive(&s.cfg.socket, pane).await;
     let body = select_final_body(acc, &screen, &prompt);
     let snapshot = screen;
-    if body.is_empty() && snapshot.is_empty() && acc.is_empty() {
+    // Nothing readable and nothing delivered: keep the intent for retry.
+    // (A chrome-only `acc` over an empty snapshot is still an outage —
+    // retiring here would eat the reply.)
+    if body.is_empty() && snapshot.is_empty() {
         println!("[prompt] finalize {pane}: read outage, keeping intent for retry");
         return true;
+    }
+    // Superseded mid-finalize (a new prompt landed during the settle
+    // RPCs): post nothing and stamp nothing — stream, baseline and
+    // destination all belong to the old prompt. Drop the stale
+    // accumulation; the caller sees the epoch move and keeps serving
+    // the new prompt, and settle_books preserves its books below.
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        println!("[prompt] finalize {pane}: superseded, dropping stale body");
+        acc.clear();
+        return false;
     }
 
     // Blocked settle: the viewport holds the question, the scrollback
@@ -60,22 +78,43 @@ pub async fn finalize(
             )
             .await;
         }
-        send_blocked_card(s, chat, th, pane).await;
+        let posted = send_blocked_card(s, chat, th, pane).await;
         // Silent icon sync (later observations dedupe via blocked_sig).
         observe_status(s, pane, settled, true, "job").await;
-        s.last_done
-            .lock()
-            .await
-            .insert(pane.to_string(), std::time::Instant::now());
-        // Anchor the baseline so later settles don't repost the dialog.
-        s.seen.lock().await.insert(pane.to_string(), snapshot);
+        if posted {
+            s.last_done
+                .lock()
+                .await
+                .insert(pane.to_string(), std::time::Instant::now());
+            // Anchor the baseline so later settles don't repost the dialog.
+            s.seen.lock().await.insert(pane.to_string(), snapshot);
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
+            return false;
+        }
+        // Undelivered: retry while there is somewhere to post (a pruned
+        // topic mapping means the card can never land — retire instead
+        // of spinning forever).
+        let mappable = s.cfg.forum.is_none() || s.topics.all_mappings().contains_key(pane);
+        if mappable {
+            println!("[prompt] finalize {pane}: blocked card undelivered, retrying");
+            return true;
+        }
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return false;
     }
-    // Empty non-blocked settle: post nothing and stamp nothing, so the
-    // spontaneous path re-evaluates from its own baseline.
+    // Empty non-blocked settle: post nothing, but anchor the evaluated
+    // screen so the span doesn't rot in the baseline and resurface as a
+    // stale "fresh" delta on the next transition (the spontaneous path
+    // re-evaluates from here and stays quiet on no change). A live card
+    // is retired, not orphaned frozen on "working…".
     if body.is_empty() {
         observe_status(s, pane, settled, true, "job").await;
+        if let Some(mid) = live_mid.take() {
+            let (chat, _) = *job.dest.lock().await;
+            s.tg.edit_msg(chat, mid, "✅ settled — no fresh output", None)
+                .await;
+        }
+        s.seen.lock().await.insert(pane.to_string(), snapshot);
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return false;
     }
@@ -86,6 +125,50 @@ pub async fn finalize(
     // Leaving blocked state clears the dialog signature (blocked path
     // returns above, so this only runs for settled non-blocked).
     s.blocked_sig.lock().await.remove(pane);
+    let (chat, th) = *job.dest.lock().await;
+    // A newer submit mid-post would retarget the card: re-check before
+    // touching Telegram or stamping anything.
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        println!("[prompt] finalize {pane}: superseded before post, dropping");
+        acc.clear();
+        return false;
+    }
+    println!(
+        "[prompt] finalize {pane}: {} part(s), body {} chars",
+        parts.len(),
+        body.len()
+    );
+    let mut delivered = false;
+    for (i, part) in parts.iter().enumerate() {
+        match (i, *live_mid) {
+            (0, Some(mid)) => {
+                if s.tg.try_edit_msg(chat, mid, part, None).await.is_ok()
+                    || report(s, chat, th, pane, part).await
+                {
+                    delivered = true;
+                }
+            }
+            _ => {
+                if report(s, chat, th, pane, part).await {
+                    delivered = true;
+                }
+            }
+        }
+        // Retarget check per part: a slow flood-wait can span a submit.
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            println!("[prompt] finalize {pane}: superseded mid-post, stopping");
+            acc.clear();
+            return false;
+        }
+    }
+    // Total delivery failure: keep the intent and retry like a read
+    // outage — retiring here would lose the reply with no re-arm.
+    // (Stamps below describe a card the user saw; failed posts stamp
+    // nothing, so the retry re-posts from an intact baseline.)
+    if !delivered {
+        println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
+        return true;
+    }
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.
@@ -94,22 +177,6 @@ pub async fn finalize(
         .await
         .insert(pane.to_string(), std::time::Instant::now());
     s.seen.lock().await.insert(pane.to_string(), snapshot);
-    let (chat, th) = *job.dest.lock().await;
-    println!(
-        "[prompt] finalize {pane}: {} part(s), body {} chars",
-        parts.len(),
-        body.len()
-    );
-    for (i, part) in parts.iter().enumerate() {
-        match (i, *live_mid) {
-            (0, Some(mid)) => {
-                if s.tg.try_edit_msg(chat, mid, part, None).await.is_err() {
-                    report(s, chat, th, pane, part).await;
-                }
-            }
-            _ => report(s, chat, th, pane, part).await,
-        }
-    }
     *live_mid = None;
     settle_books(s, pane, job, entry_epoch, entry_pending).await;
     false
@@ -156,138 +223,18 @@ pub async fn edit_live(
     }
 }
 
-pub async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
+pub async fn report(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    msg: &str,
+) -> bool {
     let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
     if mid.is_none() {
         eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
+        return false;
     }
     s.remember(chat_id, mid, pane).await;
-}
-
-/// Minimum streamed body trusted outright. Below this the stream is
-/// assumed starved (alternate-screen TUIs serve chrome-only tails while
-/// working) and the settled screen arbitrates.
-const STREAM_MIN_CHARS: usize = 40;
-
-/// Choose the final card body. The stream usually wins outright — its
-/// rolling baseline (anchored at prompt time) excludes earlier turns.
-/// But a starved stream must not shadow the real answer with a stray
-/// line: when it yields only a fragment, the settled screen wins if it
-/// is longer AND contains the fragment (reflow-proof: compared
-/// whitespace-squashed, since streaming and settle reads wrap lines
-/// differently). An unrelated longer screen — e.g. a coalesced
-/// follow-up turn — never displaces the stream.
-pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> String {
-    let acc_body = join_trimmed(&final_block(acc, prompt));
-    let screen_body = join_trimmed(&final_block(screen, prompt));
-    // Fatal provider errors settle fast (often before the stream sees
-    // them) while `acc` still holds the prior turn. A settled error must
-    // never lose to a stale healthy stream — otherwise Telegram repeats
-    // the old answer and the error vanishes.
-    let screen_failed = crate::jobs::notices::screen_has_provider_failure(screen)
-        || crate::jobs::notices::is_provider_failure_line(&screen_body);
-    let acc_failed = crate::jobs::notices::screen_has_provider_failure(acc)
-        || crate::jobs::notices::is_provider_failure_line(&acc_body);
-    if screen_failed && !acc_failed && !screen_body.is_empty() {
-        return screen_body;
-    }
-    if acc_body.chars().count() >= STREAM_MIN_CHARS {
-        return acc_body;
-    }
-    let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if screen_body.len() > acc_body.len()
-        && (acc_body.is_empty() || squash(&screen_body).contains(&squash(&acc_body)))
-    {
-        screen_body
-    } else {
-        acc_body
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn v(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    /// The agy starvation shape (live wC:p2): the stream caught one
-    /// wrapped line while the settled screen holds the whole answer.
-    fn agy_screen() -> Vec<String> {
-        v(&[
-            "  • ajnow-orbit-embedding-fast:",
-            "  Working tree is clean on branch",
-            "  codex/embedding-fast. All 78",
-            "  Jest unit and integration tests",
-            "  pass cleanly.",
-            "",
-            "  Let me know what area you would",
-            "  like to focus on next.",
-            "",
-            "────────────────────────────────────",
-            ">",
-            "────────────────────────────────────",
-            "? for shortcuts             Gemini 3.8 Flash · high",
-        ])
-    }
-
-    #[test]
-    fn test_starved_stream_yields_to_settled_screen() {
-        let acc = v(&["  pass cleanly."]);
-        let body = select_final_body(&acc, &agy_screen(), "understand the project");
-        assert!(
-            body.contains("Let me know"),
-            "full answer delivered: {body:?}"
-        );
-        assert!(body.len() > 100);
-    }
-
-    #[test]
-    fn test_healthy_stream_wins_despite_longer_screen() {
-        // Scrollback above the echo must not displace a good stream.
-        let acc = v(&["The project has three services, all green and deployed."]);
-        let mut screen = v(&["older turn prose from last week that goes on a bit"]);
-        screen.extend(agy_screen());
-        let body = select_final_body(&acc, &screen, "status?");
-        assert_eq!(
-            body,
-            "The project has three services, all green and deployed."
-        );
-    }
-
-    #[test]
-    fn test_short_genuine_answer_kept() {
-        let acc = v(&["ok"]);
-        let screen = v(&["  ┃", "  ┃  ping", "     Thought · 100ms", "     ok"]);
-        assert_eq!(select_final_body(&acc, &screen, "ping"), "ok");
-    }
-
-    #[test]
-    fn test_unrelated_longer_screen_never_displaces_stream() {
-        let acc = v(&["first answer here"]);
-        let screen = v(&["a completely different and much longer unrelated screen text"]);
-        assert_eq!(select_final_body(&acc, &screen, "q"), "first answer here");
-    }
-
-    #[test]
-    fn test_empty_both_ways() {
-        assert_eq!(select_final_body(&[], &[], "q"), "");
-    }
-
-    #[test]
-    fn test_settled_provider_error_beats_stale_stream() {
-        // Prior turn streamed fine (>=40 chars) but the settled screen is
-        // a fast fatal provider failure the stream never saw: the error
-        // must win, never a repeat of the old answer.
-        let acc = v(&["The project has three services, all green and deployed."]);
-        let err = "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller";
-        let screen = v(&["  ┃", &format!("  ┃  {err}"), "╹▀▀▀▀"]);
-        let body = select_final_body(&acc, &screen, "do it");
-        assert!(
-            body.contains("invalid_request_error"),
-            "error surfaced: {body:?}"
-        );
-        assert!(!body.contains("three services"));
-    }
+    true
 }

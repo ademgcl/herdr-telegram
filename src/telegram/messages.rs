@@ -33,7 +33,11 @@ impl TelegramClient {
                         attempt + 1,
                         self.redact(&msg)
                     );
-                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
+                    // Flood-waits are honored up to 5 min: dropping a
+                    // long wait silently loses the message (possibly a
+                    // final card). Past that, one last attempt still runs
+                    // below instead of giving up outright.
+                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 300) {
                         tokio::time::sleep(wait).await;
                         continue;
                     }
@@ -90,7 +94,17 @@ impl TelegramClient {
                     if msg.contains("message is not modified") {
                         return Ok(());
                     }
-                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 60) {
+                    // Known-fatal: retrying a deleted/uneditable message
+                    // just amplifies outage load.
+                    if msg.contains("message to edit not found")
+                        || msg.contains("message can't be edited")
+                        || msg.contains("not enough rights")
+                        || msg.contains("bot was blocked")
+                    {
+                        eprintln!("editMessageText fatal: {}", self.redact(&msg));
+                        return Err(msg.into());
+                    }
+                    if let Some(wait) = Self::retry_after(&msg).filter(|w| w.as_secs() <= 300) {
                         tokio::time::sleep(wait).await;
                         continue;
                     }
@@ -98,6 +112,7 @@ impl TelegramClient {
                         eprintln!("editMessageText failed: {}", self.redact(&msg));
                         return Err(msg.into());
                     }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
         }

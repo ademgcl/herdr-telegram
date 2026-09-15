@@ -19,8 +19,16 @@ pub async fn rpc_t(socket: &str, method: &str, params: Value, timeout_secs: u64)
         let mut reader = BufReader::new(conn);
         let mut line = String::new();
         reader.read_line(&mut line).await?;
+        if line.trim().is_empty() {
+            return Err("herdr closed connection (empty reply)".into());
+        }
         let v: Value = serde_json::from_str(line.trim())?;
-        if let Some(e) = v.get("error") {
+        // Explicit `"error": null` is a SUCCESS envelope (some calls
+        // include it); only a non-null error fails. A missing `result`
+        // stays silent Null: fire-and-forget calls (prompt submit, keys,
+        // close, rename) ignore the value, and failing them on a bare
+        // ack would break working submits.
+        if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
             return Err(e["message"]
                 .as_str()
                 .unwrap_or("herdr error")
@@ -36,4 +44,16 @@ pub async fn rpc_t(socket: &str, method: &str, params: Value, timeout_secs: u64)
 
 pub async fn ping(socket: &str) -> Res<Value> {
     rpc(socket, "ping", json!({})).await
+}
+
+/// Event-subscribe ack rejection: only a parsed non-null `error`
+/// rejects. Success acks may carry `"error": null`, which a substring
+/// match misreads as rejection (tight resubscribe loop). Unparseable
+/// acks stay lenient (proceed) — same as the old substring check.
+pub fn ack_rejected(ack: &str) -> bool {
+    serde_json::from_str::<Value>(ack.trim())
+        .ok()
+        .and_then(|v| v.get("error").cloned())
+        .map(|e| !e.is_null())
+        .unwrap_or(false)
 }

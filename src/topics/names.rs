@@ -82,9 +82,14 @@ pub fn title(tag: &str, space: &str) -> String {
 }
 
 /// 1:1 pane↔topic title: the herdr pane label, else the unique pane id
-/// (`w8:p1`). Blank labels count as unset. Telegram caps names at 128.
+/// (`w8:p1`). Blank labels count as unset. Trimmed: the native-rename
+/// adopt path trims too, so untrimmed stores would rename every tick.
+/// Telegram caps names at 128.
 pub fn sync_title(label: Option<&str>, pane: &str) -> String {
-    let base = label.filter(|l| !l.trim().is_empty()).unwrap_or(pane);
+    let base = label
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .unwrap_or(pane);
     base.chars().take(128).collect()
 }
 

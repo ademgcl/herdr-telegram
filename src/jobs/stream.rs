@@ -37,10 +37,24 @@ impl EvStream {
         let mut reader = BufReader::new(reader);
         let mut ack = String::new();
         reader.read_line(&mut ack).await?;
-        if ack.contains("\"error\"") {
+        if crate::herdr::rpc::ack_rejected(&ack) {
             return Err(format!("event subscribe rejected: {}", ack.trim()).into());
         }
         Ok(Self { reader })
+    }
+
+    /// Open with a bound: a hung ack must not freeze the watcher
+    /// pre-select (no settle checks, no cancel) — degrade to polling.
+    pub async fn open_bounded(socket: &str, pane: &str, secs: u64) -> Res<Self> {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(secs),
+            Self::open(socket, pane),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err("event subscribe ack timed out".into()),
+        }
     }
 
     /// Next relevant event; None when the socket dies.

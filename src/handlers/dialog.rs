@@ -114,7 +114,13 @@ pub(crate) fn blocked_card_text(q: &str) -> String {
     format!("⛔ blocked — needs input\n\n{q}\n\nTap an answer, or just type it.")
 }
 
-async fn send_with(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, screen: &[String]) {
+async fn send_with(
+    s: &AppState,
+    chat: i64,
+    thread: Option<i64>,
+    pane: &str,
+    screen: &[String],
+) -> bool {
     let q = waiting_lines(screen);
     let options = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
     let mid =
@@ -125,16 +131,23 @@ async fn send_with(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, scr
             Some(blocked_kb(pane, &options)),
         )
         .await;
-    s.blocked_sig.lock().await.insert(pane.to_string(), q);
+    let posted = mid.is_some();
+    // Stamp the signature only on delivery: a dropped card must stay
+    // "new" so the next observation reposts instead of going silent.
+    if posted {
+        s.blocked_sig.lock().await.insert(pane.to_string(), q);
+    }
     s.remember(chat, mid, pane).await;
+    posted
 }
 
 /// Post the interactive card: what the agent asks + one-tap answers
 /// mirroring the dialog's own options. Explicit "show me" contexts use
 /// this (always posts); status observations use [`refresh_blocked_card`].
-pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
+/// Returns true when the card was delivered.
+pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) -> bool {
     let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
-    send_with(s, chat, thread, pane, &screen).await;
+    send_with(s, chat, thread, pane, &screen).await
 }
 
 /// Content-addressed blocked post for status observations: repeats of
@@ -167,17 +180,26 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     {
         return false;
     }
-    s.seen.lock().await.insert(pane.to_string(), screen.clone());
-    if let Some(forum) = s.cfg.forum {
+    // Baseline follows delivery: a dropped card stays "new" (sig
+    // unstamped on failure), so the next observation reposts from an
+    // intact baseline instead of skewing the later idle delta.
+    let posted = if let Some(forum) = s.cfg.forum {
         let thread = s.topics.all_mappings().get(pane).copied();
-        send_with(s, forum, thread, pane, &screen).await;
+        send_with(s, forum, thread, pane, &screen).await
     } else {
+        let mut posted = false;
         for id in &s.cfg.owners {
-            send_with(s, *id, None, pane, &screen).await;
+            if send_with(s, *id, None, pane, &screen).await {
+                posted = true;
+            }
         }
+        posted
+    };
+    if posted {
+        s.seen.lock().await.insert(pane.to_string(), screen);
+        println!("[alert] blocked card {pane}");
     }
-    println!("[alert] blocked card {pane}");
-    true
+    posted
 }
 
 #[cfg(test)]

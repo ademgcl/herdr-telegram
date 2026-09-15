@@ -6,8 +6,14 @@ use crate::{
     ui::ws_label,
 };
 
-pub(crate) async fn handle_quit(s: &AppState, chat: i64, rows: &[AgentRow], arg: &str) {
-    let Some(pane) = dm_pane(s, rows, arg).await else {
+pub(crate) async fn handle_quit(
+    s: &AppState,
+    chat: i64,
+    rows: &[AgentRow],
+    arg: &str,
+    reply_pane: &Option<String>,
+) {
+    let Some(pane) = dm_pane(s, rows, arg, reply_pane).await else {
         s.tg.send_msg(
             chat,
             None,
@@ -20,8 +26,14 @@ pub(crate) async fn handle_quit(s: &AppState, chat: i64, rows: &[AgentRow], arg:
     super::shell::quit_to_shell(s, chat, None, &pane).await;
 }
 
-pub(crate) async fn handle_kill(s: &AppState, chat: i64, rows: &[AgentRow], arg: &str) {
-    let Some(pane) = dm_pane(s, rows, arg).await else {
+pub(crate) async fn handle_kill(
+    s: &AppState,
+    chat: i64,
+    rows: &[AgentRow],
+    arg: &str,
+    reply_pane: &Option<String>,
+) {
+    let Some(pane) = dm_pane(s, rows, arg, reply_pane).await else {
         s.tg.send_msg(
             chat,
             None,
@@ -74,6 +86,22 @@ pub(crate) async fn handle_spawn(s: &AppState, chat: i64, arg: &str) {
     };
     s.tg.send_msg(chat, None, &format!("spawning {kind}..."), None)
         .await;
+    // Workspace may be an id or a human label (`space-1`).
+    let ws_id;
+    let ws = match ws {
+        Some(w) => match super::space::resolve_ws(s, w).await {
+            Some(id) => {
+                ws_id = id;
+                Some(ws_id.as_str())
+            }
+            None => {
+                s.tg.send_msg(chat, None, &format!("⚠️ unknown space `{w}`"), None)
+                    .await;
+                return;
+            }
+        },
+        None => None,
+    };
     match spawn_agent(&s.cfg.socket, kind, ws).await {
         Ok(row) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();

@@ -60,6 +60,22 @@ pub(crate) async fn handle_general_forum_message(
         };
         s.tg.send_msg(chat, thread_id, &format!("⏳ spawning {kind}…"), None)
             .await;
+        // Workspace may be an id or a human label (`space-1`).
+        let ws_id;
+        let ws = match ws {
+            Some(w) => match super::space::resolve_ws(&s, w).await {
+                Some(id) => {
+                    ws_id = id;
+                    Some(ws_id.as_str())
+                }
+                None => {
+                    s.tg.send_msg(chat, thread_id, &format!("⚠️ unknown space `{w}`"), None)
+                        .await;
+                    return;
+                }
+            },
+            None => None,
+        };
         match spawn_agent(&s.cfg.socket, kind, ws).await {
             Ok(row) => {
                 let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();

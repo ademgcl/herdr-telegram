@@ -21,13 +21,21 @@ pub fn load_env_file() {
         let Some((k, v)) = line.split_once('=') else {
             continue;
         };
-        let k = k.trim();
+        // `export KEY=val` form (sourced-shell style): the key is bare.
+        let k = k.trim().strip_prefix("export ").unwrap_or(k.trim()).trim();
+        if k.is_empty() {
+            continue;
+        }
         let mut v = v.trim().to_string();
         if v.len() >= 2
             && ((v.starts_with('"') && v.ends_with('"'))
                 || (v.starts_with('\'') && v.ends_with('\'')))
         {
             v = v[1..v.len() - 1].to_string();
+        } else if let Some((head, _)) = v.split_once(" #") {
+            // Unquoted trailing comment (`TOKEN=x # note`). Quoted values
+            // keep everything (secrets may contain `#`).
+            v = head.trim_end().to_string();
         }
         if env::var_os(k).is_none() {
             // Safe single-threaded environment seeding during init
@@ -68,6 +76,9 @@ pub fn cfg_from_env() -> Res<Cfg> {
             }
         })
         .unwrap_or_else(|_| format!("{home}/.config/herdr/herdr.sock"));
+    if socket.trim().is_empty() {
+        return Err("HERDR_SOCKET must not be empty".into());
+    }
 
     let forum = env::var("TELEGRAM_FORUM_CHAT_ID")
         .or_else(|_| env::var("TELEGRAM_GROUP_CHAT_ID"))

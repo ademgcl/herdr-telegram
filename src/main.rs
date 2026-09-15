@@ -22,13 +22,25 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Res<()> {
-    // Single-instance guard: prevent duplicate instances from doubling notifications
-    let lock_addr = format!("127.0.0.1:{SINGLE_INSTANCE_PORT}");
-    let _guard = tokio::net::TcpListener::bind(&lock_addr)
-        .await
-        .map_err(|_| "another herdr-telegram instance is already running")?;
+    // Single-instance guard: prevent duplicate instances from doubling notifications.
+    // Single-host only (a TCP port can't see a second host polling the
+    // same bot — that split-brains prompts). HERDR_TG_PORT overrides the
+    // default so prod and dev can run side by side on one machine.
+    let port: u16 = std::env::var("HERDR_TG_PORT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(SINGLE_INSTANCE_PORT);
+    let lock_addr = format!("127.0.0.1:{port}");
+    let _guard = match tokio::net::TcpListener::bind(&lock_addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            return Err("another herdr-telegram instance is already running".into());
+        }
+        Err(e) => return Err(format!("single-instance guard bind failed: {e}").into()),
+    };
 
     let cfg = cfg_from_env()?;
+    println!("[main] state dir: {}", state::state_dir().display());
     let s = State::new(cfg)?;
 
     // Verify Herdr connectivity and protocol
@@ -69,8 +81,29 @@ async fn main() -> Res<()> {
         println!("[telegram] operating in direct message mode");
     }
 
-    // Register Telegram menu commands
-    let _ = s.tg.set_my_commands().await;
+    // Register Telegram menu commands (retry: a blip here must not
+    // fail the boot, but a dead token must — fail fast after retries).
+    let mut menu_err = String::new();
+    for attempt in 1..=3 {
+        match s.tg.set_my_commands().await {
+            Ok(()) => {
+                menu_err.clear();
+                break;
+            }
+            Err(e) => {
+                menu_err = e.to_string();
+                eprintln!("[telegram] setMyCommands failed (attempt {attempt}/3): {menu_err}");
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+    }
+    if !menu_err.is_empty() {
+        return Err(
+            format!("telegram setMyCommands failed (is the token valid?): {menu_err}").into(),
+        );
+    }
 
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
@@ -116,10 +149,11 @@ async fn main() -> Res<()> {
                                 }
                             }
                             handle_update(s.clone(), &u).await;
+                            // Durable ack per update (at-least-once otherwise:
+                            // a mid-batch crash would replay handled prompts
+                            // as duplicate submits).
+                            s.save_offset().await;
                         }
-                        // Durable ack per batch: a crash before the next
-                        // poll must not replay these prompts.
-                        s.save_offset().await;
                     }
                     Err(e) => {
                         let msg = s.tg.redact(&e.to_string());

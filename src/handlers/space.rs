@@ -12,14 +12,31 @@ pub fn check_label(label: &str) -> bool {
     !label.trim().is_empty()
 }
 
-/// Auto label (`space-N`) when `/space` gets no name.
+/// Auto label (`space-N`) when `/space` gets no name: first unused N,
+/// not len+1 (deleted middle spaces must not collide).
 pub async fn next_label(s: &AppState) -> String {
-    let n = list_workspaces(&s.cfg.socket)
+    let labels: Vec<String> = list_workspaces(&s.cfg.socket)
         .await
-        .map(|w| w.len())
-        .unwrap_or(0)
-        + 1;
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| w.label)
+        .collect();
+    let mut n = 1;
+    while labels.iter().any(|l| l == &format!("space-{n}")) {
+        n += 1;
+    }
     format!("space-{n}")
+}
+
+/// Resolve a workspace id-or-label to its id: buttons pass ids, humans
+/// type labels (`/spawn opencode space-1`). Unknown → None.
+pub async fn resolve_ws(s: &AppState, spec: &str) -> Option<String> {
+    list_workspaces(&s.cfg.socket)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|w| w.id == spec || w.label == spec)
+        .map(|w| w.id)
 }
 
 pub async fn open_space(s: &AppState, chat: i64, thread: Option<i64>, label: &str) {

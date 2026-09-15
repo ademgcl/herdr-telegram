@@ -44,7 +44,8 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
 
     // Stored panes with no agent are shells (quit) or dead (closed).
     // Shells keep their topic with the shell badge and zero alerts;
-    // only truly gone panes get closed.
+    // only truly gone panes get closed. Fail-open: a herdr hiccup must
+    // never read as "everything is dead" (wiped topics + intents).
     if s.cfg.forum.is_some() {
         let stored = s.topics.all_mappings();
         let missing: Vec<String> = stored
@@ -53,27 +54,33 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
             .cloned()
             .collect();
         if !missing.is_empty() {
-            let panes = list_panes(&s.cfg.socket).await.unwrap_or_default();
-            for pane in missing {
-                if panes.contains(&pane) {
-                    s.status
-                        .lock()
-                        .await
-                        .insert(pane.clone(), "shell".to_string());
-                    // Agent gone (shell reuse): its stall episode dies here
-                    // or the next agent on this pane name inherits stale
-                    // dedup (see status.rs working→* clear).
-                    s.clear_limit_episode(&pane).await;
-                    s.topics.mark_shell(&pane).await;
-                // Dead-pane close is silent (no card), so it never waits
-                // for a non-silent tick — orphans from a restart close on
-                // the seed pass instead of lingering a full cycle.
-                } else {
-                    if s.topics.close_topic(&pane).await {
-                        s.topics.remove_mapping(&pane);
+            match list_panes(&s.cfg.socket).await {
+                Ok(panes) => {
+                    for pane in missing {
+                        if panes.contains(&pane) {
+                            s.status
+                                .lock()
+                                .await
+                                .insert(pane.clone(), "shell".to_string());
+                            // Agent gone (shell reuse): its stall episode dies here
+                            // or the next agent on this pane name inherits stale
+                            // dedup (see status.rs working→* clear).
+                            s.clear_limit_episode(&pane).await;
+                            s.topics.mark_shell(&pane).await;
+                        // Dead-pane close is silent (no card), so it never waits
+                        // for a non-silent tick — orphans from a restart close on
+                        // the seed pass instead of lingering a full cycle.
+                        } else {
+                            if s.topics.close_topic(&pane).await {
+                                s.topics.remove_mapping(&pane);
+                            }
+                            s.cancel_jobs_for(&pane).await;
+                            s.clear_pane(&pane).await;
+                        }
                     }
-                    s.cancel_jobs_for(&pane).await;
-                    s.clear_pane(&pane).await;
+                }
+                Err(e) => {
+                    eprintln!("[reconcile] pane list failed, keeping topics: {e}");
                 }
             }
         }
@@ -83,15 +90,28 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // jobs, durable intent, and per-pane maps for externally-closed
     // panes (no topic mapping exists to trigger the forum close flow).
     // Live panes are skipped; truly gone ones are cancelled + cleared.
+    // Fail-open: never wipe intents on a failed list call.
     {
         let mut known: Vec<String> = s.jobs.lock().await.keys().cloned().collect();
         known.extend(s.pending.lock().await.keys().cloned());
+        // Armed input waiters also pin a pane: a keywait/typewait for an
+        // externally-closed shell (no job, no intent, DM mode) must die
+        // with it instead of eating the next message as dead input.
+        known.extend(s.keywait.lock().await.values().cloned());
+        known.extend(s.runwait.lock().await.values().cloned());
+        known.extend(s.typewait.lock().await.values().cloned());
         if !known.is_empty() {
-            let live = list_panes(&s.cfg.socket).await.unwrap_or_default();
-            for pane in known {
-                if !live.contains(&pane) {
-                    s.cancel_jobs_for(&pane).await;
-                    s.clear_pane(&pane).await;
+            match list_panes(&s.cfg.socket).await {
+                Ok(live) => {
+                    for pane in known {
+                        if !live.contains(&pane) {
+                            s.cancel_jobs_for(&pane).await;
+                            s.clear_pane(&pane).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[reconcile] pane list failed, keeping intents: {e}");
                 }
             }
         }

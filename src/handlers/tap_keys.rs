@@ -19,6 +19,11 @@ pub(crate) enum TapCall {
 /// Send the tap's keys and re-read. Returns what to classify — never
 /// touches Telegram itself (the caller owns the card).
 pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
+    // Read first: the index is validated against the LIVE dialog below —
+    // a stale card (or crafted callback) must never drive keys into a
+    // narrower turned-over dialog. Unreadable screens stay permissive:
+    // outage must not brick real buttons.
+    let before = read_screen_visible(socket, pane, 30).await;
     let (nav, confirm, label): (Vec<&str>, Vec<&str>, String) =
         if let Some(rest) = action.strip_prefix("opt") {
             match rest.parse::<usize>() {
@@ -28,6 +33,12 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                 // Cards emit at most 4 options (dialog takes 4): wider
                 // indices are crafted callbacks, never real buttons.
                 Ok(i) if i < 4 => {
+                    if !before.is_empty() {
+                        let live = crate::handlers::dialog::parse_options(&before);
+                        if !live.is_empty() && i >= live.len() {
+                            return TapCall::Unknown;
+                        }
+                    }
                     let mut full = opt_keys(i);
                     let confirm = vec![full.pop().unwrap()];
                     (full, confirm, format!("option {}", i + 1))
@@ -40,7 +51,6 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                 None => return TapCall::Unknown,
             }
         };
-    let before = read_screen_visible(socket, pane, 30).await;
     if !nav.is_empty() {
         if send_agent_keys(socket, pane, &nav).await.is_err() {
             return TapCall::KeysFailed;

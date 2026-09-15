@@ -65,7 +65,8 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         delta(&screen, &base).to_vec()
     };
     let body = join_trimmed(&final_block(&source, ""));
-    s.seen.lock().await.insert(pane.clone(), screen);
+    // Baseline is consumed ONLY on delivery (see below): a dropped card
+    // must leave the delta for the next tick, never silently eat it.
     let info = get_agent(&s.cfg.socket, &pane).await.ok();
     let (kind, ws_id) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone()),
@@ -84,17 +85,21 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .unwrap_or(0);
     let display = display_status(&settled, settled_age);
     s.topics.sync_topic(&pane, &kind, raw_space, display).await;
-    // Short genuine answers ("ok", "done") still push: the debounce
-    // and delta above already gate noise, and a silent settle leaves
-    // the owner unaware. Only a truly empty body stays quiet.
-    if body.is_empty() {
+    // Single stray chars (picker echoes, vim residue) never page; real
+    // shorts ("ok", "done") do. Empty stays silent.
+    if body.chars().count() < 2 {
         return;
     }
-    post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await;
+    if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await {
+        s.seen.lock().await.insert(pane.clone(), screen);
+    }
 }
 
 /// Answer push: the body alone (never a status-word lead), plus the reply
 /// affordance when input is needed. Blocked keeps its urgent prefix.
+/// Returns true when at least one part was delivered: drops (topic race,
+/// Telegram outage) must neither stamp `last_done` (it would suppress the
+/// next settle) nor consume the caller's baseline.
 pub(crate) async fn post_spontaneous_card(
     s: &AppState,
     pane: &str,
@@ -102,7 +107,7 @@ pub(crate) async fn post_spontaneous_card(
     space: &str,
     settled: &str,
     body: &str,
-) {
+) -> bool {
     // NOTE: deliberately NOT touching focus here — background pushes must
     // never hijack where the owner's next plain-text message gets delivered.
     let text = match settled {
@@ -118,11 +123,8 @@ pub(crate) async fn post_spontaneous_card(
         parts.len(),
         body.len()
     );
-    s.last_done
-        .lock()
-        .await
-        .insert(pane.to_string(), std::time::Instant::now());
 
+    let mut delivered = false;
     if let Some(forum) = s.cfg.forum {
         let settled_age = s
             .settled_at
@@ -135,6 +137,9 @@ pub(crate) async fn post_spontaneous_card(
         if let Some(thread) = s.topics.sync_topic(pane, kind, space, display).await {
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
+                if mid.is_some() {
+                    delivered = true;
+                }
                 s.remember(forum, mid, pane).await;
             }
         }
@@ -142,8 +147,18 @@ pub(crate) async fn post_spontaneous_card(
         for id in &s.cfg.owners {
             for part in &parts {
                 let mid = s.tg.send_msg(*id, None, part, None).await;
+                if mid.is_some() {
+                    delivered = true;
+                }
                 s.remember(*id, mid, pane).await;
             }
         }
     }
+    if delivered {
+        s.last_done
+            .lock()
+            .await
+            .insert(pane.to_string(), std::time::Instant::now());
+    }
+    delivered
 }

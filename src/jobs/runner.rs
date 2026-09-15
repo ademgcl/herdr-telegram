@@ -1,17 +1,15 @@
 use crate::jobs::episode::BuzzEpisode;
 use crate::jobs::stall::watch_stall;
 use crate::{
-    handlers::dialog::send_blocked_card,
-    herdr::client::{get_agent, read_screen, rpc_t},
-    jobs::finalize::{edit_live, finalize, report},
+    herdr::client::get_agent,
+    jobs::finalize::{edit_live, finalize},
     jobs::job::Job,
     jobs::segment::final_block,
     jobs::stream::{EvStream, WatchEvent, delta},
     state::AppState,
-    types::{AgentRow, LIVE_EDIT_COOLDOWN_SECS, PromptRequest},
+    types::LIVE_EDIT_COOLDOWN_SECS,
     ui::tail_fit,
 };
-use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::time::{Duration, Instant};
@@ -23,88 +21,13 @@ const FALLBACK_TICK_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
-pub async fn enqueue_prompt(
-    s: AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    row: AgentRow,
-    text: String,
-) {
-    let req = PromptRequest {
-        chat_id,
-        message_thread_id: thread_id,
-        text,
-    };
-    let pane = row.pane.clone();
-
-    let existing = s.jobs.lock().await.get(&pane).cloned();
-    let job = match existing {
-        Some(j) => j,
-        None => {
-            let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-            // Re-check under a fresh lock: a concurrent enqueue may have
-            // won the pane while the baseline read yielded — spawning a
-            // second watcher would double-report every alert.
-            if let Some(j) = s.jobs.lock().await.get(&pane).cloned() {
-                j
-            } else {
-                let j = Job::new(baseline, chat_id, thread_id);
-                s.jobs.lock().await.insert(pane.clone(), j.clone());
-                tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
-                j
-            }
-        }
-    };
-
-    *job.dest.lock().await = (req.chat_id, req.message_thread_id);
-    *job.prompt.lock().await = req.text.clone();
-    *job.pending.lock().await += 1;
-    job.epoch.fetch_add(1, Ordering::Relaxed);
-    s.set_focus(&pane).await;
-
-    // Deliver immediately — interactive agents buffer input like a real terminal
-    if let Err(e) = rpc_t(
-        &s.cfg.socket,
-        "agent.prompt",
-        json!({"target": pane, "text": req.text}),
-        30,
-    )
-    .await
-    {
-        println!("[jobs] submit error: {e}");
-        *job.pending.lock().await -= 1;
-        // Retire the watcher: nothing was delivered, so it must not report.
-        // (Without this it finalizes on the untouched screen — the bogus
-        // "(no captured output)" card.) Blocked panes get the interactive
-        // card instead, so replying always works.
-        job.mark_stopped();
-        job.cancel.notify_waiters();
-        let msg = e.to_string();
-        if msg.contains("blocked") {
-            send_blocked_card(&s, req.chat_id, req.message_thread_id, &pane).await;
-        } else {
-            report(
-                &s,
-                req.chat_id,
-                req.message_thread_id,
-                &pane,
-                &format!("⚠️ error: {e}"),
-            )
-            .await;
-        }
-        s.clear_pending(&pane).await;
-        return;
-    }
-    // Delivered: durable intent so a restart re-arms this watcher instead
-    // of eating the reply.
-    s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
-        .await;
-}
-
 /// Watch the agent via herdr push-events: every output burst updates one live
 /// Telegram message; settle turns it into the final result card.
 pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut live_mid: Option<i64> = None;
+    // Chat/thread owning the live card — needed to retire it when a new
+    // prompt supersedes (live_mid alone can't address the edit).
+    let mut live_dest: Option<(i64, Option<i64>)> = None;
     let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
     // Raw output since the prompt — the fresh reply is extracted from
     // this at display time (last segment only, see segment::final_block)
@@ -119,23 +42,45 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut episode = BuzzEpisode::new();
     let mut last_epoch = job.epoch.load(Ordering::Relaxed);
     let mut fails: u32 = 0;
+    // Delivery-retry backoff: a dead Telegram must not spin herdr reads
+    // at full tick rate forever — back off, keep the intent until
+    // /cancel or pane death breaks the loop.
+    let mut retry_wait = FALLBACK_TICK_SECS;
     println!("[watcher] start {pane}");
 
     loop {
         if job.is_stopped() {
             break;
         }
-        // New prompt on a reused watcher restarts all episode timers.
+        // New prompt on a reused watcher restarts all episode timers
+        // and drops the old prompt's stream state: stale accumulation,
+        // baseline and live message belong to the previous turn.
         let epoch = job.epoch.load(Ordering::Relaxed);
         if epoch != last_epoch {
             last_epoch = epoch;
             episode.reset();
+            acc.clear();
+            retry_wait = FALLBACK_TICK_SECS;
+            // Retire the old live card instead of orphaning it frozen.
+            if let Some(mid) = live_mid.take() {
+                if let Some((chat, _)) = live_dest.take() {
+                    s.tg.edit_msg(chat, mid, "🔄 superseded by a newer prompt", None)
+                        .await;
+                }
+            } else {
+                live_dest = None;
+            }
+            job.baseline_ok.store(false, Ordering::Relaxed);
         }
 
-        // Reconnect the event stream lazily — never in a hot loop
+        // Reconnect the event stream lazily — never in a hot loop.
+        // Bounded: a hung ack degrades to polling, never freezes pre-select.
         if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
             last_open = Instant::now();
-            ev = EvStream::open(&s.cfg.socket, &pane).await.ok();
+            match EvStream::open_bounded(&s.cfg.socket, &pane, 10).await {
+                Ok(stream) => ev = Some(stream),
+                Err(e) => eprintln!("[watcher] {pane} event stream open failed: {e}"),
+            }
         }
 
         // Output activity → stream; status change → maybe finalize.
@@ -144,7 +89,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
-                s.clear_pending(&pane).await;
+                // A superseding enqueue replaced this watcher: the intent
+                // belongs to the new job — only clear when the map still
+                // points here.
+                if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
+                    s.clear_pending(&pane).await;
+                }
                 let (chat, th) = *job.dest.lock().await;
                 edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                 break;
@@ -174,7 +124,19 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     println!(
                         "[watcher] {pane} unreachable x{fails} ({e}) - backing off 60s, intent kept"
                     );
-                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    // Cancellable backoff: /cancel must not wait behind it.
+                    // Same ownership rule as the cancel branch: a replaced
+                    // watcher's clear must not eat the new job's intent.
+                    tokio::select! {
+                        _ = job.cancel.notified() => {
+                            job.mark_stopped();
+                            if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
+                                s.clear_pending(&pane).await;
+                            }
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                    }
                     fails = 0;
                 }
                 continue;
@@ -190,12 +152,19 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
             let epoch_before = job.epoch.load(Ordering::Relaxed);
             let retry = finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
+            // finalize consumes the live slot on success — drop its
+            // address too, or a later reset would edit the final card.
+            if live_mid.is_none() {
+                live_dest = None;
+            }
             if job.epoch.load(Ordering::Relaxed) != epoch_before {
                 continue;
             }
             if retry {
-                // Read outage: back off to tick cadence instead of retiring.
-                tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)).await;
+                // Delivery/read outage: back off (capped) instead of
+                // retiring — the intent stays until /cancel or pane death.
+                tokio::time::sleep(Duration::from_secs(retry_wait)).await;
+                retry_wait = (retry_wait * 2).min(60);
                 continue;
             }
             break;
@@ -247,6 +216,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
             None => live_mid = s.tg.send_msg(chat, th, &text, None).await,
         }
+        live_dest = live_mid.map(|_| (chat, th));
         last_edit = Instant::now();
     }
 

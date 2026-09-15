@@ -29,10 +29,17 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
 }
 
 /// Open a fresh shell pane: new tab in `ws` (or the tg space), topic
-/// badged shell, ready for commands. `ws` is a workspace id.
+/// badged shell, ready for commands. `ws` is a workspace id or label.
 pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option<&str>) {
     let ws_id = match ws {
-        Some(w) if !w.is_empty() => w.to_string(),
+        Some(w) if !w.is_empty() => match super::space::resolve_ws(s, w).await {
+            Some(id) => id,
+            None => {
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{w}`"), None)
+                    .await;
+                return;
+            }
+        },
         _ => match ensure_tg_space(&s.cfg.socket).await {
             Ok(id) => id,
             Err(e) => {

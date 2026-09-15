@@ -22,12 +22,18 @@ pub fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow>
     }
 }
 
-/// DM pane target: explicit pane/kind, else focus (which may be a rowless
-/// shell pane — callers report that case themselves).
-pub async fn dm_pane(s: &AppState, rows: &[AgentRow], arg: &str) -> Option<String> {
+/// DM pane target: explicit pane/kind, else the replied-to card's pane,
+/// else focus (which may be a rowless shell pane — callers report that
+/// case themselves).
+pub async fn dm_pane(
+    s: &AppState,
+    rows: &[AgentRow],
+    arg: &str,
+    reply: &Option<String>,
+) -> Option<String> {
     match resolve_target(rows, Some(arg)) {
         Some(r) => Some(r.pane),
-        None if arg.is_empty() => s.get_focus().await,
+        None if arg.is_empty() => reply.clone().or(s.get_focus().await),
         _ => None,
     }
 }

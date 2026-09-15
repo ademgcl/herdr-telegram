@@ -16,7 +16,7 @@ pub struct PendingPrompt {
 }
 
 pub fn store_path() -> PathBuf {
-    PathBuf::from("jobs.state")
+    crate::state::state_dir().join("jobs.state")
 }
 
 pub fn load_file(path: &Path) -> HashMap<String, PendingPrompt> {
@@ -34,7 +34,12 @@ pub fn load_file(path: &Path) -> HashMap<String, PendingPrompt> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
+        let bak = PathBuf::from(format!(
+            "{}.corrupt-{}-{}.bak",
+            path.display(),
+            secs,
+            std::process::id()
+        ));
         let _ = std::fs::copy(path, &bak);
         HashMap::new()
     })
@@ -46,7 +51,11 @@ pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
         if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
+            if std::fs::rename(&tmp, path).is_err() {
+                eprintln!("[jobs] intent rename failed (disk full?)");
+            }
+        } else {
+            eprintln!("[jobs] intent write failed (disk full?)");
         }
     }
 }
@@ -82,6 +91,16 @@ mod tests {
         assert_eq!(back["w8:p1"].thread, Some(6));
         std::fs::write(&p, "not json{{").unwrap();
         assert!(load_file(&p).is_empty());
+        // Corrupt loads back the file up — clean up strays, not just `p`.
+        let prefix = format!("{}.corrupt-", p.display());
+        if let Ok(dir) = std::fs::read_dir("/tmp") {
+            for e in dir.flatten() {
+                let name = e.path().display().to_string();
+                if name.starts_with(&prefix) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
         let _ = std::fs::remove_file(&p);
     }
 }

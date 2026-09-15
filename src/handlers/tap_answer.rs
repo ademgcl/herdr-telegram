@@ -35,15 +35,25 @@ pub async fn answer_tap(
         s.remember(chat, mid, pane).await;
         return;
     }
-    s.blockop.lock().await.insert(pane.to_string());
+    // Single-flight per pane: a double-tap (or two owners) must not
+    // interleave key sequences into the same dialog, and observations
+    // must not post over the card this tap owns.
+    if !s.blockop.lock().await.insert(pane.to_string()) {
+        let mid =
+            s.tg.send_msg(chat, thread, "tap already in flight — wait a beat", None)
+                .await;
+        s.remember(chat, mid, pane).await;
+        return;
+    }
     let call = tap_keys(&s.cfg.socket, pane, action).await;
-    s.blockop.lock().await.remove(pane);
     match call {
         TapCall::Unknown => {
+            s.blockop.lock().await.remove(pane);
             let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
             s.remember(chat, mid, pane).await;
         }
         TapCall::KeysFailed => {
+            s.blockop.lock().await.remove(pane);
             let mid =
                 s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
                     .await;
@@ -73,6 +83,10 @@ pub async fn answer_tap(
                         no_kb,
                     )
                     .await;
+                    // The status layer can lag up to a cycle behind: clear
+                    // the dialog signature now or the next same-`blocked`
+                    // observation reposts a ghost card for a live agent.
+                    s.blocked_sig.lock().await.remove(pane);
                     s.remember(chat, Some(msg_id), pane).await;
                 }
                 TapResult::Unchanged => {
@@ -91,6 +105,7 @@ pub async fn answer_tap(
                     s.remember(chat, mid, pane).await;
                 }
             }
+            s.blockop.lock().await.remove(pane);
         }
     }
 }
