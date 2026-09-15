@@ -53,8 +53,8 @@ mod tests {
     #[test]
     fn test_format_shell_reply() {
         assert_eq!(
-            format_shell_reply("pwd", "/Users/adem/projects").as_str(),
-            "$ pwd\n/Users/adem/projects"
+            format_shell_reply("pwd", "/home/user/projects").as_str(),
+            "$ pwd\n/home/user/projects"
         );
         assert_eq!(
             format_shell_reply("true", "  \n ").as_str(),

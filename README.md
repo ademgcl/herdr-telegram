@@ -26,7 +26,7 @@ cp .env.example .env  # fill in below
 ## Run
 
 ```sh
-cp dev.herdr.telegram.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.herdr.telegram.plist  # auto-restart on crash/reboot, logs to bot.log
+sed "s|__REPO_DIR__|$(pwd)|g" dev.herdr.telegram.plist.example > ~/Library/LaunchAgents/dev.herdr.telegram.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.herdr.telegram.plist  # auto-restart on crash/reboot, logs to bot.log
 launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop service before manual runs, or the single-instance guard + Telegram getUpdates Conflict will fight it
 launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev.herdr.telegram.plist  # uninstall
 ```

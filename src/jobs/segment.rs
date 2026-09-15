@@ -127,7 +127,7 @@ mod tests {
             "  ┃",
             "  ┃  Build · Muse Spark 1.3 Free OpenCode Zen · xhigh",
             "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-            "   /Users/adem/projects/herdr-telegram        10.8K (1%)  ctrl+p commands",
+            "   /home/user/projects/herdr-telegram        10.8K (1%)  ctrl+p commands",
         ]);
         assert_eq!(
             final_block(&screen, "hi"),
@@ -229,7 +229,7 @@ mod tests {
             "  ┃",
             "  ┃  Patterns",
             "  ┃",
-            "  ┃  - /Users/adem/.config/opencode/*",
+            "  ┃  - /home/user/.config/opencode/*",
             "  ┃",
             "  ┃",
             "  ┃   Allow once   Allow always   Reject",

@@ -178,7 +178,7 @@ mod tests {
             "     Nemotron 3.5 Lightning Free             OpenCode Zen",
             "     ▣      Ling 3.0 Flash VL                         OpenRouter",
             "  ┃         Connect provider ctrl+a  Favorite ctrl+f",
-            "   /Users/adem/projects/herdr-telegram        15.5K (1%)  ctrl+p commands",
+            "   /home/user/projects/herdr-telegram        15.5K (1%)  ctrl+p commands",
         ]);
         let rows = picker_rows(&screen);
         // The ▣-led row is rejected (no valid name column).

@@ -6,10 +6,10 @@
 	<string>dev.herdr.telegram</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Users/adem/projects/herdr-telegram/target/release/herdr-telegram</string>
+		<string>__REPO_DIR__/target/release/herdr-telegram</string>
 	</array>
 	<key>WorkingDirectory</key>
-	<string>/Users/adem/projects/herdr-telegram</string>
+	<string>__REPO_DIR__</string>
 	<!-- ThrottleInterval 30: the bot holds a single-instance TCP guard, so a fast crash-loop would spin hot against a live/stale holder; throttling keeps restarts spaced out. -->
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
@@ -20,8 +20,8 @@
 	<key>SuccessfulExit</key>
 	<false/>
 	<key>StandardOutPath</key>
-	<string>/Users/adem/projects/herdr-telegram/bot.log</string>
+	<string>__REPO_DIR__/bot.log</string>
 	<key>StandardErrorPath</key>
-	<string>/Users/adem/projects/herdr-telegram/bot.log</string>
+	<string>__REPO_DIR__/bot.log</string>
 </dict>
 </plist>

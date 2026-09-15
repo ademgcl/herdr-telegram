@@ -237,7 +237,7 @@ mod tests {
         let lines = v(&[
             "△ Permission required",
             "Patterns",
-            "- /Users/adem/.config/opencode/*",
+            "- /home/user/.config/opencode/*",
             "Allow once   Allow always   Reject",
             "ctrl+f fullscreen  ⇆ select  enter confirm",
         ]);
