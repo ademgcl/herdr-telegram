@@ -1,6 +1,8 @@
 /// Prompt result finalization: turn the live message into the final card.
 /// Split from `runner` (300-line file limit). `watch_job` calls
 /// `finalize` on settle; `enqueue_prompt` reports submit errors.
+/// Returns true on read outage (nothing posted/cleared/stamped) so the
+/// watcher loop retries instead of retiring the intent.
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use crate::{
@@ -27,7 +29,7 @@ pub async fn finalize(
     settled: &str,
     live_mid: &mut Option<i64>,
     acc: &mut Vec<String>,
-) {
+) -> bool {
     // Fresh reply only: the last segment after tool calls, reasoning
     // headers and the prompt echo — earlier turns and intermediate work
     // are dropped. Falls back to the settled screen for fast tasks where
@@ -44,7 +46,7 @@ pub async fn finalize(
     let snapshot = screen;
     if body.is_empty() && snapshot.is_empty() && acc.is_empty() {
         println!("[prompt] finalize {pane}: read outage, keeping intent for retry");
-        return;
+        return true;
     }
 
     // The card is the answer itself — never a status-word lead. Blocked
@@ -65,14 +67,14 @@ pub async fn finalize(
         // Anchor the baseline so later settles don't repost the dialog.
         s.seen.lock().await.insert(pane.to_string(), snapshot);
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
-        return;
+        return false;
     }
     // Empty non-blocked settle: post nothing and stamp nothing, so the
     // spontaneous path re-evaluates from its own baseline.
     if body.is_empty() {
         observe_status(s, pane, settled, true, "job").await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
-        return;
+        return false;
     }
     let text = if settled == "blocked" {
         format!("{body}\n↩️ reply or type in topic to answer")
@@ -107,6 +109,7 @@ pub async fn finalize(
     }
     *live_mid = None;
     settle_books(s, pane, job, entry_epoch, entry_pending).await;
+    false
 }
 
 /// Cover the prompts owed at entry. A new submit mid-finalize bumps the

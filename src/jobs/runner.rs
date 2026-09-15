@@ -179,8 +179,13 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 continue;
             }
             let epoch_before = job.epoch.load(Ordering::Relaxed);
-            finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
+            let retry = finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
             if job.epoch.load(Ordering::Relaxed) != epoch_before {
+                continue;
+            }
+            if retry {
+                // Read outage: back off to tick cadence instead of retiring.
+                tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)).await;
                 continue;
             }
             break;
