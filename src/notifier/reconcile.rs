@@ -81,14 +81,17 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                 {
                                     let tail = tail.trim().to_string();
                                     if !tail.is_empty() {
-                                        report(
-                                            s,
-                                            pp.chat,
-                                            pp.thread,
-                                            &pane,
-                                            &format!("agent quit to shell — last output:\n{tail}"),
-                                        )
-                                        .await;
+                                        let msg =
+                                            format!("agent quit to shell — last output:\n{tail}");
+                                        if !report(s, pp.chat, pp.thread, &pane, &msg).await {
+                                            // Intent was already cancelled above:
+                                            // keep it so boot-recover retries
+                                            // the notice instead of losing it.
+                                            s.remember_pending(
+                                                &pane, pp.chat, pp.thread, &pp.prompt,
+                                            )
+                                            .await;
+                                        }
                                     }
                                 }
                             }
@@ -157,6 +160,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
 /// kind (scroll-order flips never spam; the 30-min remind still fires).
 async fn scan_limits(s: &AppState) {
     let panes: Vec<String> = {
+        // Lock order (never inverted anywhere): status → jobs.
         let status = s.status.lock().await;
         let jobs = s.jobs.lock().await;
         status

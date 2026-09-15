@@ -188,7 +188,6 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             }
             return;
         }
-        s.seen.lock().await.insert(pane.to_string(), screen);
         let hint = "";
         let verb = if new_status == "idle" {
             "ready"
@@ -201,6 +200,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             text.push_str(&format!("\n{short}"));
         }
         text.push_str(hint);
+        let mut delivered = true;
         for id in &s.cfg.owners {
             let mid =
                 s.tg.send_msg(
@@ -210,7 +210,15 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
                     Some(json!([[btn("show output", &format!("o:{pane}"))]])),
                 )
                 .await;
+            if mid.is_none() {
+                delivered = false;
+            }
             s.remember(*id, mid, pane).await;
+        }
+        // Baseline advances only on delivery: an outage replays the
+        // delta instead of eating it.
+        if delivered {
+            s.seen.lock().await.insert(pane.to_string(), screen);
         }
         return;
     }

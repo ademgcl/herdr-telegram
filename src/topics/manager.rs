@@ -36,8 +36,14 @@ impl TopicManager {
     }
 
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
-        self.last_title_write.lock().unwrap().remove(pane);
-        self.creating.lock().unwrap().remove(pane);
+        self.last_title_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(pane);
+        self.creating
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(pane);
         self.storage.remove(pane)
     }
 
@@ -64,7 +70,12 @@ impl TopicManager {
         // Single-flight: a concurrent ensure for this same new pane may
         // already be creating. The loser waits for the winner's insert
         // (bounded — a slow network just defers to the next tick).
-        if !self.creating.lock().unwrap().insert(pane.to_string()) {
+        if !self
+            .creating
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(pane.to_string())
+        {
             for _ in 0..20 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 if let Some(t) = self.storage.get_thread(pane) {
@@ -101,7 +112,10 @@ impl TopicManager {
                 None
             }
         };
-        self.creating.lock().unwrap().remove(pane);
+        self.creating
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(pane);
         out
     }
 
@@ -180,7 +194,11 @@ impl TopicManager {
         if self.storage.get_title(pane).as_deref() == Some(desired) {
             return;
         }
-        if let Some(t) = self.last_title_write.lock().unwrap().get(pane)
+        if let Some(t) = self
+            .last_title_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(pane)
             && t.elapsed() < std::time::Duration::from_secs(5)
         {
             println!("[topics] skip rename {pane}: recent title write");
@@ -264,16 +282,51 @@ impl TopicManager {
         }
     }
 
+    /// Snapshot a pane's full topic identity (reset survivor path).
+    pub fn snapshot_identity(
+        &self,
+        pane: &str,
+    ) -> (Option<String>, Option<String>, Option<String>) {
+        (
+            self.storage.get_tag(pane),
+            self.storage.get_title(pane),
+            self.storage.get_icon(pane),
+        )
+    }
+
     /// Restore a mapping wiped by `clear_all` (reset retry path):
-    /// the Telegram topic survived, so re-sync reuses it instead of
-    /// minting a duplicate. Titles/tags reconverge on the next tick.
-    pub fn restore_mapping(&self, pane: String, thread: i64) {
-        self.storage.insert(pane, thread);
+    /// the Telegram topic survived, so re-sync reuses it with its tag,
+    /// title and icon intact instead of minting a renamed duplicate or
+    /// clobbering a user-customized icon.
+    pub fn restore_identity(
+        &self,
+        pane: String,
+        thread: i64,
+        tag: Option<String>,
+        title: Option<String>,
+        icon: Option<String>,
+    ) {
+        self.storage.insert(pane.clone(), thread);
+        if let Some(t) = tag {
+            self.storage.set_tag(&pane, &t);
+        }
+        if let Some(t) = title {
+            self.storage.set_title(&pane, &t);
+        }
+        if let Some(i) = icon {
+            self.storage.set_icon(&pane, &i);
+        }
     }
 
     pub fn clear_all(&self) {
-        self.last_title_write.lock().unwrap().clear();
-        self.creating.lock().unwrap().clear();
+        self.last_title_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.creating
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.storage.clear_all();
     }
 }

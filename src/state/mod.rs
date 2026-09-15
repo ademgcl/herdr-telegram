@@ -79,6 +79,37 @@ pub struct State {
 
 pub type AppState = Arc<State>;
 
+/// RAII single-flight guard: the pane is removed from the set on drop —
+/// including task cancellation between insert and the manual remove —
+/// so a wedged insert can never brick the pane until restart.
+pub struct OpGuard<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    pane: String,
+}
+
+impl<'a> OpGuard<'a> {
+    /// Atomically claim the pane; `None` means already in flight.
+    pub async fn claim(set: &'a Mutex<HashSet<String>>, pane: &str) -> Option<Self> {
+        if !set.lock().await.insert(pane.to_string()) {
+            return None;
+        }
+        Some(Self {
+            set,
+            pane: pane.to_string(),
+        })
+    }
+}
+
+impl Drop for OpGuard<'_> {
+    fn drop(&mut self) {
+        // No await in Drop: try_lock suffices — the holder only ever
+        // holds the guard across short critical sections.
+        if let Ok(mut set) = self.set.try_lock() {
+            set.remove(&self.pane);
+        }
+    }
+}
+
 /// Directory holding bot state files (jobs/focus/offset/topics).
 /// `HERDR_STATE_DIR` overrides it; default is the launch CWD (historic
 /// behavior). Launchd and manual runs MUST use the same one — split
@@ -186,6 +217,7 @@ impl State {
 
     pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
         let Some(msg_id) = msg_id else { return };
+        // Lock order (never inverted anywhere): torder → targets.
         let mut ord = self.torder.lock().await;
         let mut map = self.targets.lock().await;
         while map.len() >= 512 {
@@ -223,8 +255,6 @@ impl State {
     /// Drop armed input waiters for a dead pane: a typewait surviving
     /// /kill would eat the owner's next message as typed input into a
     /// pane that no longer exists.
-    ///
-    /// Lives in `jobs.rs` (job lifecycle owns waiter cleanup).
     pub async fn clear_pane(&self, pane: &str) {
         // A dead pane must stop typing at once: otherwise the loop
         // spams the action into the void every 4s until reaped.

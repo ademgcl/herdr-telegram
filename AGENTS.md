@@ -121,10 +121,10 @@ src/
 - Titles sync 1:1 with herdr pane names: pane label when set, else the friendly default (`o2 · tg`). Last synced title persists in `topics.state`.
 - Either side renames: native topic rename → `pane.rename`; herdr-side rename → topic renamed on the ≤60s watchdog. Stored-title compare both ways, so edits converge without loops.
 - Known limit: a rename made while the bot is down can diverge (no read API for topic names) — last-observed-writer wins; redelivered updates heal it.
-- State lives on the **icon**, set once silently at creation and never churned: 💻 agent · 💬 shell (custom-emoji IDs via `context_icon_emoji_id`); user customs persist and are never overwritten. Status surfaces in cards, pins and the typing indicator instead.
+- State lives on the **icon**, set once silently at creation and never churned: 💻 agent · 💬 shell (custom-emoji IDs via `context_icon_emoji_id`); user customs persist and are never overwritten. Status surfaces in cards and the typing indicator instead (+ one identity pin per topic).
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
-- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`.
+- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`. (`/space` is global via pre-route; `/shell` works in agent topics, shell topics have their own set.)
 - General topic: `/agents` `/spawn` `/space` `/shell` `/model` (redirect) `/start` `/reset` `/cancel` `/help`.
 - Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 

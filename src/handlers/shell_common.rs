@@ -19,27 +19,29 @@ pub(crate) async fn shell_snapshot(s: &AppState, pane: &str) -> String {
 }
 
 /// Wait for the shell to settle after submitting: poll until two
-/// consecutive reads agree AND differ from the pre-send screen (or ~10s).
+/// consecutive reads agree AND differ from the pre-send screen (or ~15s).
 /// A fixed sleep races slow shell startups (pyenv rehash etc.) and slow
 /// commands — the read then catches the typed echo with no output yet.
-pub(crate) async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> String {
+/// Returns whether the screen stabilized: callers must say so when it
+/// did not, never present partial output as final.
+pub(crate) async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> (String, bool) {
     let mut last = String::new();
     let mut stable = 0u32;
     let mut cur = String::new();
-    for _ in 0..10 {
+    for _ in 0..15 {
         sleep(Duration::from_secs(1)).await;
         cur = shell_snapshot(s, pane).await;
         if cur != before && cur == last {
             stable += 1;
             if stable >= 2 {
-                break;
+                return (cur, true);
             }
         } else {
             stable = 0;
         }
         last = cur.clone();
     }
-    cur
+    (cur, false)
 }
 
 pub fn shell_card_text(pane: &str) -> String {

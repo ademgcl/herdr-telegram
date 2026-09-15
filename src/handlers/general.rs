@@ -172,7 +172,11 @@ pub(crate) async fn handle_general_forum_message(
     }
 
     if cmd == "/reset" || cmd == "/reset_topics" {
-        super::reset::run_paced_reset(&s, chat, thread_id).await;
+        // Paced and slow (minutes on big trees): run detached so the
+        // poll loop and watchdog stay live. RESET_IN_PROGRESS
+        // serializes concurrent runs.
+        let s2 = s.clone();
+        tokio::spawn(async move { super::reset::run_paced_reset(&s2, chat, thread_id).await });
         return;
     }
 

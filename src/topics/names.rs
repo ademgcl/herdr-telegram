@@ -1,7 +1,8 @@
 //! Stable short tags per pane (`o2`): kept as persisted ids; the
 //! VISIBLE title syncs 1:1 with herdr pane names (see `sync_title`).
 //! The topic icon is context-only (agent vs shell, set once at
-//! creation); live status surfaces in cards, pins and typing.
+//! creation); live status surfaces in cards and the typing indicator
+//! (+ one identity pin per topic).
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown

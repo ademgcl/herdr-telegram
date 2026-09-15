@@ -42,7 +42,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         s.tg.send_msg(
             chat,
             None,
-            &format!("✋ cancelled {count} pending job(s)"),
+            &format!("✋ cancelled {count} pending job(s) (all panes)"),
             None,
         )
         .await;

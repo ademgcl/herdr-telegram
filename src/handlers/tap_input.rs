@@ -38,11 +38,12 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
     // Own the card through send + verify: a same-`blocked` observation
     // mid-sleep must not post a duplicate card or race the baseline.
     // Single-flight like button taps: concurrent types interleave.
-    if !s.blockop.lock().await.insert(pane.to_string()) {
+    // RAII: cancellation mid-type must not wedge the pane.
+    let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
         return Err(TypeError::Failed(
             "answer already in flight — wait a beat".into(),
         ));
-    }
+    };
     // The agent may have resumed between the snapshot and now: typing
     // into live work injects the answer as stray input. Bail so the
     // caller routes the text as a prompt instead. Unknown (read error)
@@ -52,11 +53,9 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
         .map(|a| a.status != "blocked")
         .unwrap_or(false)
     {
-        s.blockop.lock().await.remove(pane);
         return Err(TypeError::Resumed);
     }
     if let Err(e) = send_pane_input(socket, pane, text).await {
-        s.blockop.lock().await.remove(pane);
         return Err(TypeError::Failed(e.to_string()));
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -67,7 +66,6 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
     {
         let after = read_screen_visible(socket, pane, 30).await;
         if dialog_stalled(&before, &after) {
-            s.blockop.lock().await.remove(pane);
             return Err(TypeError::Failed(
                 "text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into(),
             ));
@@ -80,7 +78,7 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
             .await
             .insert(pane.to_string(), dialog_sig(&after));
     }
-    s.blockop.lock().await.remove(pane);
+    drop(_op);
     let s2 = s.clone();
     let pane2 = pane.to_string();
     tokio::spawn(async move {

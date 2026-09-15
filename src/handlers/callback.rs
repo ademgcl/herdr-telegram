@@ -207,6 +207,14 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
             if let Some((action, pane)) = split_action(r) {
                 super::tap::answer_tap(&s, chat, msg_id, thread, pane, action).await;
+            } else {
+                s.tg.edit_msg(
+                    chat,
+                    msg_id,
+                    "unknown button — tap again from a fresh card",
+                    None,
+                )
+                .await;
             }
         }
         // Model picker: M:<idx>:<pane> free-Zen taps, M:list:<pane> card.
@@ -223,6 +231,14 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
             if let Some((action, pane)) = split_action(r) {
                 super::kill::handle_kill_action(&s, chat, msg_id, action, pane).await;
+            } else {
+                s.tg.edit_msg(
+                    chat,
+                    msg_id,
+                    "unknown button — tap again from a fresh card",
+                    None,
+                )
+                .await;
             }
         }
         _ => {}

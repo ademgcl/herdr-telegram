@@ -89,7 +89,7 @@ pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String 
             .filter(|a| a.ws == s.id)
             .map(|a| a.status.as_str())
             .collect();
-        let emo = worst_status(mine.clone());
+        let emo = worst_status(mine.iter().copied());
         text.push_str(&format!(
             "{emo} #{} {} — {} agent(s)\n",
             s.number,

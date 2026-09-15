@@ -34,9 +34,9 @@ pub fn search_filter(q: &str) -> String {
     .iter()
     .any(|p| low.contains(p));
     if providerish {
-        q.to_lowercase()
+        low
     } else {
-        format!("{} zen", q.to_lowercase())
+        format!("{low} zen")
     }
 }
 /// Default `/model` card: current footer model + numbered free-Zen
@@ -64,7 +64,10 @@ pub fn model_kb(pane: &str) -> Value {
         if i % 2 == 0 {
             rows.push(Vec::new());
         }
-        rows.last_mut().expect("row pushed on even i").push(json!({
+        let Some(row) = rows.last_mut() else {
+            continue;
+        };
+        row.push(json!({
             "text": *short,
             // model ids hold no ':' — pane goes last so splitn keeps it whole.
             "callback_data": format!("M:{i}:{pane}"),
@@ -164,13 +167,11 @@ pub async fn switch_model(
     filter: &str,
     marker: &str,
 ) -> Result<String, String> {
-    if s.modelop.lock().await.contains(pane) {
-        return Err("a model switch is already running here".to_string());
-    }
-    s.modelop.lock().await.insert(pane.to_string());
-    let r = switch_inner(s, pane, filter, marker).await;
-    s.modelop.lock().await.remove(pane);
-    r
+    // RAII claim: cancellation mid-switch must not wedge the pane.
+    let _op = crate::state::OpGuard::claim(&s.modelop, pane)
+        .await
+        .ok_or_else(|| "a model switch is already running here".to_string())?;
+    switch_inner(s, pane, filter, marker).await
 }
 
 async fn switch_inner(

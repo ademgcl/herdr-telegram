@@ -41,23 +41,22 @@ pub async fn answer_tap(
     }
     // Single-flight per pane: a double-tap (or two owners) must not
     // interleave key sequences into the same dialog, and observations
-    // must not post over the card this tap owns.
-    if !s.blockop.lock().await.insert(pane.to_string()) {
+    // must not post over the card this tap owns. RAII: cancellation
+    // mid-tap must not wedge the pane.
+    let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
         let mid =
             s.tg.send_msg(chat, thread, "tap already in flight — wait a beat", None)
                 .await;
         s.remember(chat, mid, pane).await;
         return;
-    }
+    };
     let call = tap_keys(&s.cfg.socket, pane, action).await;
     match call {
         TapCall::Unknown => {
-            s.blockop.lock().await.remove(pane);
             let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
             s.remember(chat, mid, pane).await;
         }
         TapCall::KeysFailed => {
-            s.blockop.lock().await.remove(pane);
             let mid =
                 s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
                     .await;
@@ -109,7 +108,6 @@ pub async fn answer_tap(
                     s.remember(chat, mid, pane).await;
                 }
             }
-            s.blockop.lock().await.remove(pane);
         }
     }
 }

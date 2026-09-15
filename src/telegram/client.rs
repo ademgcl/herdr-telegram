@@ -98,6 +98,9 @@ impl TelegramClient {
         self.call(
             "setMyCommands",
             json!({"commands": [
+                // Topic-scoped commands (/split, /output, ...) stay out of
+                // the global menu: they only work inside a pane topic.
+                {"command": "start", "description": "how to drive agents from here"},
                 {"command": "agents", "description": "open control panel (spaces + agents)"},
                 {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
                 {"command": "space", "description": "new space + shell topic"},
