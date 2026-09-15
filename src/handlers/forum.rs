@@ -69,7 +69,7 @@ async fn handle_topic_agent_message(
     let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
         // No agent in this pane: shell CLI mode (or a lingering dead pane,
         // which the shell side reports as gone).
-        super::shell::handle_shell_topic(s, chat, thread_id, pane, text).await;
+        super::shell_topic::handle_shell_topic(s, chat, thread_id, pane, text).await;
         return;
     };
     println!("[forum] got agent {} cmd={arg:?}...", agent.pane, arg = &text.chars().take(30).collect::<String>());

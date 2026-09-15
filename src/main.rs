@@ -74,7 +74,9 @@ async fn main() -> Res<()> {
             } => {
                 match updates {
                     Ok(list) => {
-                        println!("[tg] poll ok: {} update(s)", list.len());
+                        if !list.is_empty() {
+                            println!("[tg] poll ok: {} update(s)", list.len());
+                        }
                         for u in list {
                             let id = u["update_id"].as_u64().unwrap_or(0);
                             {

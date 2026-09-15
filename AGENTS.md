@@ -48,7 +48,9 @@ src/
 │   ├── model.rs            # Opencode model picker
 │   ├── model_parse.rs      # Picker list parsing
 │   ├── model_scan.rs       # Column-split helpers
-│   └── shell.rs            # Agentless shell panes
+│   ├── shell.rs            # Agentless shell panes (ops)
+│   ├── shell_topic.rs      # Shell-topic command routing
+│   ├── target.rs           # DM pane-target resolution
 │   └── titles.rs           # 1:1 pane↔topic title sync (both directions)
 ├── jobs/                   # Agent prompt execution
 │   ├── mod.rs              # Re-exports
@@ -78,6 +80,7 @@ src/
 - One topic per pane (agents and shells alike).
 - Titles sync 1:1 with herdr pane names: pane label when set, else the unique pane id (`w8:p1`). Last synced title persists in `topics.state`.
 - Either side renames: native topic rename → `pane.rename`; herdr-side rename → topic renamed on the ≤60s watchdog. Stored-title compare both ways, so edits converge without loops.
+- Known limit: a rename made while the bot is down can diverge (no read API for topic names) — last-observed-writer wins; redelivered updates heal it.
 - State lives on the **icon**, synced silently (never notifies): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown. Fresh `done` decays to idle after 15 quiet min.
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.

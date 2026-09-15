@@ -51,11 +51,9 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // name back to the herdr pane label. Must run BEFORE the empty-text
     // return below. No stale gate: replays are idempotent via the
     // stored-title compare, and a redelivered rename heals the down-window.
-    if msg.get("forum_topic_edited").is_some() {
+    if let Some((thread, name)) = crate::handlers::titles::parse_topic_edit(msg) {
         if (chat_type == "supergroup" || chat_type == "group") && s.cfg.forum == Some(chat_id) {
-            let thread = msg["message_thread_id"].as_i64();
-            let name = msg["forum_topic_edited"]["name"].as_str().unwrap_or("").to_string();
-            crate::handlers::titles::adopt_topic_title(s, chat_id, thread, &name).await;
+            crate::handlers::titles::adopt_topic_title(s, chat_id, Some(thread), &name).await;
         }
         return;
     }
