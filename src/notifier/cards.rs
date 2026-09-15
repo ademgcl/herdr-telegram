@@ -118,7 +118,9 @@ pub(crate) async fn post_spontaneous_card(
         .insert(pane.to_string(), std::time::Instant::now());
 
     if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.sync_topic(pane, kind, space, settled).await {
+        let settled_age = s.settled_at.lock().await.get(pane).map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        let display = display_status(settled, settled_age);
+        if let Some(thread) = s.topics.sync_topic(pane, kind, space, display).await {
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 s.remember(forum, mid, pane).await;

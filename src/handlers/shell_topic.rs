@@ -33,6 +33,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         s.tg.send_msg(chat, Some(thread_id), msg, None).await;
         return;
     }
+    if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await { return; }
     if cmd == "/read" || cmd == "/output" {
         let lines = arg.parse::<u32>().unwrap_or(60);
         match read_shell_output(&s.cfg.socket, pane, lines).await {

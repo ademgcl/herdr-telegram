@@ -82,10 +82,12 @@ async fn handle_topic_agent_message(
 
     if cmd == "/cancel" {
         s.typewait.lock().await.remove(&(chat, Some(thread_id)));
-        let count = s.cancel_all_jobs().await;
-        s.tg.send_msg(chat, Some(thread_id), &format!("✋ cancelled {count} prompt(s)"), None).await;
+        let n = s.cancel_jobs_for(pane).await;
+        let msg = if n { "cancelled pane job(s)" } else { "nothing running" };
+        s.tg.send_msg(chat, Some(thread_id), msg, None).await;
         return;
     }
+    if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await { return; }
 
     if cmd == "/quit" {
         super::shell::quit_to_shell(&s, chat, Some(thread_id), pane).await;
@@ -239,6 +241,7 @@ async fn handle_general_forum_message(
         s.tg.send_msg(chat, thread_id, &format!("✋ cancelled {count} pending job(s)"), None).await;
         return;
     }
+    if super::tap::consume_runkey(&s, chat, thread_id, text).await { return; }
 
     // Answering a waiting prompt armed by the ⌨️ button: the next message
     // in the same topic belongs to the waiter (typewait is keyed by

@@ -43,7 +43,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if let Some(ws) = s.runwait.lock().await.remove(&(chat, None)) {
-        super::shell::handle_run_command(&s, chat, &ws, text).await;
+        super::shell::handle_run_command(&s, chat, None, &ws, text).await;
         return;
     }
 

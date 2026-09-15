@@ -50,6 +50,7 @@ src/
 │   ├── model_scan.rs       # Column-split helpers
 │   ├── shell.rs            # Agentless shell panes (ops)
 │   ├── shell_topic.rs      # Shell-topic command routing
+│   ├── space.rs            # Workspace creation (/space)
 │   ├── target.rs           # DM pane-target resolution
 │   └── titles.rs           # 1:1 pane↔topic title sync (both directions)
 ├── jobs/                   # Agent prompt execution
@@ -85,8 +86,9 @@ src/
 - State lives on the **icon**, synced silently (never notifies): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown. Fresh `done` decays to idle after 15 quiet min.
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
-- In-topic plain text = prompt; commands in context: `/read` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/cancel`.
+- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/cancel` `/help`.
 - General topic: `/agents` `/spawn` `/space` `/shell` `/help`.
+- Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 
 ---
 

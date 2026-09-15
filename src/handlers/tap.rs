@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::{
     handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, parse_options, refresh_blocked_card, waiting_lines},
     handlers::interactive::{keys_for, opt_keys},
-    herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_input},
+    herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_input, send_pane_keys},
     state::AppState,
 };
 
@@ -166,6 +166,30 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), Strin
         refresh_blocked_card(&s2, &pane2).await;
     });
     Ok(())
+}
+
+/// Consume an armed run/key waiter for (chat, thread): runwait runs the
+/// text as a shell command in-topic, keywait sends it as keys to the pane
+/// (agent keys when it holds an agent, pane keys otherwise).
+pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: &str) -> bool {
+    if let Some(ws) = s.runwait.lock().await.remove(&(chat, thread)) {
+        super::shell::handle_run_command(s, chat, thread, &ws, text).await;
+        return true;
+    }
+    if let Some(pane) = s.keywait.lock().await.remove(&(chat, thread)) {
+        let keys: Vec<&str> = text.split_whitespace().collect();
+        let r = if get_agent(&s.cfg.socket, &pane).await.is_ok() {
+            send_agent_keys(&s.cfg.socket, &pane, &keys).await
+        } else {
+            send_pane_keys(&s.cfg.socket, &pane, &keys).await
+        };
+        match r {
+            Ok(_) => { s.tg.send_msg(chat, thread, "keys sent", None).await; }
+            Err(e) => { s.tg.send_msg(chat, thread, &format!("keys failed: {e}"), None).await; }
+        }
+        return true;
+    }
+    false
 }
 
 /// True when a typed answer provably went nowhere: both screens readable

@@ -259,6 +259,21 @@ pub async fn recover_pending(s: &AppState) {
             continue;
         }
         if get_agent(&s.cfg.socket, &pane).await.is_err() {
+            let alive = crate::herdr::client::list_panes(&s.cfg.socket)
+                .await
+                .unwrap_or_default()
+                .contains(&pane);
+            if alive {
+                if let Ok(tail) = crate::herdr::client::read_shell_output(&s.cfg.socket, &pane, 60).await {
+                    let tail = tail.trim().to_string();
+                    if !tail.is_empty() {
+                        report(s, pp.chat, pp.thread, &pane, &format!("recovered after restart:\n{tail}")).await;
+                    }
+                }
+                s.clear_pending(&pane).await;
+                println!("[recover] shell recovered {pane}");
+                continue;
+            }
             println!("[recover] pane gone, dropping {pane}");
             s.clear_pending(&pane).await;
             continue;

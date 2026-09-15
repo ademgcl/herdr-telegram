@@ -58,8 +58,12 @@ async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> String {
 /// settles (see `await_shell_settle`).
 pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, cmd: &str) {
     s.set_focus(pane).await;
+    // Durable intent: a restart mid-settle recovers the tail instead of
+    // eating the reply (boot posts it once, then clears).
+    s.remember_pending(pane, chat, thread, cmd).await;
     let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
+        s.clear_pending(pane).await;
         s.tg
             .send_msg(chat, thread, &format!("⚠️ pane gone or unreachable: {e}"), None)
             .await;
@@ -73,6 +77,7 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     let tail = tail_fit(&lines, 3500);
     let mid = s.tg.send_msg(chat, thread, &format_shell_reply(cmd, &tail), None).await;
     s.remember(chat, mid, pane).await;
+    s.clear_pending(pane).await;
 }
 
 /// Drop the pane's agent to a shell. Idle/done only: quitting a working
@@ -128,6 +133,7 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         return;
     }
     s.cancel_jobs_for(pane).await;
+    s.clear_pane(pane).await;
     // Badge shell NOW (not on the next watchdog cycle) so a fast
     // re-enter still hushes correctly in the notifier.
     s.status.lock().await.insert(pane.to_string(), "shell".to_string());
@@ -188,26 +194,29 @@ pub fn shell_card_text(pane: &str) -> String {
 
 /// Workspace shell-run (⌨️ run cmd button): fresh tab in `ws`, run one
 /// command, report output with a refresh button.
-pub async fn handle_run_command(s: &AppState, chat: i64, ws: &str, cmd: &str) {
+pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws: &str, cmd: &str) {
     let pane = match create_tab(&s.cfg.socket, ws).await {
         Ok(p) => p,
         Err(e) => {
-            s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+            s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
             return;
         }
     };
     // Fresh shells start slow (rc files, version managers) — settle first.
     let before = shell_snapshot(s, &pane).await;
     let cmd = cmd.trim();
-    s.tg.send_msg(chat, None, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
+    s.remember_pending(&pane, chat, thread, cmd).await;
+    s.tg.send_msg(chat, thread, &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"), None).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
-        s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+        s.clear_pending(&pane).await;
+        s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
         return;
     }
     let out = await_shell_settle(s, &pane, &before).await;
     let body = if out.trim().is_empty() { "(no output yet)".into() } else { out };
-    let mid = s.tg.send_msg(chat, None, &body, Some(pane_output_kb(&pane))).await;
+    let mid = s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(&pane))).await;
     s.remember(chat, mid, &pane).await;
+    s.clear_pending(&pane).await;
 }
 
 #[cfg(test)]
