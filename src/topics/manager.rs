@@ -146,6 +146,10 @@ impl TopicManager {
                 if crate::telegram::client::topic_missing(&e.to_string()) {
                     self.remove_mapping(pane);
                     println!("[topics] pruned missing topic #{thread} ({pane})");
+                } else if crate::telegram::client::topic_not_modified(&e.to_string()) {
+                    // Already showing it — converged, store and stay quiet
+                    // instead of retry-spamming every watchdog tick.
+                    self.storage.set_title(pane, desired);
                 } else {
                     eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}");
                 }
