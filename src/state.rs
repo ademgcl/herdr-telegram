@@ -2,11 +2,13 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 use crate::{
     config::Cfg,
     jobs::job::Job,
+    jobs::persist::{self, PendingPrompt},
     telegram::client::TelegramClient,
     topics::TopicManager,
     types::Res,
@@ -22,6 +24,9 @@ pub struct State {
     pub targets: Mutex<HashMap<(i64, i64), String>>,
     pub torder: Mutex<VecDeque<(i64, i64)>>,
     pub focus: Mutex<Option<String>>,
+    /// Prompts owed a reply (pane → dest + text), mirrored to jobs.state
+    /// so boot re-arms watchers orphaned by a restart.
+    pub pending: Mutex<HashMap<String, PendingPrompt>>,
     pub keywait: Mutex<HashMap<i64, String>>,
     pub runwait: Mutex<HashMap<i64, String>>,
     /// Next message in this chat is typed into the pane's waiting prompt
@@ -91,6 +96,7 @@ impl State {
             targets: Mutex::new(HashMap::new()),
             torder: Mutex::new(VecDeque::new()),
             focus: Mutex::new(focus),
+            pending: Mutex::new(persist::load_file(&persist::store_path())),
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
             typewait: Mutex::new(HashMap::new()),
@@ -135,6 +141,7 @@ impl State {
     /// Retire one pane's watcher (used by /quit: no agent left to watch).
     pub async fn cancel_jobs_for(&self, pane: &str) -> bool {
         let job = self.jobs.lock().await.remove(pane);
+        self.clear_pending(pane).await;
         match job {
             Some(job) => {
                 job.mark_stopped();
@@ -146,11 +153,38 @@ impl State {
     }
 
     pub async fn cancel_all_jobs(&self) -> usize {        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
+        self.clear_all_pending().await;
         let count = jobs.len();
         for job in jobs.values() {
             job.mark_stopped();
             job.cancel.notify_waiters();
         }
         count
+    }
+
+    /// Record a submitted prompt durably (cleared on settle/cancel).
+    pub async fn remember_pending(&self, pane: &str, chat: i64, thread: Option<i64>, prompt: &str) {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let mut map = self.pending.lock().await;
+        map.insert(
+            pane.to_string(),
+            PendingPrompt { chat, thread, prompt: prompt.to_string(), started_unix: now },
+        );
+        persist::save_file(&persist::store_path(), &map);
+    }
+
+    pub async fn clear_pending(&self, pane: &str) {
+        let mut map = self.pending.lock().await;
+        if map.remove(pane).is_some() {
+            persist::save_file(&persist::store_path(), &map);
+        }
+    }
+
+    pub async fn clear_all_pending(&self) {
+        let mut map = self.pending.lock().await;
+        if !map.is_empty() {
+            map.clear();
+            persist::save_file(&persist::store_path(), &map);
+        }
     }
 }

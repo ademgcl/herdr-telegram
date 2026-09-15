@@ -13,6 +13,7 @@ use std::time::Duration;
 use crate::{
     config::cfg_from_env,
     herdr::{event_task, ping},
+    jobs::recover_pending,
     notifier::reconcile,
     state::State,
     telegram::{get_updates, handle_update},
@@ -51,6 +52,8 @@ async fn main() -> Res<()> {
 
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
+    // Re-arm prompt watchers orphaned by a restart (replies would else be lost)
+    recover_pending(&s).await;
     // One-time cleanup of the retired pinned-status era (no-op when clean)
     s.topics.retire_pins().await;
     println!("[main] seed done, entering loop");

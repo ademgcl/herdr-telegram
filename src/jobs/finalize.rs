@@ -58,6 +58,7 @@ pub async fn finalize(
         // Anchor the baseline so later settles don't repost the dialog.
         s.seen.lock().await.insert(pane.to_string(), snapshot);
         *job.pending.lock().await = 0;
+        s.clear_pending(pane).await;
         let mut map = s.jobs.lock().await;
         if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
             map.remove(pane);
@@ -92,6 +93,7 @@ pub async fn finalize(
     }
     *live_mid = None;
     *job.pending.lock().await = 0;
+    s.clear_pending(pane).await;
 
     // Nothing outstanding? Retire the watcher atomically.
     let mut map = s.jobs.lock().await;
@@ -120,6 +122,9 @@ pub async fn edit_live(
 
 pub async fn report(s: &AppState, chat_id: i64, thread_id: Option<i64>, pane: &str, msg: &str) {
     let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
+    if mid.is_none() {
+        eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
+    }
     s.remember(chat_id, mid, pane).await;
 }
 

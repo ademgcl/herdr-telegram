@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::json;
 use tokio::time::{Duration, Instant};
 use crate::{
@@ -82,7 +83,12 @@ pub async fn enqueue_prompt(
         } else {
             report(&s, req.chat_id, req.message_thread_id, &pane, &format!("⚠️ error: {e}")).await;
         }
+        s.clear_pending(&pane).await;
+        return;
     }
+    // Delivered: durable intent so a restart re-arms this watcher instead
+    // of eating the reply.
+    s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text).await;
 }
 
 /// Watch the agent via herdr push-events: every output burst updates one live
@@ -118,6 +124,7 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
+                s.clear_pending(&pane).await;
                 let (chat, th) = *job.dest.lock().await;
                 edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                 break;
@@ -212,5 +219,34 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     let mut map = s.jobs.lock().await;
     if map.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
         map.remove(&pane);
+    }
+}
+
+/// Boot recovery: re-arm watchers for prompts orphaned by a restart so
+/// their replies still land. Dead panes and >24h-old entries are dropped.
+pub async fn recover_pending(s: &AppState) {
+    let entries: Vec<(String, crate::jobs::persist::PendingPrompt)> =
+        s.pending.lock().await.clone().into_iter().collect();
+    if entries.is_empty() {
+        return;
+    }
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    for (pane, pp) in entries {
+        if now.saturating_sub(pp.started_unix) > 86400 {
+            println!("[recover] dropping stale {pane}");
+            s.clear_pending(&pane).await;
+            continue;
+        }
+        if get_agent(&s.cfg.socket, &pane).await.is_err() {
+            println!("[recover] pane gone, dropping {pane}");
+            s.clear_pending(&pane).await;
+            continue;
+        }
+        let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+        let job = Job::new(baseline, pp.chat, pp.thread);
+        *job.prompt.lock().await = pp.prompt.clone();
+        s.jobs.lock().await.insert(pane.clone(), job.clone());
+        tokio::spawn(watch_job(s.clone(), pane.clone(), job));
+        println!("[recover] re-armed {pane}");
     }
 }
