@@ -110,6 +110,17 @@ async fn handle_topic_agent_message(
         s.tg.send_msg(chat, Some(thread_id), msg, None).await;
         return;
     }
+
+    // Never-stuck escapes precede waiters (like /cancel): a literal
+    // "/esc" must dismiss, never become typed input.
+    if cmd == "/card" {
+        super::escape::handle_card_topic(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
+    if cmd == "/esc" {
+        super::escape::handle_esc_topic(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
     if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
         return;
     }

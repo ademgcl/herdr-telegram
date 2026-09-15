@@ -86,6 +86,20 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         }
         return;
     }
+    if cmd == "/card" {
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            "this is a shell — nothing to answer.",
+            None,
+        )
+        .await;
+        return;
+    }
+    if cmd == "/esc" {
+        super::escape::handle_esc_shell(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
     if cmd == "/keys" {
         if arg.is_empty() {
             s.tg.send_msg(chat, Some(thread_id), "usage: `/keys y enter`", None)

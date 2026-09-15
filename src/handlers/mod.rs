@@ -8,6 +8,7 @@ pub mod dm_info;
 pub mod dm_lifecycle;
 pub mod dm_model;
 pub mod dm_prompt;
+pub mod escape;
 pub mod forum;
 pub mod general;
 pub mod interactive;

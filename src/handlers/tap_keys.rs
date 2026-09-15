@@ -47,7 +47,20 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
             }
         } else {
             match keys_for(action) {
-                Some(keys) => (Vec::new(), keys.to_vec(), action.to_string()),
+                Some(keys) => {
+                    // Never inject keys blind: without a live dialog shape
+                    // (parsed options or a question) on screen, Enter / Esc
+                    // / Right would land in live work. (B:type arming never
+                    // reaches here — it sends no keys.)
+                    if !before.is_empty() {
+                        let live = crate::handlers::dialog::parse_options(&before);
+                        let sig = crate::handlers::dialog::dialog_sig(&before);
+                        if live.is_empty() && !sig.contains('?') {
+                            return TapCall::Unknown;
+                        }
+                    }
+                    (Vec::new(), keys.to_vec(), action.to_string())
+                }
                 None => return TapCall::Unknown,
             }
         };

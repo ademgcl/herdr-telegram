@@ -98,8 +98,8 @@ impl TelegramClient {
         self.call(
             "setMyCommands",
             json!({"commands": [
-                // Topic-scoped commands (/split, /output, ...) stay out of
-                // the global menu: they only work inside a pane topic.
+                // Topic-scoped commands (/split, ...) stay out of the
+                // global menu: they only work inside a pane topic.
                 {"command": "start", "description": "how to drive agents from here"},
                 {"command": "agents", "description": "open control panel (spaces + agents)"},
                 {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
@@ -112,6 +112,9 @@ impl TelegramClient {
                 {"command": "output", "description": "alias of /read with line count"},
                 {"command": "status", "description": "agent card for focused agent"},
                 {"command": "cancel", "description": "abort pending prompts / keys-mode"},
+                {"command": "reset", "description": "paced reset of all topics (forum)"},
+                {"command": "card", "description": "re-post question + buttons (topic/DM)"},
+                {"command": "esc", "description": "guarded Esc dismiss, blocked-only"},
                 {"command": "keys", "description": "/keys <pane> y enter — send raw keys"},
                 {"command": "help", "description": "how to drive agents from here"},
             ]}),

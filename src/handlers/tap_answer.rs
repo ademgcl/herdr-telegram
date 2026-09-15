@@ -1,10 +1,12 @@
 use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, parse_options, waiting_lines},
+    handlers::dialog::{blocked_card_text, blocked_kb, live_card, parse_options},
+    herdr::client::read_screen_visible,
     state::AppState,
 };
 use serde_json::Value;
+use std::time::Duration;
 
 /// Button-tap entry point: sends keys, then brings the TAPPED card up
 /// to date in place — a turned-over dialog swaps question + buttons, a
@@ -50,32 +52,64 @@ pub async fn answer_tap(
         s.remember(chat, mid, pane).await;
         return;
     };
+    println!("[tap] {pane} action={action}");
     let call = tap_keys(&s.cfg.socket, pane, action).await;
     match call {
         TapCall::Unknown => {
-            let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
-            s.remember(chat, mid, pane).await;
+            // Narrowed/turned-over dialog: refresh the card in place with
+            // the live option set instead of stranding dead buttons.
+            let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
+            if screen.is_empty() {
+                let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
+                s.remember(chat, mid, pane).await;
+            } else {
+                let (q, opts) = live_card(&screen);
+                let text = format!(
+                    "⚠️ that button expired — current dialog:\n\n{}",
+                    blocked_card_text(&q)
+                );
+                let kb = Some(blocked_kb(pane, &opts));
+                if s.tg
+                    .try_edit_msg(chat, msg_id, &text, kb.clone())
+                    .await
+                    .is_ok()
+                {
+                    s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                    s.remember(chat, Some(msg_id), pane).await;
+                } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
+                    s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                    s.remember(chat, Some(mid), pane).await;
+                }
+            }
+            delayed_refresh(s, pane).await;
         }
         TapCall::KeysFailed => {
             let mid =
                 s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
                     .await;
             s.remember(chat, mid, pane).await;
+            delayed_refresh(s, pane).await;
         }
         TapCall::Landed(send, before, after, still_blocked) => {
             match classify_tap(&before, &after, still_blocked) {
                 TapResult::NewDialog => {
-                    let q = waiting_lines(&after);
-                    let opts = parse_options(&after);
-                    s.tg.edit_msg(
-                        chat,
-                        msg_id,
-                        &blocked_card_text(&q),
-                        Some(blocked_kb(pane, &opts)),
-                    )
-                    .await;
-                    s.blocked_sig.lock().await.insert(pane.to_string(), q);
-                    s.remember(chat, Some(msg_id), pane).await;
+                    let (q, opts) = live_card(&after);
+                    let text = blocked_card_text(&q);
+                    let kb = Some(blocked_kb(pane, &opts));
+                    // Edit first; on failure post fresh — and stamp the
+                    // signature ONLY on delivery, so a dropped update
+                    // stays "new" for the watchdog instead of blinding it.
+                    if s.tg
+                        .try_edit_msg(chat, msg_id, &text, kb.clone())
+                        .await
+                        .is_ok()
+                    {
+                        s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                        s.remember(chat, Some(msg_id), pane).await;
+                    } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
+                        s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                        s.remember(chat, Some(mid), pane).await;
+                    }
                 }
                 TapResult::Resumed => {
                     let no_kb = Some(Value::Array(Vec::new()));
@@ -91,6 +125,7 @@ pub async fn answer_tap(
                     // observation reposts a ghost card for a live agent.
                     s.blocked_sig.lock().await.remove(pane);
                     s.remember(chat, Some(msg_id), pane).await;
+                    delayed_refresh(s, pane).await;
                 }
                 TapResult::Unchanged => {
                     let mut shown = send.nav.clone();
@@ -101,13 +136,26 @@ pub async fn answer_tap(
                         format!("⌨️ sent {sent} — check the pane")
                     } else {
                         format!(
-                            "⚠️ sent {sent} but the dialog still shows — highlight may have moved; try Esc or answer on the PC"
+                            "⚠️ sent {sent} but the dialog still shows — /card for fresh buttons, /esc to dismiss, or answer on the PC"
                         )
                     };
                     let mid = s.tg.send_msg(chat, thread, &text, None).await;
                     s.remember(chat, mid, pane).await;
+                    delayed_refresh(s, pane).await;
                 }
             }
         }
     }
+}
+
+/// Delayed self-heal for non-card outcomes (typed answers do the same):
+/// slow renders and lagging status resolve in seconds via refresh
+/// instead of the ≤60s watchdog.
+async fn delayed_refresh(s: &AppState, pane: &str) {
+    let s2 = s.clone();
+    let pane2 = pane.to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        crate::handlers::dialog::refresh_blocked_card(&s2, &pane2).await;
+    });
 }

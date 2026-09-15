@@ -56,13 +56,14 @@ src/
 │   ├── dm_lifecycle.rs     # DM /quit /kill /shell /space /spawn
 │   ├── dm_model.rs         # DM /model
 │   ├── dm_prompt.rs        # DM typewait + bare-text routing
+│   ├── escape.rs           # Never-stuck /card + /esc (topic/DM/shell)
 │   ├── forum.rs            # Topic messages + commands
 │   ├── general.rs          # General-topic commands
 │   ├── callback.rs         # Callback dispatcher
 │   ├── callback_parse.rs   # Routing cuts + stale-pane guards
 │   ├── callback_spawn.rs   # Callback workspace/agent spawn
 │   ├── callback_model.rs   # Callback model taps
-│   ├── dialog.rs           # Blocked cards, content-addressed refresh
+│   ├── dialog/             # Blocked cards, content-addressed refresh (mod.rs + tests.rs)
 │   ├── tap.rs              # Facade re-export (paths stable)
 │   ├── tap_classify.rs     # Post-tap classification (pure)
 │   ├── tap_keys.rs         # Key-send + re-read
@@ -121,13 +122,13 @@ src/
 ## 3. Forum Topics (`TELEGRAM_FORUM_CHAT_ID` set)
 
 - One topic per pane (agents and shells alike).
-- Titles sync 1:1 with herdr pane names: pane label when set, else the friendly default (`o2 · tg`). Last synced title persists in `topics.state`.
+- Titles sync 1:1 with herdr pane names in Format B (`[space] label · agent`, e.g. `[tg] o2 · opencode` when unlabeled). Last synced title persists in `topics.state`.
 - Either side renames: native topic rename → `pane.rename`; herdr-side rename → topic renamed on the ≤60s watchdog. Stored-title compare both ways, so edits converge without loops.
 - Known limit: a rename made while the bot is down can diverge (no read API for topic names) — last-observed-writer wins; redelivered updates heal it.
 - State lives on the **icon**, set once silently at creation and never churned: 💻 agent · 💬 shell (custom-emoji IDs via `context_icon_emoji_id`); user customs persist and are never overwritten. Status surfaces in cards and the typing indicator instead (+ one identity pin per topic).
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
-- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`. (`/space` is global via pre-route; `/shell` works in agent topics, shell topics have their own set.)
+- In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/card` `/esc` `/cancel` `/help`. (`/space` is global via pre-route; `/shell` works in agent topics, shell topics have their own set.)
 - General topic: `/agents` `/spawn` `/space` `/shell` `/model` (redirect) `/start` `/reset` `/cancel` `/help`.
 - Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 

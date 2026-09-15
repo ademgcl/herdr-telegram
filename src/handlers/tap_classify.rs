@@ -24,11 +24,18 @@ pub fn classify_tap(before: &[String], after: &[String], still_blocked: bool) ->
     let opts_before = parse_options(before);
     let opts_after = parse_options(after);
     if opts_after.is_empty() {
-        // No options on screen: either the same option-less dialog (a
-        // changed question still counts as turnover) or the dialog
-        // vanished while status lags — never a *new* dialog, so a working
+        // No options on screen: a changed screen is an option-less
+        // second confirm (real dialog — the fallback Confirm button
+        // covers it) when the FIRST dialog had none either (text-input
+        // turnovers like "Enter name:" → "Enter age:") or when the new
+        // screen asks a question. Anything else is vanished-dialog
+        // prose while status lags — never a *new* dialog, so a working
         // screen never earns a ghost blocked card with live buttons.
-        if opts_before.is_empty() && dialog_sig(after) != dialog_sig(before) {
+        // Erring to Unchanged is the safe direction (no ghost buttons);
+        // the delayed refresh re-checks seconds later.
+        if dialog_sig(after) != dialog_sig(before)
+            && (opts_before.is_empty() || dialog_sig(after).contains('?'))
+        {
             return TapResult::NewDialog;
         }
         return TapResult::Unchanged;
@@ -115,6 +122,46 @@ mod tests {
             "Allow once   Allow always   Reject",
         ]);
         let after = v(&["⠋ working…", "editing src/main.rs"]);
+        assert_eq!(classify_tap(&before, &after, true), TapResult::Unchanged);
+    }
+
+    #[test]
+    fn test_classify_optionless_turnover_is_new() {
+        // Second confirm with no parseable options is still a dialog:
+        // short changed screen ⇒ NewDialog (fallback button covers it).
+        let before = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
+        let after = v(&["Apply all edits?", "This cannot be undone."]);
+        assert_eq!(classify_tap(&before, &after, true), TapResult::NewDialog);
+        // Same option-less dialog twice ⇒ unchanged.
+        assert_eq!(classify_tap(&after, &after, true), TapResult::Unchanged);
+    }
+
+    #[test]
+    fn test_classify_long_prose_turnover_is_not_new() {
+        // Long changed prose without options: vanished dialog, not new.
+        let before = v(&["Pick one:", "Yes   No"]);
+        let after = v(&[&"x".repeat(600)]);
+        assert_eq!(classify_tap(&before, &after, true), TapResult::Unchanged);
+    }
+
+    #[test]
+    fn test_classify_plain_short_prose_is_not_new() {
+        // Short prose with no question mark: safe direction is
+        // Unchanged (no ghost buttons); the delayed refresh re-checks.
+        let before = v(&["Pick one:", "Yes   No"]);
+        let after = v(&["Done.", "editing src/main.rs"]);
+        assert_eq!(classify_tap(&before, &after, true), TapResult::Unchanged);
+    }
+
+    #[test]
+    fn test_classify_optionless_confirm_without_question_is_unchanged() {
+        // No options, no question: Unchanged even when short — the
+        // observer/delayed refresh (not a ghost card) handles it.
+        let before = v(&["Pick one:", "Yes   No"]);
+        let after = v(&["Press Enter to continue"]);
         assert_eq!(classify_tap(&before, &after, true), TapResult::Unchanged);
     }
 

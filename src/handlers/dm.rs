@@ -49,6 +49,26 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    // Never-stuck escapes precede waiters (like /cancel): a literal
+    // "/esc" must dismiss, never become typed input. Rows are fetched
+    // here so target resolution works before the main fetch below.
+    if cmd == "/card" || cmd == "/esc" {
+        let rows = match list_agents(&s.cfg.socket).await {
+            Ok(r) => r,
+            Err(e) => {
+                s.tg.send_msg(chat, None, &format!("⚠️ herdr unreachable: {e}"), None)
+                    .await;
+                return;
+            }
+        };
+        if cmd == "/card" {
+            super::escape::handle_card_dm(&s, chat, &rows, arg, &reply_pane).await;
+        } else {
+            super::escape::handle_esc_dm(&s, chat, &rows, arg, &reply_pane).await;
+        }
+        return;
+    }
+
     // Armed waiters consume the message before any routing: run/key
     // waiters via the shared helper (shell panes need pane keys, not
     // agent keys), then the typed-answer waiter — a "/" answer belongs

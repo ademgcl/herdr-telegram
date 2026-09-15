@@ -175,7 +175,9 @@ pub fn help_text() -> &'static str {
      /quit     drop the agent to a shell (idle only)\n\
      /kill     close the pane completely (confirms first)\n\
      /shell    open a fresh shell pane\n\
-     /read     recent output of focused agent\n\
+     /read     recent output of focused agent (/output too)\n\
+     /card     re-post the question + buttons (never stuck)\n\
+     /esc      guarded Esc: dismiss, blocked-only\n\
      /status   refresh agent status card\n\
      /cancel   abort prompts / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
@@ -192,6 +194,8 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • `/model` — current model + free-Zen picker (opencode)\n\
          • `/quit` — drop the agent to a shell (idle only)\n\
          • `/kill` — close this pane completely (confirms first)\n\
+         • `/card` — re-post the question + buttons (never stuck)\n\
+         • `/esc` — guarded Esc: dismiss, blocked-only\n\
          • `/shell [space]` — open a fresh shell pane\n\
           • `/space [name]` — new space + shell topic\n\
           • `/split [right|down]` — sibling shell pane in this tab\n\
@@ -208,7 +212,9 @@ pub fn shell_help_text(pane: &str) -> String {
         "💲 shell topic [{pane}]\n\n\
          • Plain text runs as a shell command\n\
          • `opencode` — re-enter the agent\n\
-         • `/read` — recent shell output\n\
+         • `/read` — recent shell output (`/output` too)\n\
+         • `/esc` — send Esc (vim toggles mode)\n\
+         • `/cancel` — abort running prompt\n\
          • `/keys y enter` — send keystrokes\n\
           • `/kill` — close this pane completely (confirms first)\n\
          • `/split [right|down]` — sibling shell pane in this tab\n\

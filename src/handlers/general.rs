@@ -24,6 +24,7 @@ pub(crate) async fn handle_general_forum_message(
                     • `/shell [space]` — open a fresh shell pane & topic\n\
                     • `/space [name]` — new space + shell topic\n\
                    • `/model` — inside an agent topic: model picker\n\
+                   • `/card` `/esc` — inside an agent topic: fresh buttons / guarded dismiss\n\
                    • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
                    • `/cancel` — abort pending jobs\n\n\
                    💡 Each active agent has its own dedicated topic in this group! Switch to an agent's topic to chat with it directly.";
@@ -147,6 +148,17 @@ pub(crate) async fn handle_general_forum_message(
                 return;
             }
         }
+    }
+
+    if cmd == "/card" || cmd == "/esc" {
+        s.tg.send_msg(
+            chat,
+            thread_id,
+            "open the agent's topic and run it there — each topic is one agent.",
+            None,
+        )
+        .await;
+        return;
     }
 
     if cmd == "/model" {

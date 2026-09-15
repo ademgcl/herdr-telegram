@@ -15,10 +15,17 @@ use crate::{
 ///   buttons armed over a second dialog.
 use serde_json::{Value, json};
 
+#[cfg(test)]
+mod tests;
+
 /// Lines that can never be options: key-hint rows and chrome-ish labels.
 /// NOTE: "confirm"/"cancel" are deliberately absent — real second
 /// dialogs read "Confirm   Cancel", and hint rows carrying those words
 /// always also carry ctrl/enter/esc/select (filtered on those instead).
+/// Matching is case-aware: hint chrome is lowercase ("enter confirm")
+/// while real options are capitalized ("Go back", "Describe", "Escape",
+/// "Dismiss changes") — case breaks the tie. A lowercase option that
+/// happens to contain a hint word is the accepted miss.
 const HINT_WORDS: &[&str] = &[
     "ctrl",
     "enter",
@@ -31,6 +38,17 @@ const HINT_WORDS: &[&str] = &[
     "back",
     "quit",
 ];
+
+/// Closed vocab for minimal confirms (single-spaced pairs, vertical
+/// stacks). Only exact words — prose never matches.
+const CONFIRM_WORDS: &[&str] = &[
+    "confirm", "cancel", "ok", "yes", "no", "y", "n", "allow", "deny", "reject", "retry", "abort",
+    "continue",
+];
+
+fn is_confirm_word(w: &str) -> bool {
+    CONFIRM_WORDS.iter().any(|v| v == &w.to_lowercase())
+}
 
 /// Selectable option labels out of a question card: the first line
 /// holding 2–4 short phrases in columns ("Allow once   Allow always
@@ -55,7 +73,8 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
             .into_iter()
             .filter(|p| {
                 let low = p.to_lowercase();
-                !HINT_WORDS.iter().any(|w| low.contains(w))
+                let hinty = HINT_WORDS.iter().any(|w| low.contains(w));
+                !hinty || p.chars().any(|c| c.is_uppercase())
             })
             .collect();
         let short = real.len() >= 2
@@ -67,8 +86,44 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
         if short {
             return real;
         }
+        // Single-spaced minimal confirms ("Confirm Cancel"): every word
+        // must be closed-vocab, so prose never matches.
+        let words: Vec<&str> = t.split_whitespace().collect();
+        if (2..=4).contains(&words.len()) && words.iter().all(|w| is_confirm_word(w)) {
+            return words.iter().map(|w| w.to_string()).collect();
+        }
+    }
+    // Vertical stacks ("Yes" / "No" on consecutive lines): runs of
+    // single vocab words. Blank lines don't break a stack; any other
+    // line ends the run (returned only at 2–4 length, like columns).
+    let mut run: Vec<String> = Vec::new();
+    for line in lines {
+        let t = deframe(line);
+        if t.is_empty() {
+            continue;
+        }
+        let words: Vec<&str> = t.split_whitespace().collect();
+        if words.len() == 1 && is_confirm_word(words[0]) {
+            run.push(words[0].to_string());
+            continue;
+        }
+        if (2..=4).contains(&run.len()) {
+            return std::mem::take(&mut run);
+        }
+        run.clear();
+    }
+    if (2..=4).contains(&run.len()) {
+        return run;
     }
     Vec::new()
+}
+
+/// Question + options off one screen, parsed from the same final-block
+/// source the cards use — tap paths must never diverge from it.
+pub(crate) fn live_card(screen: &[String]) -> (String, Vec<String>) {
+    let q = waiting_lines(screen);
+    let opts = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
+    (q, opts)
 }
 
 /// Question lines off the VISIBLE screen (the only source herdr serves
@@ -222,74 +277,4 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         println!("[alert] blocked card {pane}");
     }
     posted
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn v(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn test_parse_options_permission_row() {
-        let lines = v(&[
-            "△ Permission required",
-            "Patterns",
-            "- /home/user/.config/opencode/*",
-            "Allow once   Allow always   Reject",
-            "ctrl+f fullscreen  ⇆ select  enter confirm",
-        ]);
-        assert_eq!(
-            parse_options(&lines),
-            vec!["Allow once", "Allow always", "Reject"]
-        );
-    }
-
-    #[test]
-    fn test_parse_options_skips_hints_and_prose() {
-        assert!(parse_options(&v(&["ctrl+f fullscreen  enter confirm"])).is_empty());
-        assert!(parse_options(&v(&["Hello! How can I help you today?"])).is_empty());
-        assert!(parse_options(&v(&["| a | b |", "| c | d |"])).is_empty());
-        assert!(parse_options(&v(&["first line", "second line"])).is_empty());
-    }
-
-    #[test]
-    fn test_parse_options_framed_row() {
-        // Tap paths parse the raw visible screen (rails intact) — a
-        // framed row must yield the same options as card text.
-        let lines = v(&[
-            "┃ △ Permission required",
-            "┃   Allow once   Allow always   Reject",
-        ]);
-        assert_eq!(
-            parse_options(&lines),
-            vec!["Allow once", "Allow always", "Reject"]
-        );
-    }
-
-    #[test]
-    fn test_parse_options_merged_hint_row() {
-        // Wide terminals merge options + right-aligned hints on ONE row
-        // (live opencode 1.18 dialog) — the real options must survive.
-        let lines = v(&[
-            "  ┃   Allow once   Allow always   Reject                                                                                 ctrl+f fullscreen  ⇆ select  enter confirm",
-        ]);
-        assert_eq!(
-            parse_options(&lines),
-            vec!["Allow once", "Allow always", "Reject"]
-        );
-        // Two-option dialog with merged hints.
-        let lines = v(&["Confirm   Cancel   ctrl+f fullscreen  enter confirm"]);
-        assert_eq!(parse_options(&lines), vec!["Confirm", "Cancel"]);
-    }
-
-    #[test]
-    fn test_callback_data_survives_pane_colons() {
-        let kb = blocked_kb("wG:p1", &v(&["Allow once"]));
-        let data = kb[0][0]["callback_data"].as_str().unwrap();
-        let route: Vec<&str> = data.splitn(3, ':').collect();
-        assert_eq!(route, vec!["B", "opt0", "wG:p1"]);
-    }
 }

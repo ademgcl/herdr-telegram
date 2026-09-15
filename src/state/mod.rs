@@ -102,11 +102,17 @@ impl<'a> OpGuard<'a> {
 
 impl Drop for OpGuard<'_> {
     fn drop(&mut self) {
-        // No await in Drop: try_lock suffices — the holder only ever
-        // holds the guard across short critical sections.
-        if let Ok(mut set) = self.set.try_lock() {
-            set.remove(&self.pane);
+        // No await in Drop, and the guard is never held across awaits
+        // anywhere — so a few bounded try_lock retries always land.
+        // A loud log (not silence) marks the impossible wedge.
+        for _ in 0..5 {
+            if let Ok(mut set) = self.set.try_lock() {
+                set.remove(&self.pane);
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        eprintln!("[state] OpGuard drop wedged for {}", self.pane);
     }
 }
 

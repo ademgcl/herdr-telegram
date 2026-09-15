@@ -115,7 +115,7 @@ impl TopicStorage {
     pub fn get_pane(&self, thread: i64) -> Option<String> {
         self.store
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .topics
             .iter()
             .find(|(_, t)| **t == thread)

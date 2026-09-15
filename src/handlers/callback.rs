@@ -40,6 +40,13 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     // one gate covers both relic (86400s+) and merely outdated taps.
     if now.saturating_sub(date) > crate::types::STALE_SECS {
         println!("[callback] dropping stale tap");
+        s.tg.send_msg(
+            chat,
+            thread,
+            "⌛️ that card expired — /card for a fresh one",
+            None,
+        )
+        .await;
         return;
     }
     let (head, rest) = split_head(data);
@@ -241,6 +248,9 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 .await;
             }
         }
-        _ => {}
+        _ => {
+            s.tg.send_msg(chat, thread, "unknown button — /card for a fresh one", None)
+                .await;
+        }
     }
 }
