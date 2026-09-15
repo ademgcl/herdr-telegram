@@ -8,9 +8,9 @@ use tokio::time::{Duration, sleep};
 use crate::{
     herdr::client::{
         create_tab, ensure_tg_space, get_agent, list_panes, list_workspaces,
-        read_shell_output, send_agent_keys,
-        send_pane_input,
+        read_shell_output, send_agent_keys, send_pane_input,
     },
+    herdr::labels::pane_facts,
     state::AppState,
     ui::{pane_output_kb, tail_fit, ws_label},
 };
@@ -186,6 +186,27 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
     let mid = s.tg.send_msg(chat, thread, &shell_card_text(&pane), None).await;
     s.remember(chat, mid, &pane).await;
     s.set_focus(&pane).await;
+}
+
+/// Split the pane sideways in the SAME tab: sibling shell pane + its own
+/// topic, named/provisioned like any shell. `dir` is right|down.
+pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, dir: &str) {
+    let new = match crate::herdr::client::split_pane(&s.cfg.socket, pane, dir).await {
+        Ok(p) => p,
+        Err(e) => {
+            s.tg.send_msg(chat, thread, &format!("⚠️ split failed: {e}"), None).await;
+            return;
+        }
+    };
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let ws_id = pane_facts(&s.cfg.socket).await.ok().and_then(|m| m.get(pane).map(|f| f.ws.clone())).unwrap_or_default();
+    let space = ws_label(&spaces, &ws_id).to_string();
+    let space = if space.is_empty() { pane } else { &space };
+    s.topics.sync_topic(&new, "shell", space, "shell").await;
+    s.status.lock().await.insert(new.clone(), "shell".to_string());
+    let mid = s.tg.send_msg(chat, thread, &shell_card_text(&new), None).await;
+    s.remember(chat, mid, &new).await;
+    s.set_focus(&new).await;
 }
 
 pub fn shell_card_text(pane: &str) -> String {

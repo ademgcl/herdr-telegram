@@ -99,6 +99,13 @@ async fn handle_topic_agent_message(
         return;
     }
 
+    if cmd == "/split" {
+        let dir = match arg { "" | "right" => "right", "down" => "down", _ => {
+            s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]`", None).await; return; } };
+        super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
+        return;
+    }
+
     if cmd == "/shell" {
         // No arg: shell next to this agent (same workspace).
         let ws = if arg.is_empty() { agent.ws.as_str() } else { arg };

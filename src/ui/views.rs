@@ -177,8 +177,9 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • `/quit` — drop the agent to a shell (idle only)\n\
          • `/kill` — close this pane completely (confirms first)\n\
          • `/shell [space]` — open a fresh shell pane\n\
-         • `/space [name]` — new space + shell topic\n\
-          • `/keys y enter` — send keystrokes\n\
+          • `/space [name]` — new space + shell topic\n\
+          • `/split [right|down]` — sibling shell pane in this tab\n\
+           • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
          • `/status` — refresh agent status card\n\
          • ✏️ rename this topic = renames the herdr pane (kept in sync)"
@@ -194,6 +195,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • `/read` — recent shell output\n\
          • `/keys y enter` — send keystrokes\n\
           • `/kill` — close this pane completely (confirms first)\n\
+         • `/split [right|down]` — sibling shell pane in this tab\n\
          • `/status` — shell card\n\
          • ✏️ rename this topic = renames the herdr pane (kept in sync)"
     )

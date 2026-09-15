@@ -27,6 +27,12 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         super::kill::ask_kill(&s, chat, Some(thread_id), pane).await;
         return;
     }
+    if cmd == "/split" {
+        let dir = match arg { "" | "right" => "right", "down" => "down", _ => {
+            s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]`", None).await; return; } };
+        super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
+        return;
+    }
     if cmd == "/cancel" {
         let n = s.cancel_jobs_for(pane).await;
         let msg = if n { "✋ cancelled pane job" } else { "shell mode — nothing running" };

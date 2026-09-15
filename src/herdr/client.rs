@@ -273,3 +273,14 @@ pub async fn create_tab(socket: &str, ws: &str) -> Res<String> {
     let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
     Ok(tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string())
 }
+
+/// Split a pane sideways in the same tab, returning the new pane id.
+/// herdr names it with the workspace's next pane counter (`w8:p4`),
+/// unlabeled, in the same tab.
+pub async fn split_pane(socket: &str, pane: &str, direction: &str) -> Res<String> {
+    let r = rpc_t(socket, "pane.split", json!({"target_pane_id": pane, "direction": direction}), 30).await?;
+    r["pane"]["pane_id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "split returned no pane".into())
+}
