@@ -16,6 +16,7 @@ use crate::{
 };
 use crate::herdr::client::read_screen_adaptive;
 use crate::jobs::notices::{detect_limit, limit_card_text};
+use crate::jobs::episode::BuzzEpisode;
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
@@ -106,13 +107,22 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // Rate-limit episode already buzzed about (kind, not excerpt: retry
     // countdowns change every second and must not re-alert). Cleared
     // when the banner leaves the screen so the next episode re-alerts.
-    let mut limit_kind: Option<String> = None;
+    // Provider fatals buzz only when stuck (see episode.rs): transients
+    // recover into the final reply, terminal errors surface at settle.
+    let mut episode = BuzzEpisode::new();
+    let mut last_epoch = job.epoch.load(Ordering::Relaxed);
     let mut fails: u32 = 0;
     println!("[watcher] start {pane}");
 
     loop {
         if job.is_stopped() {
             break;
+        }
+        // New prompt on a reused watcher restarts all episode timers.
+        let epoch = job.epoch.load(Ordering::Relaxed);
+        if epoch != last_epoch {
+            last_epoch = epoch;
+            episode.reset();
         }
 
         // Reconnect the event stream lazily — never in a hot loop
@@ -184,16 +194,11 @@ async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // (Runs on the raw screen, before chrome filtering, and outside
         // the edit cooldown so stalls surface even when nothing streams.)
         let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
-        if let Some(hit) = detect_limit(&screen) {
-            if limit_kind.as_deref() != Some(hit.kind) {
-                limit_kind = Some(hit.kind.to_string());
-                let (chat, th) = *job.dest.lock().await;
-                let text = limit_card_text(&pane, &hit);
-                report(&s, chat, th, &pane, &text).await;
-                println!("[prompt] limit alert {pane}: {}", hit.kind);
-            }
-        } else {
-            limit_kind = None;
+        if let Some(hit) = episode.tick(detect_limit(&screen).as_ref(), std::time::Instant::now()) {
+            let (chat, th) = *job.dest.lock().await;
+            let text = limit_card_text(&pane, &hit);
+            report(&s, chat, th, &pane, &text).await;
+            println!("[prompt] limit alert {pane}: {}", hit.kind);
         }
 
         // Stream whatever is new into the live message

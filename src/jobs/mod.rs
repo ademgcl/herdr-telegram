@@ -1,5 +1,6 @@
 pub mod filter;
 pub mod finalize;
+pub mod episode;
 pub mod job;
 pub mod notices;
 pub mod persist;

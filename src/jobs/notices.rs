@@ -19,6 +19,10 @@ pub struct LimitHit {
     pub excerpt: String,
 }
 
+/// Episode kind for fatal provider request failures: buzzed mid-run
+/// only when stuck (see episode.rs), surfaced at settle otherwise.
+pub const ERROR_KIND: &str = "error";
+
 /// Strong patterns: specific enough to alert on their own. All
 /// lowercase, matched as substrings against the lowercased line.
 const STRONG: &[(&str, &str)] = &[
@@ -41,11 +45,11 @@ const STRONG: &[(&str, &str)] = &[
     // [invalid_request_error] ...`). Unlike overloads they settle fast
     // and never auto-retry to success — the final card must show them,
     // never a stale prior reply.
-    ("error from provider", "error"),
-    ("upstream request failed", "error"),
-    ("invalid_request", "error"),
-    ("encrypted_content", "error"),
-    ("was not issued to this caller", "error"),
+    ("error from provider", ERROR_KIND),
+    ("upstream request failed", ERROR_KIND),
+    ("invalid_request", ERROR_KIND),
+    ("encrypted_content", ERROR_KIND),
+    ("was not issued to this caller", ERROR_KIND),
 ];
 
 /// Fatal provider-failure markers (lowercase substrings). Shared by the
@@ -153,7 +157,7 @@ pub fn limit_card_text(pane: &str, hit: &LimitHit) -> String {
             "⚠️ agent auth failed",
             "Check login / API key on the PC, then prompt again.",
         ),
-        "error" => (
+        ERROR_KIND => (
             "⚠️ provider request failed",
             "This run failed — it won't auto-retry. Prompt again; if it repeats, /new or /model.",
         ),
@@ -246,7 +250,7 @@ mod tests {
             "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller",
         ]);
         let hit = detect_limit(&screen).expect("fatal provider error must detect");
-        assert_eq!(hit.kind, "error");
+        assert_eq!(hit.kind, ERROR_KIND);
         assert!(screen_has_provider_failure(&screen));
         assert!(is_provider_failure_line(&screen[0]));
         let text = limit_card_text("w8:p1", &hit);
