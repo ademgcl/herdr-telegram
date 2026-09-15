@@ -63,11 +63,11 @@ pub async fn handle_update(s: AppState, u: &Value) {
     }
 
     // User customized topic icon in Telegram: persist so bot never overwrites it.
-    if let Some((thread, icon)) = crate::handlers::titles::parse_topic_icon_edit(msg) {
-        if let Some(pane) = s.topics.pane_of_thread(thread) {
-            println!("[topics] user customized icon for {pane}: {icon}");
-            s.topics.note_user_icon(&pane, &icon);
-        }
+    if let Some((thread, icon)) = crate::handlers::titles::parse_topic_icon_edit(msg)
+        && let Some(pane) = s.topics.pane_of_thread(thread)
+    {
+        println!("[topics] user customized icon for {pane}: {icon}");
+        s.topics.note_user_icon(&pane, &icon);
     }
 
     // Native forum-topic rename (service message, no text): sync the new

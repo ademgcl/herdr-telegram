@@ -1,6 +1,7 @@
 //! Stable short tags per pane (`o2`): kept as persisted ids; the
 //! VISIBLE title syncs 1:1 with herdr pane names (see `sync_title`).
-//! State lives on the topic ICON.
+//! The topic icon is context-only (agent vs shell, set once at
+//! creation); live status surfaces in cards, pins and typing.
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown
@@ -58,21 +59,6 @@ pub fn assign(existing: &[String], kind: &str) -> String {
     }
 }
 
-/// Quiet horizon: a `done` older than this displays as idle (available
-/// again). herdr parks agents at done indefinitely, so without decay the
-/// idle badge would almost never show.
-pub const DONE_IDLE_AFTER_SECS: u64 = 15 * 60;
-
-/// Display status for the icon: fresh completions show done; long-quiet
-/// ones relax to idle. herdr-truth (`done`) is preserved everywhere else —
-/// only the badge decays.
-pub fn display_status(status: &str, settled_secs: u64) -> &str {
-    if status == "done" && settled_secs >= DONE_IDLE_AFTER_SECS {
-        "idle"
-    } else {
-        status
-    }
-}
 /// Friendly default title: `{tag} · {space}` e.g. `o2 · tg`. Written
 /// into the herdr pane label when unlabeled, so the default name is a
 /// real herdr-tracked name, not just a telegram string.
@@ -91,25 +77,6 @@ pub fn sync_title(label: Option<&str>, pane: &str) -> String {
         .filter(|l| !l.is_empty())
         .unwrap_or(pane);
     base.chars().take(128).collect()
-}
-
-/// Topic icon per agent status, as preset custom-emoji IDs (verified live:
-/// unlike `icon_color`, `icon_custom_emoji_id` applies AND renders on
-/// edit). Instant, silent, zero clutter — the at-a-glance state signal.
-pub fn icon_emoji_id(status: &str) -> &'static str {
-    match status {
-        "working" => "5350554349074391003", // 💻
-        "idle" => "5417915203100613993",    // 💬 ready for your next prompt
-        // Shell panes badge as idle: no verified shell custom-emoji id
-        // exists (new glyphs must be probe-verified), and 💬 honestly
-        // reads "awaiting input". The 💲 text glyph in cards and menus
-        // carries the shell-vs-agent distinction.
-        "shell" => "5417915203100613993",                      // 💬
-        "done" => "5237699328843200968",                       // ✅
-        "blocked" => "5379748062124056162",                    // ❗️
-        "closed" | "dead" | "exited" => "5408906741125490282", // 🏁
-        _ => "5377316857231450742",                            // ❓
-    }
 }
 
 /// Initial topic icon per pane context/kind, set once at topic creation.
@@ -163,26 +130,10 @@ mod tests {
     }
 
     #[test]
-    fn test_icon_mapping() {
-        assert_eq!(icon_emoji_id("working"), "5350554349074391003");
-        assert_eq!(icon_emoji_id("idle"), "5417915203100613993");
-        assert_eq!(icon_emoji_id("shell"), icon_emoji_id("idle"));
-        assert_eq!(icon_emoji_id("done"), "5237699328843200968");
-        assert_eq!(icon_emoji_id("blocked"), "5379748062124056162");
-        assert_eq!(icon_emoji_id("exited"), "5408906741125490282");
-        assert_eq!(icon_emoji_id("whatever"), "5377316857231450742");
-    }
-
-    #[test]
-    fn test_display_status_decay() {
-        assert_eq!(display_status("done", 0), "done");
-        assert_eq!(display_status("done", 14 * 60), "done");
-        assert_eq!(display_status("done", 15 * 60), "idle");
-        assert_eq!(display_status("done", 3600), "idle");
-        // Only done decays — everything else passes through.
-        assert_eq!(display_status("working", 3600), "working");
-        assert_eq!(display_status("blocked", 3600), "blocked");
-        assert_eq!(display_status("idle", 0), "idle");
+    fn test_context_icon_mapping() {
+        assert_eq!(context_icon_emoji_id("shell"), "5417915203100613993");
+        assert_eq!(context_icon_emoji_id("?"), "5417915203100613993");
+        assert_eq!(context_icon_emoji_id("opencode"), "5350554349074391003");
     }
 
     #[test]

@@ -61,9 +61,7 @@ pub(crate) async fn handle_spawn(
                         .find(|w| w.id == agent.ws)
                         .map(|w| w.label.as_str())
                         .unwrap_or(&agent.ws);
-                    s.topics
-                        .sync_topic(&agent.pane, &agent.kind, sp, &agent.status)
-                        .await;
+                    s.topics.sync_topic(&agent.pane, &agent.kind, sp).await;
                 }
                 s.tg.edit_msg(
                     chat,

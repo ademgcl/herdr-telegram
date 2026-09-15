@@ -43,8 +43,8 @@ src/
 │   └── router.rs           # Update routing
 ├── topics/                 # Forum topic management
 │   ├── mod.rs              # Re-exports
-│   ├── storage.rs          # Pane↔thread map in topics.state
-│   ├── names.rs            # Tags, 1:1 title rule, icons, done→idle decay
+│   ├── storage/            # Pane↔thread map in topics.state (mod.rs + tests.rs)
+│   ├── names.rs            # Tags, titles, context icons
 │   └── manager.rs          # Creation (friendly tag·space named), icon + title sync, lifecycle
 ├── handlers/               # Update handlers
 │   ├── mod.rs              # Re-exports
@@ -70,6 +70,7 @@ src/
 │   ├── model.rs            # Opencode model picker
 │   ├── model_parse.rs      # Picker list parsing
 │   ├── model_scan.rs       # Column-split helpers
+│   ├── reset.rs            # Paced forum-topic reset (read-only Herdr resync)
 │   ├── shell.rs            # Facade re-export (paths stable)
 │   ├── shell_common.rs     # Reply format, settle wait, card text
 │   ├── shell_run.rs        # Shell command run
@@ -82,6 +83,7 @@ src/
 ├── jobs/                   # Agent prompt execution
 │   ├── mod.rs              # Re-exports
 │   ├── job.rs              # Per-pane job state, cancel notify
+│   ├── echo.rs             # Prompt-echo recognition (see segment)
 │   ├── episode.rs          # Stall-episode gate for mid-run alerts
 │   ├── runner.rs           # Prompt watcher (live → final card)
 │   ├── enqueue.rs          # Prompt submit (deliver-first, last-wins books)
@@ -119,11 +121,11 @@ src/
 - Titles sync 1:1 with herdr pane names: pane label when set, else the friendly default (`o2 · tg`). Last synced title persists in `topics.state`.
 - Either side renames: native topic rename → `pane.rename`; herdr-side rename → topic renamed on the ≤60s watchdog. Stored-title compare both ways, so edits converge without loops.
 - Known limit: a rename made while the bot is down can diverge (no read API for topic names) — last-observed-writer wins; redelivered updates heal it.
-- State lives on the **icon**, synced silently (never notifies): 💻 working · 💬 idle · ✅ done · ❗️ blocked · 🏁 closed · ❓ unknown (custom-emoji IDs via `icon_emoji_id`; card glyphs differ, see `ui/emoji.rs`). Fresh `done` decays to idle after 15 quiet min.
+- State lives on the **icon**, set once silently at creation and never churned: 💻 agent · 💬 shell (custom-emoji IDs via `context_icon_emoji_id`); user customs persist and are never overwritten. Status surfaces in cards, pins and the typing indicator instead.
 - Buzz: answers, `blocked`, usage-limit stalls. `done`/`idle` post only if a debounce holds with fresh output; empty settles stay silent.
 - Blocked cards follow content (dialogs turn over with no status change): repeats silent, new dialog posts/updates. Taps edit the card in place (buttons stripped on resume); typed answers use atomic `pane.send_input`, verified on-screen.
 - In-topic plain text = prompt; commands in context: `/read` `/output` `/keys` `/status` `/model` `/quit` `/kill` `/shell` `/space` `/split` `/cancel` `/help`.
-- General topic: `/agents` `/spawn` `/space` `/shell` `/model` (redirect) `/start` `/cancel` `/help`.
+- General topic: `/agents` `/spawn` `/space` `/shell` `/model` (redirect) `/start` `/reset` `/cancel` `/help`.
 - Known limit: spontaneous (non-prompt) completions that finish while the bot is down stay silent (no baseline to diff) — last-observed-writer-wins otherwise.
 
 ---

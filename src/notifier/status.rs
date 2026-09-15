@@ -40,13 +40,6 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         return;
     }
 
-    // Fresh settles restart the done→idle display decay clock.
-    if old.as_deref() != Some(new_status) && matches!(new_status, "idle" | "done" | "blocked") {
-        s.settled_at
-            .lock()
-            .await
-            .insert(pane.to_string(), std::time::Instant::now());
-    }
     // Leaving blocked behind — its dialog sig dies with the episode so
     // the next block episode always posts.
     if old.as_deref() == Some("blocked") && new_status != "blocked" {
@@ -75,19 +68,8 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         .map(|w| format!("#{} {}", w.number, w.label))
         .unwrap_or_else(|| ws_id.clone());
 
-    // The pane's topic exists and its state icon tracks the DISPLAY
-    // status — long-quiet completions show idle (available again) while
-    // herdr-truth stays done everywhere else. Silent, instant, zero
-    // clutter: edits and icon swaps never notify, only pushes buzz.
-    let settled_age = s
-        .settled_at
-        .lock()
-        .await
-        .get(pane)
-        .map(|t| t.elapsed().as_secs())
-        .unwrap_or(0);
-    let display = crate::topics::names::display_status(new_status, settled_age);
-    s.topics.sync_topic(pane, &kind, raw_space, display).await;
+    // The pane's topic exists (ensured silently — never notifies).
+    s.topics.sync_topic(pane, &kind, raw_space).await;
 
     // F11: writing/typing indicator & F1: reopen topic when working
     if new_status == "working" {

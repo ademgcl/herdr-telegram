@@ -114,6 +114,11 @@ impl State {
 
     /// F11: Start sustaining a "typing…" action in the pane's topic while working.
     pub async fn start_typing(self: &Arc<Self>, pane: &str) {
+        // DM mode has no forum: nothing to type into, and the spawned
+        // task would exit instantly while leaking its handle.
+        if self.cfg.forum.is_none() {
+            return;
+        }
         let mut tasks = self.typing_tasks.lock().await;
         if tasks.contains_key(pane) {
             return;

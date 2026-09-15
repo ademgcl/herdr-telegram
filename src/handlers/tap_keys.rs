@@ -40,7 +40,7 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                         }
                     }
                     let mut full = opt_keys(i);
-                    let confirm = vec![full.pop().unwrap()];
+                    let confirm = vec![full.pop().expect("opt_keys ends with enter")];
                     (full, confirm, format!("option {}", i + 1))
                 }
                 _ => return TapCall::Unknown,

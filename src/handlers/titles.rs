@@ -163,7 +163,9 @@ mod tests {
             Some((17, "5350554349074391003".to_string()))
         );
         assert_eq!(
-            parse_topic_icon_edit(&json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})),
+            parse_topic_icon_edit(
+                &json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})
+            ),
             None
         );
     }

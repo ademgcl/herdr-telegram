@@ -106,11 +106,7 @@ pub(crate) async fn handle_spawn(s: &AppState, chat: i64, arg: &str) {
         Ok(row) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             let space = ws_label(&spaces, &row.ws);
-            if let Some(topic_th) = s
-                .topics
-                .sync_topic(&row.pane, &row.kind, space, &row.status)
-                .await
-            {
+            if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space).await {
                 s.tg.send_msg(
                     chat,
                     None,

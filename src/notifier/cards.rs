@@ -7,7 +7,6 @@ use crate::{
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
     state::AppState,
-    topics::names::display_status,
     types::MAX_MSG_UNITS,
     ui::{chunks, emoji, ws_label},
 };
@@ -74,17 +73,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
-    // Settle confirmed: icon follows now (even with no fresh body),
-    // through the same done→idle decay as live observations.
-    let settled_age = s
-        .settled_at
-        .lock()
-        .await
-        .get(&pane)
-        .map(|t| t.elapsed().as_secs())
-        .unwrap_or(0);
-    let display = display_status(&settled, settled_age);
-    s.topics.sync_topic(&pane, &kind, raw_space, display).await;
+    s.topics.sync_topic(&pane, &kind, raw_space).await;
     // Single stray chars (picker echoes, vim residue) never page; real
     // shorts ("ok", "done") do. Empty stays silent.
     if body.chars().count() < 2 {
@@ -126,15 +115,7 @@ pub(crate) async fn post_spontaneous_card(
 
     let mut delivered = false;
     if let Some(forum) = s.cfg.forum {
-        let settled_age = s
-            .settled_at
-            .lock()
-            .await
-            .get(pane)
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
-        let display = display_status(settled, settled_age);
-        if let Some(thread) = s.topics.sync_topic(pane, kind, space, display).await {
+        if let Some(thread) = s.topics.sync_topic(pane, kind, space).await {
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if mid.is_some() {

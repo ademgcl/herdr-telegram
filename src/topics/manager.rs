@@ -80,13 +80,16 @@ impl TopicManager {
                 self.storage.insert(pane.to_string(), thread);
                 self.storage.set_title(pane, &name);
 
-                // Set initial icon once according to context/kind (never flips on status)
+                // Set initial icon once according to context/kind (never flips on status).
+                // Persisted only on success so a transient failure retries next sync.
                 let icon = names::context_icon_emoji_id(kind);
-                let _ = self.tg.set_topic_icon(forum, thread, icon).await;
-                self.storage.set_icon(pane, icon);
+                if self.tg.set_topic_icon(forum, thread, icon).await.is_ok() {
+                    self.storage.set_icon(pane, icon);
+                }
 
                 // F2: Identity card posted and pinned in topic header
-                let card = format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`\nStatus: 💬 ready");
+                let card =
+                    format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`\nStatus: 💬 ready");
                 if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await {
                     let _ = self.tg.pin_msg(forum, mid).await;
                 }
@@ -102,24 +105,20 @@ impl TopicManager {
         out
     }
 
-    /// Sync topic: ensure the topic exists.
-    /// Topic icon is set once (context-based) and preserved if already set or
-    /// customized by user. Status is NO LONGER reflected via icon churn.
-    pub async fn sync_topic(
-        &self,
-        pane: &str,
-        kind: &str,
-        space: &str,
-        _status: &str,
-    ) -> Option<i64> {
+    /// Sync topic: ensure the pane's topic exists (creation + one-time
+    /// context icon). Status is not reflected on the icon — it surfaces
+    /// in cards, pins and the typing indicator instead.
+    pub async fn sync_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         let thread = self.ensure_topic(pane, kind, space).await?;
         let forum = self.forum_id?;
 
-        // If icon was never set for this topic (e.g. migration / boot), set it once
+        // If icon was never set for this topic (e.g. migration / boot), set it once.
+        // Persisted only on success so a transient failure retries next sync.
         if self.storage.get_icon(pane).is_none() {
             let icon = names::context_icon_emoji_id(kind);
-            let _ = self.tg.set_topic_icon(forum, thread, icon).await;
-            self.storage.set_icon(pane, icon);
+            if self.tg.set_topic_icon(forum, thread, icon).await.is_ok() {
+                self.storage.set_icon(pane, icon);
+            }
         }
 
         Some(thread)
@@ -150,7 +149,7 @@ impl TopicManager {
     /// Badge a live-but-agentless pane as shell: no title touch (titles
     /// sync 1:1 with herdr names), just ensures the topic.
     pub async fn mark_shell(&self, pane: &str) {
-        self.sync_topic(pane, "shell", "?", "shell").await;
+        self.sync_topic(pane, "shell", "?").await;
     }
 
     /// Stable short tag for this pane (`o2`) — backs the friendly

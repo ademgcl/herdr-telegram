@@ -88,7 +88,7 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let space = ws_label(&spaces, &ws_id).to_string();
     // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
-    s.topics.sync_topic(&pane, "shell", &space, "shell").await;
+    s.topics.sync_topic(&pane, "shell", &space).await;
     s.status
         .lock()
         .await
@@ -119,7 +119,7 @@ pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
         .unwrap_or_default();
     let space = ws_label(&spaces, &ws_id).to_string();
     let space = if space.is_empty() { pane } else { &space };
-    s.topics.sync_topic(&new, "shell", space, "shell").await;
+    s.topics.sync_topic(&new, "shell", space).await;
     s.status
         .lock()
         .await

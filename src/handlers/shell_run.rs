@@ -61,7 +61,7 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let space = ws_label(&spaces, ws).to_string();
-    s.topics.sync_topic(&pane, "shell", &space, "shell").await;
+    s.topics.sync_topic(&pane, "shell", &space).await;
     s.status
         .lock()
         .await

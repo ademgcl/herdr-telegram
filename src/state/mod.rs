@@ -50,9 +50,6 @@ pub struct State {
     pub debounce: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Panes with a model switch in flight — second taps wait.
     pub modelop: Mutex<HashSet<String>>,
-    /// When each pane last entered a settled state — drives the
-    /// done→idle display decay (herdr parks agents at done indefinitely).
-    pub settled_at: Mutex<HashMap<String, std::time::Instant>>,
     /// Last rate-limit episode alerted per pane: (kind, alerted_at).
     /// Watchdog-owned (prompt watchers dedupe locally): entries are
     /// cleared after consecutive confirmed-clean reads so the next episode
@@ -178,7 +175,6 @@ impl State {
             last_change: Mutex::new(HashMap::new()),
             debounce: Mutex::new(HashMap::new()),
             modelop: Mutex::new(HashSet::new()),
-            settled_at: Mutex::new(HashMap::new()),
             limit_alert: Mutex::new(HashMap::new()),
             limit_seen: Mutex::new(HashMap::new()),
             limit_miss: Mutex::new(HashMap::new()),
@@ -242,7 +238,6 @@ impl State {
         self.seen.lock().await.remove(pane);
         self.last_change.lock().await.remove(pane);
         self.debounce.lock().await.remove(pane);
-        self.settled_at.lock().await.remove(pane);
         self.clear_limit_episode(pane).await;
         self.blocked_sig.lock().await.remove(pane);
         self.modelop.lock().await.remove(pane);

@@ -64,7 +64,7 @@ pub fn model_kb(pane: &str) -> Value {
         if i % 2 == 0 {
             rows.push(Vec::new());
         }
-        rows.last_mut().unwrap().push(json!({
+        rows.last_mut().expect("row pushed on even i").push(json!({
             "text": *short,
             // model ids hold no ':' — pane goes last so splitn keeps it whole.
             "callback_data": format!("M:{i}:{pane}"),

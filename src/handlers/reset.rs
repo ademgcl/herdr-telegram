@@ -34,7 +34,7 @@ impl Drop for ResetGuard {
 }
 
 pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
-    let Some(forum) = s.cfg.forum else {
+    if s.cfg.forum.is_none() {
         s.tg.send_msg(
             chat,
             thread_id,
@@ -43,7 +43,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         )
         .await;
         return;
-    };
+    }
 
     if RESET_IN_PROGRESS
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -96,11 +96,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     for r in &agents {
         live_panes.insert(r.pane.clone());
         let space = ws_label(&spaces, &r.ws);
-        if s.topics
-            .sync_topic(&r.pane, &r.kind, space, &r.status)
-            .await
-            .is_some()
-        {
+        if s.topics.sync_topic(&r.pane, &r.kind, space).await.is_some() {
             created += 1;
             if let Some(f) = facts.get(&r.pane)
                 && let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty())
@@ -117,7 +113,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             if !live_panes.contains(&pane) {
                 let ws = facts.get(&pane).map(|f| f.ws.as_str()).unwrap_or("");
                 let space = ws_label(&spaces, ws);
-                if s.topics.sync_topic(&pane, "?", space, "shell").await.is_some() {
+                if s.topics.sync_topic(&pane, "shell", space).await.is_some() {
                     created += 1;
                     if let Some(f) = facts.get(&pane)
                         && let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty())
@@ -133,7 +129,9 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     s.tg.send_msg(
         chat,
         thread_id,
-        &format!("✅ Paced reset complete: deleted {deleted} topic(s), recreated {created} topic(s)."),
+        &format!(
+            "✅ Paced reset complete: deleted {deleted} topic(s), recreated {created} topic(s)."
+        ),
         None,
     )
     .await;
