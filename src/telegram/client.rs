@@ -48,6 +48,52 @@ impl TelegramClient {
             .map(|s| Duration::from_secs(s + 1))
     }
 
+    /// Execute a Telegram API call with 429 flood-wait (`retry_after`)
+    /// and transient connection/server error retries. Fatal permission/topic
+    /// errors fail fast without retry.
+    pub async fn call_retrying(&self, method: &str, body: Value, timeout: Duration) -> Res<Value> {
+        let mut attempts = 0;
+        let mut waits = 0;
+        loop {
+            match self.call(method, body.clone(), timeout).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if super::errors::topic_missing(&msg)
+                        || super::errors::topic_not_modified(&msg)
+                        || msg.contains("message is not modified")
+                        || msg.contains("not enough rights")
+                        || msg.contains("bot was blocked")
+                        || msg.contains("CHAT_ADMIN_REQUIRED")
+                    {
+                        return Err(e);
+                    }
+                    if let Some(wait) = Self::retry_after(&msg) {
+                        waits += 1;
+                        if waits > 3 {
+                            return Err(e);
+                        }
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    attempts += 1;
+                    let retryable = e
+                        .downcast_ref::<reqwest::Error>()
+                        .map(|re| {
+                            re.is_connect()
+                                || re.is_timeout()
+                                || re.status().map(|s| s.is_server_error()).unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                    if !retryable || attempts >= 3 {
+                        return Err(e);
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+
     pub async fn set_my_commands(&self) -> Res<()> {
         self.call(
             "setMyCommands",

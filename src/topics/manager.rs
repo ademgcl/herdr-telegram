@@ -234,4 +234,32 @@ impl TopicManager {
             }
         }
     }
+
+    pub async fn delete_topic(&self, pane: &str) -> bool {
+        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+            return true;
+        };
+        match self.tg.delete_forum_topic(forum, thread).await {
+            Ok(()) => {
+                self.remove_mapping(pane);
+                println!("[topics] deleted topic #{thread} ({pane})");
+                true
+            }
+            Err(e) => {
+                if crate::telegram::topic_missing(&e.to_string()) {
+                    self.remove_mapping(pane);
+                    return true;
+                }
+                eprintln!("[topics] delete topic #{thread} ({pane}) failed: {e}");
+                false
+            }
+        }
+    }
+
+    pub fn clear_all(&self) {
+        self.last_icon.lock().unwrap().clear();
+        self.last_title_write.lock().unwrap().clear();
+        self.creating.lock().unwrap().clear();
+        self.storage.clear_all();
+    }
 }

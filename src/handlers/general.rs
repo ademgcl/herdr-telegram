@@ -24,6 +24,7 @@ pub(crate) async fn handle_general_forum_message(
                     • `/shell [space]` — open a fresh shell pane & topic\n\
                     • `/space [name]` — new space + shell topic\n\
                    • `/model` — inside an agent topic: model picker\n\
+                   • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
                    • `/cancel` — abort pending jobs\n\n\
                    💡 Each active agent has its own dedicated topic in this group! Switch to an agent's topic to chat with it directly.";
         s.tg.send_msg(chat, thread_id, msg, None).await;
@@ -171,6 +172,11 @@ pub(crate) async fn handle_general_forum_message(
             if arg.is_empty() { None } else { Some(arg) },
         )
         .await;
+        return;
+    }
+
+    if cmd == "/reset" || cmd == "/reset_topics" {
+        super::reset::run_paced_reset(&s, chat, thread_id).await;
         return;
     }
 

@@ -168,6 +168,17 @@ impl TopicStorage {
     pub fn all_mappings(&self) -> HashMap<String, i64> {
         self.store.lock().unwrap().topics.clone()
     }
+
+    /// Clear all stored topics, tags, titles, unread, and pins.
+    pub fn clear_all(&self) {
+        let mut s = self.store.lock().unwrap();
+        s.topics.clear();
+        s.unread.clear();
+        s.tags.clear();
+        s.titles.clear();
+        s.pins.clear();
+        self.save(&s);
+    }
 }
 
 #[cfg(test)]
@@ -240,6 +251,22 @@ mod tests {
         assert_eq!(re.get_title("w1:p1"), Some("api".to_string()));
         re.remove("w1:p1");
         assert_eq!(re.get_title("w1:p1"), None);
+        let _ = std::fs::remove_file(&st.file_path);
+    }
+
+    #[test]
+    fn test_clear_all() {
+        let st = TopicStorage::at(PathBuf::from(format!(
+            "/tmp/herdr-tg-test-clear-{}.json",
+            std::process::id()
+        )));
+        st.insert("w1:p1".into(), 42);
+        st.set_title("w1:p1", "api");
+        assert_eq!(st.get_thread("w1:p1"), Some(42));
+        assert_eq!(st.get_title("w1:p1"), Some("api".to_string()));
+        st.clear_all();
+        assert_eq!(st.get_thread("w1:p1"), None);
+        assert_eq!(st.get_title("w1:p1"), None);
         let _ = std::fs::remove_file(&st.file_path);
     }
 }

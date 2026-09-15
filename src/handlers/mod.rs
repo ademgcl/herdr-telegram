@@ -15,6 +15,7 @@ pub mod kill;
 pub mod model;
 pub mod model_parse;
 pub mod model_scan;
+pub mod reset;
 pub mod shell;
 pub mod shell_common;
 pub mod shell_lifecycle;
