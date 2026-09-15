@@ -112,6 +112,15 @@ pub fn icon_emoji_id(status: &str) -> &'static str {
     }
 }
 
+/// Initial topic icon per pane context/kind, set once at topic creation.
+/// Never continually mutated on status change.
+pub fn context_icon_emoji_id(kind: &str) -> &'static str {
+    match kind {
+        "shell" | "?" => "5417915203100613993", // 💬 shell prompt
+        _ => "5350554349074391003",             // 💻 code agent
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

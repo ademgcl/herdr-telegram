@@ -158,6 +158,21 @@ impl TelegramClient {
             .await;
     }
 
+    /// Pin a message in a chat/topic without notification.
+    pub async fn pin_msg(&self, chat_id: i64, message_id: i64) -> Res<()> {
+        self.call_retrying(
+            "pinChatMessage",
+            json!({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "disable_notification": true
+            }),
+            Duration::from_secs(15),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Unpin a message (one-time cleanup helper).
     pub async fn unpin_msg(&self, chat_id: i64, message_id: i64) {
         if let Err(e) = self

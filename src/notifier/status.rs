@@ -89,6 +89,14 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     let display = crate::topics::names::display_status(new_status, settled_age);
     s.topics.sync_topic(pane, &kind, raw_space, display).await;
 
+    // F11: writing/typing indicator & F1: reopen topic when working
+    if new_status == "working" {
+        s.topics.reopen_topic(pane).await;
+        s.start_typing(pane).await;
+    } else {
+        s.stop_typing(pane).await;
+    }
+
     if silent {
         // Boot seed only — but an already-blocked pane genuinely needs
         // input NOW (missed while the bot was down): post its answer card

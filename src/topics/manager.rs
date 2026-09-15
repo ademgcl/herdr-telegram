@@ -12,13 +12,7 @@ pub struct TopicManager {
     forum_id: Option<i64>,
     storage: TopicStorage,
     tg: TelegramClient,
-    /// Last icon set per pane — recolors fire only on real change.
-    last_icon: Mutex<HashMap<String, String>>,
     last_title_write: Mutex<HashMap<String, Instant>>,
-    /// Panes with a topic creation in flight — concurrent ensures for
-    /// the same new pane (spawn racing a status event) wait for the
-    /// winner instead of minting a second, orphaned topic. Short-lived
-    /// claims only; never held across an await.
     creating: Mutex<HashSet<String>>,
 }
 
@@ -28,7 +22,6 @@ impl TopicManager {
             forum_id,
             storage: TopicStorage::new(),
             tg,
-            last_icon: Mutex::new(HashMap::new()),
             last_title_write: Mutex::new(HashMap::new()),
             creating: Mutex::new(HashSet::new()),
         }
@@ -43,7 +36,6 @@ impl TopicManager {
     }
 
     pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
-        self.last_icon.lock().unwrap().remove(pane);
         self.last_title_write.lock().unwrap().remove(pane);
         self.creating.lock().unwrap().remove(pane);
         self.storage.remove(pane)
@@ -87,6 +79,18 @@ impl TopicManager {
                 println!("[topics] created topic #{thread} for {pane} ({name})");
                 self.storage.insert(pane.to_string(), thread);
                 self.storage.set_title(pane, &name);
+
+                // Set initial icon once according to context/kind (never flips on status)
+                let icon = names::context_icon_emoji_id(kind);
+                let _ = self.tg.set_topic_icon(forum, thread, icon).await;
+                self.storage.set_icon(pane, icon);
+
+                // F2: Identity card posted and pinned in topic header
+                let card = format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`\nStatus: 💬 ready");
+                if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await {
+                    let _ = self.tg.pin_msg(forum, mid).await;
+                }
+
                 Some(thread)
             }
             Err(e) => {
@@ -98,50 +102,55 @@ impl TopicManager {
         out
     }
 
-    /// Sync topic state: ensure the topic exists and set the state icon
-    /// for this status. The NAME is never touched here — only the icon.
-    /// Everything is silent (never notifies) and cache-guarded (no
-    /// redundant API calls). Safe to call on every observation — icon
-    /// swaps are cheap and notification-free.
+    /// Sync topic: ensure the topic exists.
+    /// Topic icon is set once (context-based) and preserved if already set or
+    /// customized by user. Status is NO LONGER reflected via icon churn.
     pub async fn sync_topic(
         &self,
         pane: &str,
         kind: &str,
         space: &str,
-        status: &str,
+        _status: &str,
     ) -> Option<i64> {
         let thread = self.ensure_topic(pane, kind, space).await?;
         let forum = self.forum_id?;
-        let icon = names::icon_emoji_id(status).to_string();
-        let due = match self.last_icon.lock().unwrap().get(pane) {
-            None => true,
-            Some(prev) => prev != &icon,
-        };
-        if due {
-            match self.tg.set_topic_icon(forum, thread, &icon).await {
-                Ok(()) => {
-                    self.last_icon
-                        .lock()
-                        .unwrap()
-                        .insert(pane.to_string(), icon);
-                }
-                Err(e) => {
-                    if crate::telegram::topic_missing(&e.to_string()) {
-                        self.remove_mapping(pane);
-                        println!("[topics] pruned missing topic #{thread} ({pane})");
-                        return None;
-                    }
-                    eprintln!("[topics] icon topic #{thread} ({pane}) failed: {e}");
-                }
-            }
+
+        // If icon was never set for this topic (e.g. migration / boot), set it once
+        if self.storage.get_icon(pane).is_none() {
+            let icon = names::context_icon_emoji_id(kind);
+            let _ = self.tg.set_topic_icon(forum, thread, icon).await;
+            self.storage.set_icon(pane, icon);
         }
+
         Some(thread)
     }
 
+    /// Note user-customized icon from Telegram so it is never overwritten.
+    pub fn note_user_icon(&self, pane: &str, icon: &str) {
+        self.storage.set_icon(pane, icon);
+    }
+
+    /// F1: Reopen a closed forum topic (e.g. when agent transitions to working).
+    pub async fn reopen_topic(&self, pane: &str) -> bool {
+        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+            return true;
+        };
+        match self.tg.reopen_forum_topic(forum, thread).await {
+            Ok(()) => true,
+            Err(e) => {
+                if crate::telegram::topic_missing(&e.to_string()) {
+                    return true;
+                }
+                eprintln!("[topics] reopen topic #{thread} ({pane}) failed: {e}");
+                false
+            }
+        }
+    }
+
     /// Badge a live-but-agentless pane as shell: no title touch (titles
-    /// sync 1:1 with herdr names), just the shell icon. Silent, idempotent.
+    /// sync 1:1 with herdr names), just ensures the topic.
     pub async fn mark_shell(&self, pane: &str) {
-        self.sync_topic(pane, "?", "?", "shell").await;
+        self.sync_topic(pane, "shell", "?", "shell").await;
     }
 
     /// Stable short tag for this pane (`o2`) — backs the friendly
@@ -257,7 +266,6 @@ impl TopicManager {
     }
 
     pub fn clear_all(&self) {
-        self.last_icon.lock().unwrap().clear();
         self.last_title_write.lock().unwrap().clear();
         self.creating.lock().unwrap().clear();
         self.storage.clear_all();

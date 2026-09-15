@@ -57,6 +57,29 @@ impl TelegramClient {
         }
     }
 
+    pub async fn reopen_forum_topic(&self, chat_id: i64, thread_id: i64) -> Res<()> {
+        match self
+            .call_retrying(
+                "reopenForumTopic",
+                json!({"chat_id": chat_id, "message_thread_id": thread_id}),
+                Duration::from_secs(15),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if super::errors::topic_missing(&msg)
+                    || msg.contains("TOPIC_NOT_MODIFIED")
+                    || msg.contains("not closed")
+                {
+                    return Ok(());
+                }
+                Err(e)
+            }
+        }
+    }
+
     /// Rename a forum topic — the herdr→telegram half of 1:1 title
     /// sync. Silent (never notifies); our own edit echoes back as
     /// `forum_topic_edited`, which the stored-title compare absorbs.

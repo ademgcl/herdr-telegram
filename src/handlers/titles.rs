@@ -31,6 +31,20 @@ pub fn parse_topic_edit(msg: &Value) -> Option<(i64, String)> {
     Some((thread, name))
 }
 
+/// Extract user-edited topic icon custom-emoji ID from a `forum_topic_edited` service msg.
+pub fn parse_topic_icon_edit(msg: &Value) -> Option<(i64, String)> {
+    msg.get("forum_topic_edited")?;
+    let thread = msg["message_thread_id"].as_i64()?;
+    let icon = msg["forum_topic_edited"]["icon_custom_emoji_id"]
+        .as_str()?
+        .trim()
+        .to_string();
+    if icon.is_empty() {
+        return None;
+    }
+    Some((thread, icon))
+}
+
 /// Watchdog half: every mapped live pane's topic shows its herdr label.
 /// Unlabeled panes are provisioned with the friendly default first.
 /// Panes gone from herdr are skipped — the close flow owns them.
@@ -134,6 +148,22 @@ mod tests {
         assert_eq!(parse_topic_edit(&edit_msg(Some(17), "   ")), None);
         assert_eq!(
             parse_topic_edit(&json!({"message_thread_id": 17, "forum_topic_edited": {}})),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_topic_icon_edit() {
+        let msg = json!({
+            "message_thread_id": 17,
+            "forum_topic_edited": {"icon_custom_emoji_id": "5350554349074391003"}
+        });
+        assert_eq!(
+            parse_topic_icon_edit(&msg),
+            Some((17, "5350554349074391003".to_string()))
+        );
+        assert_eq!(
+            parse_topic_icon_edit(&json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})),
             None
         );
     }

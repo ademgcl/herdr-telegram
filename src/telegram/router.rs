@@ -62,6 +62,14 @@ pub async fn handle_update(s: AppState, u: &Value) {
         return; // Silently ignore non-owners
     }
 
+    // User customized topic icon in Telegram: persist so bot never overwrites it.
+    if let Some((thread, icon)) = crate::handlers::titles::parse_topic_icon_edit(msg) {
+        if let Some(pane) = s.topics.pane_of_thread(thread) {
+            println!("[topics] user customized icon for {pane}: {icon}");
+            s.topics.note_user_icon(&pane, &icon);
+        }
+    }
+
     // Native forum-topic rename (service message, no text): sync the new
     // name back to the herdr pane label. Must run BEFORE the empty-text
     // return below. No stale gate: replays are idempotent via the
@@ -70,6 +78,10 @@ pub async fn handle_update(s: AppState, u: &Value) {
         if (chat_type == "supergroup" || chat_type == "group") && s.cfg.forum == Some(chat_id) {
             crate::handlers::titles::adopt_topic_title(s, chat_id, Some(thread), &name).await;
         }
+        return;
+    }
+
+    if msg.get("forum_topic_edited").is_some() {
         return;
     }
 

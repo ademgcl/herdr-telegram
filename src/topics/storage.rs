@@ -23,6 +23,9 @@ struct Store {
     /// Pinned live-status message per pane (pane → message id).
     #[serde(default)]
     pins: HashMap<String, i64>,
+    /// Topic icon custom-emoji ID set once per pane.
+    #[serde(default)]
+    icons: HashMap<String, String>,
 }
 
 pub struct TopicStorage {
@@ -65,6 +68,7 @@ impl TopicStorage {
                 tags: HashMap::new(),
                 titles: HashMap::new(),
                 pins: HashMap::new(),
+                icons: HashMap::new(),
             };
         }
         serde_json::from_str::<Store>(&txt).unwrap_or_else(|_| {
@@ -121,10 +125,23 @@ impl TopicStorage {
         let untagged = s.tags.remove(pane);
         let untitled = s.titles.remove(pane);
         let unpinned = s.pins.remove(pane);
-        if prev.is_some() || untagged.is_some() || untitled.is_some() || unpinned.is_some() {
+        let uniconed = s.icons.remove(pane);
+        if prev.is_some() || untagged.is_some() || untitled.is_some() || unpinned.is_some() || uniconed.is_some() {
             self.save(&s);
         }
         prev
+    }
+
+    pub fn get_icon(&self, pane: &str) -> Option<String> {
+        self.store.lock().unwrap().icons.get(pane).cloned()
+    }
+
+    pub fn set_icon(&self, pane: &str, icon: &str) {
+        let mut s = self.store.lock().unwrap();
+        if s.icons.get(pane).map(|i| i.as_str()) != Some(icon) {
+            s.icons.insert(pane.to_string(), icon.to_string());
+            self.save(&s);
+        }
     }
 
     pub fn get_title(&self, pane: &str) -> Option<String> {
@@ -169,7 +186,7 @@ impl TopicStorage {
         self.store.lock().unwrap().topics.clone()
     }
 
-    /// Clear all stored topics, tags, titles, unread, and pins.
+    /// Clear all stored topics, tags, titles, unread, pins, and icons.
     pub fn clear_all(&self) {
         let mut s = self.store.lock().unwrap();
         s.topics.clear();
@@ -177,6 +194,7 @@ impl TopicStorage {
         s.tags.clear();
         s.titles.clear();
         s.pins.clear();
+        s.icons.clear();
         self.save(&s);
     }
 }
@@ -262,11 +280,14 @@ mod tests {
         )));
         st.insert("w1:p1".into(), 42);
         st.set_title("w1:p1", "api");
+        st.set_icon("w1:p1", "5350554349074391003");
         assert_eq!(st.get_thread("w1:p1"), Some(42));
         assert_eq!(st.get_title("w1:p1"), Some("api".to_string()));
+        assert_eq!(st.get_icon("w1:p1"), Some("5350554349074391003".to_string()));
         st.clear_all();
         assert_eq!(st.get_thread("w1:p1"), None);
         assert_eq!(st.get_title("w1:p1"), None);
+        assert_eq!(st.get_icon("w1:p1"), None);
         let _ = std::fs::remove_file(&st.file_path);
     }
 }

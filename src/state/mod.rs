@@ -76,6 +76,8 @@ pub struct State {
     /// Panes with a button-tap in flight — observations skip posting
     /// while set (the tap owns the card update when it lands).
     pub blockop: Mutex<HashSet<String>>,
+    /// Active background typing indicator tasks for working panes.
+    pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
 
 pub type AppState = Arc<State>;
@@ -182,6 +184,7 @@ impl State {
             limit_miss: Mutex::new(HashMap::new()),
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashSet::new()),
+            typing_tasks: Mutex::new(HashMap::new()),
         }))
     }
 

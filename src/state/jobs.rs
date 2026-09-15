@@ -15,6 +15,7 @@ use std::{
 impl State {
     /// Retire one pane's watcher (used by /quit: no agent left to watch).
     pub async fn cancel_jobs_for(&self, pane: &str) -> bool {
+        self.stop_typing(pane).await;
         let job = self.jobs.lock().await.remove(pane);
         self.clear_pending(pane).await;
         self.clear_waiters(pane).await;
@@ -35,6 +36,11 @@ impl State {
     }
 
     pub async fn cancel_all_jobs(&self) -> usize {
+        let mut tasks = self.typing_tasks.lock().await;
+        for handle in tasks.values() {
+            handle.abort();
+        }
+        tasks.clear();
         let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
         self.clear_all_pending().await;
         // Global cancel retires everything: armed input waiters and
@@ -104,5 +110,31 @@ impl State {
         self.typewait.lock().await.retain(|_, p| p != pane);
         self.keywait.lock().await.retain(|_, p| p != pane);
         self.runwait.lock().await.retain(|_, p| p != pane);
+    }
+
+    /// F11: Start sustaining a "typing…" action in the pane's topic while working.
+    pub async fn start_typing(self: &Arc<Self>, pane: &str) {
+        let mut tasks = self.typing_tasks.lock().await;
+        if tasks.contains_key(pane) {
+            return;
+        }
+        let s = self.clone();
+        let pane_str = pane.to_string();
+        let handle = tokio::spawn(async move {
+            let forum = s.cfg.forum;
+            while let Some(chat_id) = forum {
+                let thread = s.topics.all_mappings().get(&pane_str).copied();
+                s.tg.typing(chat_id, thread).await;
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            }
+        });
+        tasks.insert(pane.to_string(), handle);
+    }
+
+    /// Stop sustaining the "typing…" action for this pane.
+    pub async fn stop_typing(&self, pane: &str) {
+        if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
+            handle.abort();
+        }
     }
 }
