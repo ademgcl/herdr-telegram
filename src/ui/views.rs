@@ -41,7 +41,8 @@ pub fn ws_label<'a>(spaces: &'a [WorkspaceInfo], id: &'a str) -> &'a str {
     spaces
         .iter()
         .find(|s| s.id == id)
-        .map(|s| s.label.as_str())
+        .map(|s| s.label.as_str().trim())
+        .filter(|l| !l.is_empty())
         .unwrap_or(id)
 }
 
@@ -250,5 +251,24 @@ mod tests {
         let shell = shell_help_text("w1:p1");
         assert!(shell.contains("w1:p1"));
         assert!(shell.contains("opencode"));
+    }
+
+    #[test]
+    fn test_ws_label() {
+        let spaces = vec![
+            WorkspaceInfo {
+                id: "w1".to_string(),
+                label: "shop".to_string(),
+                number: 1,
+            },
+            WorkspaceInfo {
+                id: "w2".to_string(),
+                label: "  ".to_string(),
+                number: 2,
+            },
+        ];
+        assert_eq!(ws_label(&spaces, "w1"), "shop");
+        assert_eq!(ws_label(&spaces, "w2"), "w2");
+        assert_eq!(ws_label(&spaces, "w3"), "w3");
     }
 }

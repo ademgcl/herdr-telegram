@@ -1,7 +1,7 @@
 use crate::{
     herdr::client::{create_workspace, get_agent, list_agents, list_workspaces, spawn_agent},
     state::AppState,
-    ui::{agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb},
+    ui::{agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb, ws_label},
 };
 
 pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>) {
@@ -56,11 +56,7 @@ pub(crate) async fn handle_spawn(
                 // Ensure topic exists in forum group if enabled
                 if s.cfg.forum.is_some() {
                     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                    let sp = spaces
-                        .iter()
-                        .find(|w| w.id == agent.ws)
-                        .map(|w| w.label.as_str())
-                        .unwrap_or(&agent.ws);
+                    let sp = ws_label(&spaces, &agent.ws);
                     s.topics.sync_topic(&agent.pane, &agent.kind, sp).await;
                 }
                 s.tg.edit_msg(

@@ -11,6 +11,7 @@ use crate::{
     },
     state::AppState,
     topics::names,
+    ui::ws_label,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -63,21 +64,16 @@ pub async fn sync_titles(s: &AppState) {
         .collect();
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
+        let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
+        let space = ws_label(&spaces, &f.ws);
         if let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty()) {
-            // Herdr name wins (truncated to telegram's 128-char cap).
-            s.topics
-                .sync_title(pane, &names::sync_title(Some(label), pane))
-                .await;
+            // Herdr name wins (formatted with workspace prefix and agent tag).
+            let formatted = names::format_title(space, label, kind);
+            s.topics.sync_title(pane, &formatted).await;
             continue;
         }
-        let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
-        let space = spaces
-            .iter()
-            .find(|w| w.id == f.ws)
-            .map(|w| w.label.as_str())
-            .filter(|l| !l.is_empty())
-            .unwrap_or(pane.as_str());
-        let friendly = names::title(&s.topics.tag_for(pane, kind), space);
+        let tag = s.topics.tag_for(pane, kind);
+        let friendly = names::title(&tag, space, kind);
         if rename_pane(&s.cfg.socket, pane, Some(&friendly))
             .await
             .is_ok()

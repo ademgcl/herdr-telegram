@@ -1,5 +1,5 @@
 //! Stable short tags per pane (`o2`): kept as persisted ids; the
-//! VISIBLE title syncs 1:1 with herdr pane names (see `sync_title`).
+//! VISIBLE title formats in Format B `[ws] label · agent` (see `format_title`).
 //! The topic icon is context-only (agent vs shell, set once at
 //! creation); live status surfaces in cards and the typing indicator
 //! (+ one identity pin per topic).
@@ -60,24 +60,53 @@ pub fn assign(existing: &[String], kind: &str) -> String {
     }
 }
 
-/// Friendly default title: `{tag} · {space}` e.g. `o2 · tg`. Written
-/// into the herdr pane label when unlabeled, so the default name is a
-/// real herdr-tracked name, not just a telegram string.
-pub fn title(tag: &str, space: &str) -> String {
-    let short: String = space.chars().take(20).collect();
-    format!("{tag} · {short}")
+/// Format B topic title: `[{space}] {label_or_tag} · {agent}`.
+/// e.g. `[shop] shop-backend · claude` (when labeled),
+/// or `[tg] o2 · opencode` (when unlabeled, using assigned tag).
+///
+/// Idempotent: if `label_or_tag` already begins with `[` (custom or previously
+/// formatted title), it preserves it as-is without double-wrapping brackets.
+/// Strips redundant trailing ` · {agent}` or ` · {space}` suffixes.
+///
+/// Telegram caps topic names at 128 UTF-8 characters; space is truncated to 20.
+pub fn format_title(space: &str, label_or_tag: &str, kind: &str) -> String {
+    let trimmed = label_or_tag.trim();
+    if trimmed.starts_with('[') {
+        return trimmed.chars().take(128).collect();
+    }
+
+    let raw_space = space.trim();
+    let short_space: String = if raw_space.is_empty() || raw_space == "?" {
+        "ws".to_string()
+    } else {
+        raw_space.chars().take(20).collect()
+    };
+
+    let clean_agent = if kind.trim().is_empty() || kind.trim() == "?" {
+        "agent"
+    } else {
+        kind.trim()
+    };
+
+    let mut body = trimmed;
+    let agent_suffix = format!(" · {clean_agent}");
+    if let Some(stripped) = body.strip_suffix(&agent_suffix) {
+        body = stripped.trim();
+    }
+    let space_suffix = format!(" · {short_space}");
+    if let Some(stripped) = body.strip_suffix(&space_suffix) {
+        body = stripped.trim();
+    }
+
+    let formatted = format!("[{short_space}] {body} · {clean_agent}");
+    formatted.chars().take(128).collect()
 }
 
-/// 1:1 pane↔topic title: the herdr pane label, else the unique pane id
-/// (`w8:p1`). Blank labels count as unset. Trimmed: the native-rename
-/// adopt path trims too, so untrimmed stores would rename every tick.
-/// Telegram caps names at 128.
-pub fn sync_title(label: Option<&str>, pane: &str) -> String {
-    let base = label
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .unwrap_or(pane);
-    base.chars().take(128).collect()
+/// Friendly default title in Format B: `[{space}] {tag} · {kind}` e.g. `[tg] o2 · opencode`.
+/// Written into the herdr pane label when unlabeled, so the default name is a
+/// real herdr-tracked name, not just a telegram string.
+pub fn title(tag: &str, space: &str, kind: &str) -> String {
+    format_title(space, tag, kind)
 }
 
 /// Initial topic icon per pane context/kind, set once at topic creation.
@@ -139,23 +168,24 @@ mod tests {
 
     #[test]
     fn test_title_format() {
-        assert_eq!(title("o2", "tg"), "o2 · tg");
-        assert_eq!(title("c1", "ajnow"), "c1 · ajnow");
-        // Long labels are capped at 20 chars.
+        assert_eq!(title("o2", "tg", "opencode"), "[tg] o2 · opencode");
+        assert_eq!(title("c1", "ajnow", "claude"), "[ajnow] c1 · claude");
         assert_eq!(
-            title("o1", "a-very-long-workspace-label-here"),
-            "o1 · a-very-long-workspac"
+            title("o1", "a-very-long-workspace-label-here", "opencode"),
+            "[a-very-long-workspac] o1 · opencode"
         );
-    }
-
-    #[test]
-    fn test_sync_title_label_or_pane_id() {
-        assert_eq!(sync_title(Some("api"), "w8:p1"), "api");
-        assert_eq!(sync_title(None, "w8:p1"), "w8:p1");
-        assert_eq!(sync_title(Some("  "), "w8:p1"), "w8:p1");
         assert_eq!(
-            sync_title(Some(&"x".repeat(200)), "w8:p1").chars().count(),
-            128
+            format_title("shop", "shop-backend", "claude"),
+            "[shop] shop-backend · claude"
         );
+        assert_eq!(
+            format_title("shop", "[shop] shop-backend · claude", "claude"),
+            "[shop] shop-backend · claude"
+        );
+        assert_eq!(
+            format_title("tg", "o2 · tg", "opencode"),
+            "[tg] o2 · opencode"
+        );
+        assert_eq!(format_title("infra", "s1", "shell"), "[infra] s1 · shell");
     }
 }

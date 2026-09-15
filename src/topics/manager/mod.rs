@@ -75,7 +75,7 @@ impl TopicManager {
             }
             return self.storage.get_thread(pane);
         }
-        let name = names::title(&tag, space);
+        let name = names::title(&tag, space, kind);
         let out = match self.tg.create_forum_topic(forum, &name).await {
             Ok(thread) => {
                 println!("[topics] created topic #{thread} for {pane} ({name})");

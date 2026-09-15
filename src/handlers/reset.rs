@@ -13,6 +13,7 @@ use crate::{
         labels::pane_facts,
     },
     state::AppState,
+    topics::names,
     ui::ws_label,
 };
 use std::{
@@ -147,7 +148,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             if let Some(f) = facts.get(&r.pane)
                 && let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty())
             {
-                s.topics.sync_title(&r.pane, label).await;
+                let formatted = names::format_title(space, label, &r.kind);
+                s.topics.sync_title(&r.pane, &formatted).await;
             }
         }
         tokio::time::sleep(RESET_STEP_DELAY).await;
@@ -168,7 +170,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
                     if let Some(f) = facts.get(&pane)
                         && let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty())
                     {
-                        s.topics.sync_title(&pane, label).await;
+                        let formatted = names::format_title(space, label, "shell");
+                        s.topics.sync_title(&pane, &formatted).await;
                     }
                 }
                 tokio::time::sleep(RESET_STEP_DELAY).await;
