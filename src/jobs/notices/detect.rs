@@ -188,6 +188,28 @@ mod tests {
     }
 
     #[test]
+    fn test_google_resource_exhausted_is_rate_limit() {
+        // agy/Google gRPC quota shape (underscores, no "quota exceeded"
+        // wording): must buzz as rate-limit, not provider. Bare form
+        // isolates the new pattern — it must fire on its own.
+        let hit = detect_limit(&v(&[
+            "GenerateContent failed: RESOURCE_EXHAUSTED for gemini-3-flash",
+        ]))
+        .expect("google quota must detect");
+        assert_eq!(hit.kind, "rate-limit");
+    }
+
+    #[test]
+    fn test_google_permission_denied_is_auth() {
+        // Bare gRPC shape (underscores only, no spaced wording).
+        let hit = detect_limit(&v(&[
+            "GenerateContent failed: PERMISSION_DENIED for gemini-3-flash",
+        ]))
+        .expect("google auth denial must detect");
+        assert_eq!(hit.kind, "auth");
+    }
+
+    #[test]
     fn test_fresh_quota_beats_stale_transient() {
         // Scrollback keeps an old transient retry line above the fresh
         // quota banner: the immediate kind must win, not topmost order.

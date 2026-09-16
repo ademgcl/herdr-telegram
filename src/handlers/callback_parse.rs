@@ -25,7 +25,7 @@ pub(crate) async fn pane_live(s: &AppState, pane: &str) -> bool {
 pub(crate) async fn gone_card(s: &AppState, chat: i64, msg_id: i64, pane: &str) {
     s.tg.edit_msg(chat, msg_id, &format!("pane {pane} is gone"), None)
         .await;
-    s.targets.lock().await.remove(&(chat, msg_id));
+    s.forget_target(chat, msg_id).await;
 }
 
 /// Dead-pane guard for `B:`/`M:`/`X:` taps: parse the pane out of the

@@ -1,44 +1,21 @@
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::{HashMap, HashSet},
-    env, fs,
-    path::PathBuf,
-    sync::Mutex,
-};
+use std::{collections::HashMap, env, path::PathBuf, sync::Mutex};
 
+mod disk;
 #[cfg(test)]
 mod tests;
 
-#[derive(Serialize, Deserialize, Default)]
-struct Store {
-    #[serde(default)]
-    topics: HashMap<String, i64>,
-    #[serde(default)]
-    unread: HashSet<String>,
-    /// Stable short tags per pane ("o2") — survive restarts so topic
-    /// names never reshuffle. Missing in old files → default empty.
-    #[serde(default)]
-    tags: HashMap<String, String>,
-    /// Last 1:1 synced title per pane (herdr label or pane id). Compared
-    /// before every rename so both directions converge without loops.
-    #[serde(default)]
-    titles: HashMap<String, String>,
-    /// Pinned live-status message per pane (pane → message id).
-    #[serde(default)]
-    pins: HashMap<String, i64>,
-    /// Topic icon custom-emoji ID set once per pane.
-    #[serde(default)]
-    icons: HashMap<String, String>,
-}
+use disk::Store;
 
 pub struct TopicStorage {
     file_path: PathBuf,
     store: Mutex<Store>,
 }
 
+/// Full topic identity for reset survivors (pane, thread, tag, title, icon).
+pub type KeptIdentity = (String, i64, Option<String>, Option<String>, Option<String>);
+
 impl TopicStorage {
     pub fn new() -> Self {
-        // Keep state self-contained next to the bot; migrate legacy XDG file once
         let path = crate::state::state_dir().join("topics.state");
         let home = env::var("HOME").unwrap_or_default();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/topics.json"));
@@ -49,73 +26,31 @@ impl TopicStorage {
     }
 
     pub(crate) fn at(file_path: PathBuf) -> Self {
-        let store = Self::read_from_disk(&file_path);
+        let store = disk::read_store(&file_path);
         Self {
             file_path,
             store: Mutex::new(store),
         }
     }
 
-    fn read_from_disk(path: &PathBuf) -> Store {
-        let Ok(txt) = fs::read_to_string(path) else {
-            return Store::default();
-        };
-        // Legacy flat map {pane: thread} FIRST: without
-        // deny_unknown_fields it would parse as an empty Store and wipe
-        // every mapping. A current-format file always carries non-integer
-        // values, so it can never match the flat shape.
-        if let Ok(topics) = serde_json::from_str::<HashMap<String, i64>>(&txt) {
-            return Store {
-                topics,
-                unread: HashSet::new(),
-                tags: HashMap::new(),
-                titles: HashMap::new(),
-                pins: HashMap::new(),
-                icons: HashMap::new(),
-            };
-        }
-        serde_json::from_str::<Store>(&txt).unwrap_or_else(|_| {
-            if !txt.trim().is_empty() {
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
-                let _ = fs::copy(path, &bak);
-            }
-            Store::default()
-        })
+    fn save(&self, s: &Store) {
+        disk::write_store(&self.file_path, s, true);
     }
 
-    fn save(&self, s: &Store) {
-        if let Some(parent) = self.file_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(s) {
-            let mut tmp = self.file_path.as_os_str().to_owned();
-            tmp.push(".tmp");
-            let tmp = PathBuf::from(tmp);
-            if fs::write(&tmp, json).is_ok()
-                && let Err(e) = fs::rename(&tmp, &self.file_path)
-            {
-                eprintln!("[topics] rename {} failed: {e}", self.file_path.display());
-            }
-        }
+    fn save_no_backup(&self, s: &Store) {
+        disk::write_store(&self.file_path, s, false);
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Store> {
+        self.store.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn get_thread(&self, pane: &str) -> Option<i64> {
-        self.store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .topics
-            .get(pane)
-            .copied()
+        self.lock().topics.get(pane).copied()
     }
 
     pub fn get_pane(&self, thread: i64) -> Option<String> {
-        self.store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.lock()
             .topics
             .iter()
             .find(|(_, t)| **t == thread)
@@ -123,41 +58,72 @@ impl TopicStorage {
     }
 
     pub fn insert(&self, pane: String, thread: i64) {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         s.topics.insert(pane, thread);
         self.save(&s);
     }
 
+    /// Atomic thread+title insert: one lock, one save — no crash window
+    /// leaving a title-less mapping the probe would skip forever.
+    pub fn insert_with_title(&self, pane: String, thread: i64, title: &str) {
+        let mut s = self.lock();
+        s.topics.insert(pane.clone(), thread);
+        s.titles.insert(pane, title.to_string());
+        self.save(&s);
+    }
+
+    /// Full remove (tests / manual repair). Hot paths use atomic
+    /// `remove_if_thread` instead.
+    #[allow(dead_code)]
     pub fn remove(&self, pane: &str) -> Option<i64> {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         let prev = s.topics.remove(pane);
         s.unread.remove(pane);
-        let untagged = s.tags.remove(pane);
-        let untitled = s.titles.remove(pane);
-        let unpinned = s.pins.remove(pane);
-        let uniconed = s.icons.remove(pane);
-        if prev.is_some()
-            || untagged.is_some()
-            || untitled.is_some()
-            || unpinned.is_some()
-            || uniconed.is_some()
-        {
+        let a = s.tags.remove(pane);
+        let b = s.titles.remove(pane);
+        let c = s.pins.remove(pane);
+        let d = s.icons.remove(pane);
+        if prev.is_some() || a.is_some() || b.is_some() || c.is_some() || d.is_some() {
             self.save(&s);
         }
         prev
     }
 
+    /// Single-lock compare-and-delete: check thread + remove under ONE
+    /// guard — no interleave can wipe a fresh remint between check and
+    /// remove. Returns true when something was pruned.
+    pub fn remove_if_thread(&self, pane: &str, thread: i64) -> bool {
+        let mut s = self.lock();
+        if s.topics.get(pane) != Some(&thread) {
+            return false;
+        }
+        s.topics.remove(pane);
+        s.unread.remove(pane);
+        s.tags.remove(pane);
+        s.titles.remove(pane);
+        s.pins.remove(pane);
+        s.icons.remove(pane);
+        self.save(&s);
+        true
+    }
+
+    /// Roll back a tag leaked by a failed create (no thread ever minted).
+    pub fn remove_tag_if_threadless(&self, pane: &str) {
+        let mut s = self.lock();
+        if s.topics.contains_key(pane) {
+            return;
+        }
+        if s.tags.remove(pane).is_some() {
+            self.save(&s);
+        }
+    }
+
     pub fn get_icon(&self, pane: &str) -> Option<String> {
-        self.store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .icons
-            .get(pane)
-            .cloned()
+        self.lock().icons.get(pane).cloned()
     }
 
     pub fn set_icon(&self, pane: &str, icon: &str) {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         if s.icons.get(pane).map(|i| i.as_str()) != Some(icon) {
             s.icons.insert(pane.to_string(), icon.to_string());
             self.save(&s);
@@ -165,16 +131,11 @@ impl TopicStorage {
     }
 
     pub fn get_tag(&self, pane: &str) -> Option<String> {
-        self.store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .tags
-            .get(pane)
-            .cloned()
+        self.lock().tags.get(pane).cloned()
     }
 
     pub fn set_tag(&self, pane: &str, tag: &str) {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         if s.tags.get(pane).map(|t| t.as_str()) != Some(tag) {
             s.tags.insert(pane.to_string(), tag.to_string());
             self.save(&s);
@@ -182,16 +143,11 @@ impl TopicStorage {
     }
 
     pub fn get_title(&self, pane: &str) -> Option<String> {
-        self.store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .titles
-            .get(pane)
-            .cloned()
+        self.lock().titles.get(pane).cloned()
     }
 
     pub fn set_title(&self, pane: &str, title: &str) {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         if s.titles.get(pane).map(|t| t.as_str()) == Some(title) {
             return;
         }
@@ -199,10 +155,25 @@ impl TopicStorage {
         self.save(&s);
     }
 
-    /// Get-or-assign this pane's stable tag, atomically under one lock so
-    /// concurrent topic creations never hand out the same tag twice.
+    /// Atomic compare-and-set title: stores only when the thread still
+    /// matches (no orphan title on a fresh remint). Returns stored or not.
+    pub fn set_title_if_thread(&self, pane: &str, thread: i64, title: &str) -> bool {
+        let mut s = self.lock();
+        if s.topics.get(pane) != Some(&thread) {
+            return false;
+        }
+        if s.titles.get(pane).map(|t| t.as_str()) == Some(title) {
+            return true;
+        }
+        s.titles.insert(pane.to_string(), title.to_string());
+        self.save(&s);
+        true
+    }
+
+    /// Get-or-assign stable tag atomically: concurrent creates never
+    /// hand out the same tag twice.
     pub fn assign_tag(&self, pane: &str, kind: &str) -> String {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         if let Some(t) = s.tags.get(pane) {
             return t.clone();
         }
@@ -213,10 +184,8 @@ impl TopicStorage {
         tag
     }
 
-    /// Drain all pinned-status leftovers (retired era) — persisted so the
-    /// cleanup runs exactly once across restarts.
     pub fn take_pins(&self) -> HashMap<String, i64> {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         let pins = std::mem::take(&mut s.pins);
         if !pins.is_empty() {
             self.save(&s);
@@ -225,22 +194,50 @@ impl TopicStorage {
     }
 
     pub fn all_mappings(&self) -> HashMap<String, i64> {
-        self.store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .topics
-            .clone()
+        self.lock().topics.clone()
     }
 
-    /// Clear all stored topics, tags, titles, unread, pins, and icons.
     pub fn clear_all(&self) {
-        let mut s = self.store.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.lock();
         s.topics.clear();
         s.unread.clear();
         s.tags.clear();
         s.titles.clear();
         s.pins.clear();
         s.icons.clear();
-        self.save(&s);
+        // No backup: empty intermediate must not clobber last-good.
+        self.save_no_backup(&s);
+    }
+
+    /// Atomic clear+restore (reset survivor path): one lock, one save.
+    pub fn clear_except(&self, kept: Vec<KeptIdentity>) {
+        let mut s = self.lock();
+        s.topics.clear();
+        s.unread.clear();
+        s.tags.clear();
+        s.titles.clear();
+        s.pins.clear();
+        s.icons.clear();
+        for (pane, thread, tag, title, icon) in &kept {
+            s.topics.insert(pane.clone(), *thread);
+            if let Some(t) = tag {
+                s.tags.insert(pane.clone(), t.clone());
+            }
+            if let Some(t) = title {
+                s.titles.insert(pane.clone(), t.clone());
+            }
+            if let Some(i) = icon {
+                s.icons.insert(pane.clone(), i.clone());
+            }
+        }
+        // Empty wipe must not clobber last-good (kill between wipe and
+        // Step-4 recreate would lose both copies).
+        if kept.is_empty() {
+            self.save_no_backup(&s);
+        } else {
+            self.save(&s);
+        }
     }
 }
+
+// Re-export for tests using prev-path convention.

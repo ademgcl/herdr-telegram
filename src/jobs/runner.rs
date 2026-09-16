@@ -47,6 +47,15 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // /cancel or pane death breaks the loop.
     let mut retry_wait = FALLBACK_TICK_SECS;
     println!("[watcher] start {pane}");
+    // Job-owned typing: fresh panes are event-blind until the next
+    // resubscribe (≤120s) and short bursts fall between 60s watchdog
+    // ticks, so observed transitions alone never start the indicator
+    // for them. The watcher KNOWS the pane is being worked — sustain
+    // typing here, stop at the end when no job remains. Skip when
+    // already stopped (insert→cancel→spawn race) to avoid an orphan blip.
+    if !job.is_stopped() {
+        s.start_typing(&pane).await;
+    }
 
     loop {
         if job.is_stopped() {
@@ -167,6 +176,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 tokio::select! {
                     _ = job.cancel.notified() => {
                         job.mark_stopped();
+                        // Like the sibling cancel branches: a genuine
+                        // cancel retires the durable intent (a supersede
+                        // never notifies — it bumps the epoch instead).
+                        if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
+                            s.clear_pending(&pane).await;
+                        }
                         break;
                     }
                     _ = tokio::time::sleep(Duration::from_secs(retry_wait)) => {}
@@ -228,12 +243,17 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     }
 
     // Retire only if the map still points at THIS watcher (no newer job took over)
-    let mut map = s.jobs.lock().await;
-    if map
-        .get(&pane)
-        .map(|j| Arc::ptr_eq(j, &job))
-        .unwrap_or(false)
     {
-        map.remove(&pane);
+        let mut map = s.jobs.lock().await;
+        if map
+            .get(&pane)
+            .map(|j| Arc::ptr_eq(j, &job))
+            .unwrap_or(false)
+        {
+            map.remove(&pane);
+        }
     }
+    // Shared stop: only when nothing owns the pane (atomic — a
+    // successor starting concurrently adopts or re-mints).
+    s.stop_typing_unless_owned(&pane).await;
 }

@@ -2,7 +2,7 @@
 //! VISIBLE title formats in Format B `[ws] label · agent` (shells bare:
 //! `[ws] label`) — see [`format_title`]. The topic icon is context-only (agent vs shell,
 //! set once at creation); live status surfaces in cards and the typing
-//! indicator (+ one identity pin per topic).
+//! indicator (plus one unpinned identity card per topic).
 
 mod format;
 

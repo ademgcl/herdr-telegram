@@ -37,24 +37,17 @@ impl TelegramClient {
         }
     }
 
+    /// Close: corpse propagates (caller prunes by thread) — never
+    /// swallowed here, or the next caller treats `true` as done and
+    /// leaks a dead thread forever.
     pub async fn close_forum_topic(&self, chat_id: i64, thread_id: i64) -> Res<()> {
-        match self
-            .call_retrying(
-                "closeForumTopic",
-                json!({"chat_id": chat_id, "message_thread_id": thread_id}),
-                Duration::from_secs(15),
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                if super::errors::topic_missing(&msg) {
-                    return Ok(());
-                }
-                Err(e)
-            }
-        }
+        self.call_retrying(
+            "closeForumTopic",
+            json!({"chat_id": chat_id, "message_thread_id": thread_id}),
+            Duration::from_secs(15),
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn reopen_forum_topic(&self, chat_id: i64, thread_id: i64) -> Res<()> {
@@ -69,10 +62,12 @@ impl TelegramClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
-                if super::errors::topic_missing(&msg)
-                    || msg.contains("TOPIC_NOT_MODIFIED")
-                    || msg.contains("not closed")
-                {
+                // Corpse propagates so the caller prunes by thread;
+                // already-open states stay Ok.
+                if super::errors::topic_missing(&msg) {
+                    return Err(e);
+                }
+                if msg.contains("TOPIC_NOT_MODIFIED") || msg.contains("not closed") {
                     return Ok(());
                 }
                 Err(e)

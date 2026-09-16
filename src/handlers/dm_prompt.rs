@@ -78,10 +78,11 @@ pub(crate) async fn handle_bare_prompt(
     };
 
     // Blocked panes reject text prompts — type into the waiting prompt.
+    // Focus follows success only.
     if row.status == "blocked" {
-        s.set_focus(&row.pane).await;
         match super::tap::type_text(s, &row.pane, &prompt_text).await {
             Ok(()) => {
+                s.set_focus(&row.pane).await;
                 s.tg.send_msg(chat, None, &format!("⌨️ typed into {} + ⏎", row.pane), None)
                     .await;
             }
@@ -103,7 +104,7 @@ pub(crate) async fn handle_bare_prompt(
         }
         return;
     }
-    s.set_focus(&row.pane).await;
+    // No pre-focus: enqueue sets focus after a live deliver.
     enqueue_prompt(
         crate::state::AppState::clone(s),
         chat,

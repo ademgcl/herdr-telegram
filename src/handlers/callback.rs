@@ -54,7 +54,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         ("n", None) => {
             s.tg.edit_msg(chat, msg_id, "spawn which agent?", Some(spawn_kb(None)))
                 .await;
-            s.targets.lock().await.remove(&(chat, msg_id));
+            s.forget_target(chat, msg_id).await;
         }
         ("n", Some(ws)) => {
             s.tg.edit_msg(
@@ -64,7 +64,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 Some(spawn_kb(Some(ws))),
             )
             .await;
-            s.targets.lock().await.remove(&(chat, msg_id));
+            s.forget_target(chat, msg_id).await;
         }
         ("N", None) => super::callback_spawn::handle_new_space(&s, chat, msg_id, thread).await,
         ("k", Some(r)) => match r.split_once(':') {
@@ -100,7 +100,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             if !spaces.iter().any(|w| w.id == *ws) {
                 s.tg.edit_msg(chat, msg_id, &format!("workspace {ws} is gone"), None)
                     .await;
-                s.targets.lock().await.remove(&(chat, msg_id));
+                s.forget_target(chat, msg_id).await;
                 return;
             }
             // Exclusive waiter (see K arm).
@@ -143,7 +143,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 Some(main_menu_kb(&spaces, &agents)),
             )
             .await;
-            s.targets.lock().await.remove(&(chat, msg_id));
+            s.forget_target(chat, msg_id).await;
         }
         ("w", Some(ws)) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
@@ -156,7 +156,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 Some(workspace_kb(ws, &my_agents)),
             )
             .await;
-            s.targets.lock().await.remove(&(chat, msg_id));
+            s.forget_target(chat, msg_id).await;
         }
         ("a", Some(pane)) => {
             match get_agent(&s.cfg.socket, pane).await {

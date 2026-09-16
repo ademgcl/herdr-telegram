@@ -95,6 +95,7 @@ pub async fn show_model(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
 }
 
 /// Switch `pane` to `filter`/`marker`, narrating progress into the chat.
+/// Focus follows success only (a failed switch must not pin focus).
 pub async fn switch_by_filter(
     s: &AppState,
     chat: i64,
@@ -103,7 +104,6 @@ pub async fn switch_by_filter(
     filter: &str,
     marker: &str,
 ) {
-    s.set_focus(pane).await;
     s.tg.send_msg(
         chat,
         thread,
@@ -115,6 +115,7 @@ pub async fn switch_by_filter(
         // Set means set: plain confirmation, NO picker keyboard back —
         // re-offering options after success only confuses.
         Ok(footer) => {
+            s.set_focus(pane).await;
             let mid =
                 s.tg.send_msg(
                     chat,

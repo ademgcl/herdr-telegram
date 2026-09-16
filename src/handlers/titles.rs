@@ -50,7 +50,15 @@ pub fn parse_topic_icon_edit(msg: &Value) -> Option<(i64, String)> {
 /// Watchdog half: every mapped live pane's topic shows its herdr label.
 /// Unlabeled panes are provisioned with the friendly default first.
 /// Panes gone from herdr are skipped — the close flow owns them.
+/// Prefer `sync_titles_with` on the hot path (reuses the tick's fetch).
+#[allow(dead_code)]
 pub async fn sync_titles(s: &AppState) {
+    // Reset owns Steps 1-4: the watchdog must not rename topics about
+    // to die (or mint through the gate) mid-reset. Reset's Step 4 calls
+    // `sync_title` directly, so it is unaffected.
+    if crate::handlers::reset::is_resetting() {
+        return;
+    }
     if s.cfg.forum.is_none() || s.topics.all_mappings().is_empty() {
         return;
     }
@@ -59,6 +67,23 @@ pub async fn sync_titles(s: &AppState) {
     };
     let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    sync_titles_with(s, &agents, &spaces, &facts).await;
+}
+
+/// Cached variant: reuses the reconcile tick's agents/spaces/facts so
+/// the watchdog costs 0 extra list RPCs (1 `list_panes` per tick, not 8).
+pub async fn sync_titles_with(
+    s: &AppState,
+    agents: &[crate::types::AgentRow],
+    spaces: &[crate::types::WorkspaceInfo],
+    facts: &std::collections::HashMap<String, crate::herdr::labels::PaneFacts>,
+) {
+    if crate::handlers::reset::is_resetting() {
+        return;
+    }
+    if s.cfg.forum.is_none() || s.topics.all_mappings().is_empty() {
+        return;
+    }
     let kind_of: HashMap<&str, &str> = agents
         .iter()
         .map(|a| (a.pane.as_str(), a.kind.as_str()))
@@ -82,6 +107,10 @@ pub async fn sync_titles(s: &AppState) {
             s.topics.sync_title(pane, &friendly).await;
         }
     }
+    // One liveness probe per tick: human-deleted topics never fire a
+    // rename (converged titles stay quiet), so without this the mapping
+    // would dangle until a rename came due.
+    s.topics.probe_deleted().await;
 }
 
 /// Native topic rename → herdr pane label. Unmapped threads (General)

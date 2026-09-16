@@ -43,7 +43,10 @@ const CHROME_MARKERS: &[&str] = &[
 
 /// Start-anchored prefixes for tool-call echoes, reasoning headers,
 /// collapsed sections and herdr/bot log lines. Anchored (not contains) so
-/// markdown prose, code and lists survive.
+/// markdown prose, code and lists survive. Accepted trade: an answer line
+/// STARTING with one of these (e.g. a reply that itself begins
+/// "Antigravity CLI …") strips — vanishingly rare vs header noise on
+/// every agy turn, and the arbitration merge still recovers the rest.
 const CHROME_PREFIXES: &[&str] = &[
     "→",
     "←",
@@ -60,6 +63,8 @@ const CHROME_PREFIXES: &[&str] = &[
     "Click to expand",
     "Todos",
     "# Todos",
+    "Antigravity CLI",
+    "ADC:",
     "[✓]",
     "[•]",
     "[x]",
@@ -187,11 +192,18 @@ mod tests {
         assert!(is_chrome(
             "? for shortcuts             Gemini 3.8 Flash · high"
         ));
+        assert!(is_chrome("Antigravity CLI 1.2.2"));
+        assert!(is_chrome(
+            "  ADC: firebase-adminsdk-fbsvc@ajgc-dig-pdi-dev-cdp"
+        ));
         // …but quoted/diff/table content and ASCII rules survive.
         assert!(!is_chrome("> quoted text"));
         assert!(!is_chrome("> added line"));
         assert!(!is_chrome("| a | b |"));
         assert!(!is_chrome("intro --- still content"));
+        // …and prose mentioning the CLI inline survives (anchored only).
+        assert!(!is_chrome("I use Antigravity CLI daily"));
+        assert!(!is_chrome("the ADC value rose today"));
     }
 
     #[test]

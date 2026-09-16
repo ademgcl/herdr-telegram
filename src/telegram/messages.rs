@@ -159,6 +159,9 @@ impl TelegramClient {
     }
 
     /// Pin a message in a chat/topic without notification.
+    /// Currently unused (identity cards are unpinned by design) —
+    /// kept for manual pin flows.
+    #[allow(dead_code)]
     pub async fn pin_msg(&self, chat_id: i64, message_id: i64) -> Res<()> {
         self.call_retrying(
             "pinChatMessage",

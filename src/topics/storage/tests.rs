@@ -1,5 +1,5 @@
 //! Storage round-trip tests. Split from `storage` (300-line file limit).
-use super::{Store, TopicStorage};
+use super::{TopicStorage, disk::Store};
 
 #[test]
 fn test_store_roundtrip_and_migration() {
@@ -85,4 +85,35 @@ fn test_clear_all() {
     assert_eq!(st.get_title("w1:p1"), None);
     assert_eq!(st.get_icon("w1:p1"), None);
     let _ = std::fs::remove_file(&st.file_path);
+}
+
+#[test]
+fn test_corrupt_state_falls_back_to_prev() {
+    // A good save rotates a .prev backup; a later corrupt write loads
+    // the backup instead of wiping every mapping (mass duplicates).
+    let path = std::env::temp_dir().join(format!("herdr-tg-test-prev-{}.json", std::process::id()));
+    let prev = std::path::PathBuf::from(format!("{}.prev", path.display()));
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&prev);
+    let st = TopicStorage::at(path.clone());
+    st.insert("w1:p1".into(), 42);
+    assert!(prev.exists());
+    std::fs::write(&path, "{corrupt").unwrap();
+    let re = TopicStorage::at(path.clone());
+    assert_eq!(re.get_thread("w1:p1"), Some(42));
+    // Corrupt main AND corrupt backup → default (no crash, no hang).
+    std::fs::write(&path, "{corrupt").unwrap();
+    std::fs::write(&prev, "{corrupt").unwrap();
+    let empty = TopicStorage::at(path.clone());
+    assert_eq!(empty.get_thread("w1:p1"), None);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&prev);
+    for bak in std::fs::read_dir(std::env::temp_dir()).unwrap() {
+        let bak = bak.unwrap().path();
+        if bak.to_string_lossy().contains("herdr-tg-test-prev-")
+            && bak.extension().is_some_and(|e| e == "bak")
+        {
+            let _ = std::fs::remove_file(&bak);
+        }
+    }
 }

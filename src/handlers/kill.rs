@@ -69,8 +69,13 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
         Ok(()) => {
             s.cancel_jobs_for(pane).await;
             s.clear_pane(pane).await;
-            if s.topics.close_topic(pane).await {
-                s.topics.remove_mapping(pane);
+            // Compare-and-delete: a remint between snapshot and close
+            // must survive. None (already pruned inside/ raced) → no-op.
+            let thread = s.topics.all_mappings().get(pane).copied();
+            if s.topics.close_topic(pane).await
+                && let Some(t) = thread
+            {
+                s.topics.remove_mapping_if_thread(pane, t);
             }
             s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None)
                 .await;

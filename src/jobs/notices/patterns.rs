@@ -11,6 +11,10 @@ pub(crate) const STRONG: &[(&str, &str)] = &[
     ("too many requests", "rate-limit"),
     ("quota exceeded", "rate-limit"),
     ("quota exhausted", "rate-limit"),
+    // Google gRPC shape uses underscores (RESOURCE_EXHAUSTED) — match
+    // both spellings; lines are lowercased, never re-spaced.
+    ("resource exhausted", "rate-limit"),
+    ("resource_exhausted", "rate-limit"),
     ("out of credit", "rate-limit"),
     ("insufficient quota", "rate-limit"),
     ("over quota", "rate-limit"),
@@ -33,6 +37,12 @@ pub(crate) const STRONG: &[(&str, &str)] = &[
     // quota. (Bare `retrying` stays WEAK + context-gated below so prose
     // like "retrying the layout pass" stays silent.)
     ("retrying attempt", "provider"),
+    // Google-style auth denial (agy): specific enough to stand alone,
+    // and "denied" is a CONTEXT marker so it must not stay WEAK (it
+    // would be self-contextual while "unauthorized" is not). Both
+    // spacings: gRPC uses PERMISSION_DENIED.
+    ("permission denied", "auth"),
+    ("permission_denied", "auth"),
 ];
 
 /// Fatal provider-failure markers (lowercase substrings). Shared by the

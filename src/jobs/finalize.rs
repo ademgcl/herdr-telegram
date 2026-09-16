@@ -40,13 +40,37 @@ pub async fn finalize(
     // select_final_body): alt-screen TUIs starve the delta stream, so a
     // trivial fragment must not shadow the real answer. The same screen
     // doubles as the spontaneous baseline below (no second RPC).
-    let screen = read_screen_adaptive(&s.cfg.socket, pane).await;
-    let body = select_final_body(acc, &screen, &prompt);
+    let mut screen = read_screen_adaptive(&s.cfg.socket, pane).await;
+    let mut body = select_final_body(acc, &screen, &prompt);
+    // TUI-lag race: the status flipped to settled a beat before the
+    // frame rendered the answer. One short delayed re-read (not the
+    // 5-60s outage backoff) rescues fast-task replies that would else
+    // post "no fresh output" and anchor away the real answer.
+    if body.is_empty() {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Superseded during the grace wait: drop like any mid-finalize
+        // retarget below instead of posting stale.
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            println!("[prompt] finalize {pane}: superseded in grace wait, dropping");
+            acc.clear();
+            return false;
+        }
+        screen = read_screen_adaptive(&s.cfg.socket, pane).await;
+        body = select_final_body(acc, &screen, &prompt);
+    }
     let snapshot = screen;
     // Nothing readable and nothing delivered: keep the intent for retry.
     // (A chrome-only `acc` over an empty snapshot is still an outage —
     // retiring here would eat the reply.)
+    // Bound: gone panes (dead/closed/exited) never render again — retire
+    // instead of retrying forever with no card ever posted.
     if body.is_empty() && snapshot.is_empty() {
+        if matches!(settled, "dead" | "closed" | "exited") {
+            println!("[prompt] finalize {pane}: pane gone with no output, retiring");
+            s.seen.lock().await.insert(pane.to_string(), snapshot);
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
+            return false;
+        }
         println!("[prompt] finalize {pane}: read outage, keeping intent for retry");
         return true;
     }

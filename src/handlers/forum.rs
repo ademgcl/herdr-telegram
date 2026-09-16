@@ -258,10 +258,11 @@ async fn handle_topic_agent_message(
     // Bare message inside agent's topic -> prompt that agent!
     // Blocked panes reject text prompts ("requires interactive input"),
     // so type straight into the waiting prompt instead — no dead job.
+    // Focus follows success only (a failed type must not pin focus).
     if agent.status == "blocked" {
-        s.set_focus(pane).await;
         match super::tap::type_text(&s, pane, text).await {
             Ok(()) => {
+                s.set_focus(pane).await;
                 s.tg.send_msg(
                     chat,
                     Some(thread_id),
@@ -276,7 +277,8 @@ async fn handle_topic_agent_message(
         }
         return;
     }
-    s.set_focus(pane).await;
+    // No pre-focus: enqueue sets focus after a live deliver; a failed
+    // submit must not pin focus on the corpse.
     enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
 }
 

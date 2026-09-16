@@ -26,6 +26,13 @@ pub const RESET_STEP_DELAY: Duration = Duration::from_millis(1500);
 
 static RESET_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
+/// True while a paced reset runs: topic creators must not mint (only
+/// reuse) until it ends, or `clear_all` wipes in-flight mappings into
+/// orphans + later doubles. Set before any snapshot; auto-cleared.
+pub fn is_resetting() -> bool {
+    RESET_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
 struct ResetGuard;
 
 impl Drop for ResetGuard {
@@ -77,6 +84,16 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     };
 
+    // Drain in-flight creates before the snapshot: an ensure that
+    // passed the reset gate just before we set it would else mint
+    // during deletes → wiped orphan → later double.
+    for _ in 0..400 {
+        if s.topics.creating_len() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
     let mappings = s.topics.all_mappings();
     let to_delete_count = mappings.len();
     s.tg.send_msg(
@@ -108,14 +125,25 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     // failed still exist on Telegram: their full identity (tag, title,
     // icon) survives so the re-sync reuses them instead of minting
     // renamed duplicates or clobbering user-custom icons.
+    // Drain again before the wipe: same orphan race as Step 0, now at
+    // its tightest window.
+    for _ in 0..400 {
+        if s.topics.creating_len() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     let mut kept = Vec::new();
     for (pane, thread) in &failed {
         kept.push((pane.clone(), *thread, s.topics.snapshot_identity(pane)));
     }
-    s.topics.clear_all();
-    for (pane, thread, (tag, title, icon)) in kept {
-        s.topics.restore_identity(pane, thread, tag, title, icon);
-    }
+    // Atomic clear+restore: one lock, one save — a kill in between can
+    // never leave an empty main with last-good already clobbered.
+    let kept_flat: Vec<crate::topics::storage::KeptIdentity> = kept
+        .into_iter()
+        .map(|(pane, thread, (tag, title, icon))| (pane, thread, tag, title, icon))
+        .collect();
+    s.topics.storage_clear_except(kept_flat);
 
     // Retire jobs for deleted topics: watchers and typing loops point
     // at dead threads (delivery would fail-retry forever, typing would
@@ -135,11 +163,17 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     let mut created = 0;
     let mut reused = 0;
 
-    // Step 4: Re-sync topics paced (~1.5s delay)
+    // Step 4: Re-sync topics paced (~1.5s delay). Reset-owned mint:
+    // bypasses the reuse-only gate (else `created` stays 0 and topics
+    // stay deleted until the watchdog rebuilds them).
     for r in &agents {
         live_panes.insert(r.pane.clone());
         let space = ws_label(&spaces, &r.ws);
-        if s.topics.sync_topic(&r.pane, &r.kind, space).await.is_some() {
+        if s.topics
+            .sync_topic_for_reset(&r.pane, &r.kind, space)
+            .await
+            .is_some()
+        {
             if failed_set.contains(&r.pane) {
                 reused += 1;
             } else {
@@ -161,7 +195,11 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             if !live_panes.contains(&pane) {
                 let ws = facts.get(&pane).map(|f| f.ws.as_str()).unwrap_or("");
                 let space = ws_label(&spaces, ws);
-                if s.topics.sync_topic(&pane, "shell", space).await.is_some() {
+                if s.topics
+                    .sync_topic_for_reset(&pane, "shell", space)
+                    .await
+                    .is_some()
+                {
                     if failed_set.contains(&pane) {
                         reused += 1;
                     } else {

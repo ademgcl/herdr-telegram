@@ -17,17 +17,26 @@ const POST_PROMPT_QUIET_SECS: u64 = 45;
 const FLAP_WINDOW_SECS: u64 = 15;
 
 pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: bool, src: &str) {
-    let old = {
-        let mut m = s.status.lock().await;
-        m.insert(pane.to_string(), new_status.to_string())
-    };
-    let prev_change = {
-        let mut m = s.last_change.lock().await;
-        m.insert(pane.to_string(), std::time::Instant::now())
+    // Observation instant for debounce-style suppression: a final stamped
+    // after this (during the RPCs below) makes our pre-RPC delta stale →
+    // suppress instead of double-posting it.
+    let observed_at = Instant::now();
+    // Atomic status+last_change (lock order status→last_change, never
+    // inverted anywhere — same pattern as torder→targets): concurrent
+    // observes can't pair old from tick A with prev_change from tick B.
+    let (old, prev_change) = {
+        let mut st = s.status.lock().await;
+        let mut lc = s.last_change.lock().await;
+        let old = st.insert(pane.to_string(), new_status.to_string());
+        let prev = lc.insert(pane.to_string(), std::time::Instant::now());
+        (old, prev)
     };
 
     // Collapse rapid done <-> idle flap up front — before any fetch,
-    // so oscillation never costs RPCs.
+    // so oscillation never costs RPCs. Collapsed returns skip the
+    // typing touch below: correct (job-owned keeps watcher typing;
+    // job-less has no task), and a perpetual fast flap suppressing
+    // forever is intended (it never did work between samples).
     // Slow sampled bounces are legitimate completions: the agent did work
     // between observations, so they flow through.
     if ((old.as_deref() == Some("done") && new_status == "idle")
@@ -71,13 +80,23 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // The pane's topic exists (ensured silently — never notifies).
     s.topics.sync_topic(pane, &kind, raw_space).await;
 
-    // F11: writing/typing indicator & F1: reopen topic when working
+    // F11: writing/typing indicator & F1: reopen topic when working.
+    // A job-owned pane keeps its task across settled samples (the
+    // watcher stops it at retire): stopping here would kill mid-job
+    // typing on every idle sample between turns.
     if new_status == "working" {
         s.topics.reopen_topic(pane).await;
         s.start_typing(pane).await;
     } else {
-        s.stop_typing(pane).await;
+        s.stop_typing_unless_owned(pane).await;
     }
+
+    // Single jobs snapshot for the whole observe (blocked repeat,
+    // blocked transition, and job-owned early-return below all reuse
+    // it): a job appearing mid-observe races the watcher's finalize
+    // into a double-card, mitigated by settle_check's re-check +
+    // last_done (documented TOCTOU, not closed).
+    let job_owned = s.jobs.lock().await.contains_key(pane);
 
     if silent {
         // Boot seed only — but an already-blocked pane genuinely needs
@@ -109,8 +128,9 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     if old.as_deref() == Some(new_status) {
         // Same status twice — except blocked: consecutive dialogs turn
         // over with NO transition (allow → confirm), so content, not the
-        // transition, decides whether a card is due.
-        if new_status == "blocked" && !s.jobs.lock().await.contains_key(pane) {
+        // transition, decides whether a card is due (job_owned from the
+        // single snapshot above).
+        if new_status == "blocked" && !job_owned {
             refresh_blocked_card(s, pane).await;
         }
         return;
@@ -118,7 +138,6 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     // A prompt job owns this pane — covered by its watcher (kept here too
     // for the transition path below, mirroring the repeat path above).
-    let job_owned = s.jobs.lock().await.contains_key(pane);
     if new_status == "blocked" && !job_owned {
         refresh_blocked_card(s, pane).await;
         return;
@@ -156,8 +175,8 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     // A prompt job owns this pane — the watcher's live message / final
     // card covers it. (Seen is anchored by the job's finalize, so don't
-    // consume here.)
-    if s.jobs.lock().await.contains_key(pane) {
+    // consume here.) Reuses the snapshot above — same documented TOCTOU.
+    if job_owned {
         return;
     }
 
@@ -180,12 +199,47 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     // DM mode has no topics — legacy immediate pushes. The baseline is
     // consumed only on delivery so an outage replays the delta instead
-    // of eating it.
+    // of eating it. Fresh work recomputes the delta vs CURRENT seen just
+    // before post (a final retiring during the screen RPC anchors seen —
+    // the pre-RPC body would else re-post the final's duplicate).
     if s.cfg.forum.is_none() {
+        // Fresh re-check + re-base (no extra RPC, just the lock).
+        if s.jobs.lock().await.contains_key(pane) {
+            return;
+        }
+        let fresh_base = s.seen.lock().await.get(pane).cloned().unwrap_or_default();
+        let fresh_source: Vec<String> = if fresh_base.is_empty() {
+            screen.clone()
+        } else {
+            delta(&screen, &fresh_base).to_vec()
+        };
+        let fresh_body = join_trimmed(&final_block(&fresh_source, ""));
         if !fresh_body.is_empty() {
-            if post_spontaneous_card(s, pane, &kind, raw_space, new_status, &fresh_body).await {
+            // Some(observed_at): a final retiring during the screen RPC
+            // stamps last_done after observed_at → inside-post suppresses
+            // the stale duplicate. Next tick's observed_at is after the
+            // final, so genuinely new work still posts.
+            if post_spontaneous_card(
+                s,
+                pane,
+                &kind,
+                raw_space,
+                new_status,
+                &fresh_body,
+                Some(observed_at),
+            )
+            .await
+            {
                 s.seen.lock().await.insert(pane.to_string(), screen);
             }
+            return;
+        }
+        // Empty (duplicate of a just-posted final, or genuinely empty):
+        // recent final → consume + quiet; else fall through to the hint.
+        if let Some(t) = s.last_done.lock().await.get(pane)
+            && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
+        {
+            s.seen.lock().await.insert(pane.to_string(), screen);
             return;
         }
         let hint = "";
@@ -216,9 +270,14 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             s.remember(*id, mid, pane).await;
         }
         // Baseline advances only on delivery: an outage replays the
-        // delta instead of eating it.
+        // delta instead of eating it. Stamp last_done like a posted
+        // card so the next settle in the quiet window stays silent.
         if delivered {
             s.seen.lock().await.insert(pane.to_string(), screen);
+            s.last_done
+                .lock()
+                .await
+                .insert(pane.to_string(), Instant::now());
         }
         return;
     }

@@ -1,14 +1,12 @@
 use super::shell_common::shell_card_text;
 use super::shell_run::run_shell_cmd;
 use crate::{
-    herdr::client::{
-        await_fresh_root, create_tab, ensure_tg_space, get_agent, list_workspaces,
-    },
+    herdr::client::{await_fresh_root, create_tab, ensure_tg_space, get_agent, list_workspaces},
     herdr::labels::pane_facts,
     jobs::enqueue_prompt,
     state::AppState,
     types::AgentRow,
-    ui::ws_label,
+    ui::{open_topic_kb, ws_label},
 };
 
 /// DM fallback: reply/focus may point at a shell pane (invisible to
@@ -129,16 +127,21 @@ async fn space_label(s: &AppState, ws_id: &str) -> String {
 }
 
 /// Badge an existing pane as a shell: topic + status + card + focus.
-/// Shared by fresh tabs, reused space roots, and splits. Takes the
-/// display label (splits fall back to the pane when the space is gone).
+/// The reply carries a one-tap open-topic button (deep link) instead of
+/// relying on a pin inside the new topic. Shared by fresh tabs, reused
+/// space roots, and splits. Takes the display label (splits fall back to
+/// the pane when the space is gone).
 async fn attach_shell_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, space: &str) {
     // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
-    s.topics.sync_topic(pane, "shell", space).await;
+    let topic = s.topics.sync_topic(pane, "shell", space).await;
     s.status
         .lock()
         .await
         .insert(pane.to_string(), "shell".to_string());
-    let mid = s.tg.send_msg(chat, thread, &shell_card_text(pane), None).await;
+    let kb = topic.and_then(|th| open_topic_kb(chat, th));
+    let mid =
+        s.tg.send_msg(chat, thread, &shell_card_text(pane), kb)
+            .await;
     s.remember(chat, mid, pane).await;
     s.set_focus(pane).await;
 }

@@ -4,18 +4,6 @@
 use super::TopicManager;
 
 impl TopicManager {
-    pub fn remove_mapping(&self, pane: &str) -> Option<i64> {
-        self.last_title_write
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(pane);
-        self.creating
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(pane);
-        self.storage.remove(pane)
-    }
-
     /// F1: Reopen a closed forum topic (e.g. when agent transitions to working).
     pub async fn reopen_topic(&self, pane: &str) -> bool {
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
@@ -25,7 +13,13 @@ impl TopicManager {
             Ok(()) => true,
             Err(e) => {
                 if crate::telegram::topic_missing(&e.to_string()) {
-                    return true;
+                    // Human-deleted topic: drop the corpse so the next
+                    // ensure recreates instead of reusing a dead thread.
+                    // Compare-and-delete: never kill a fresh remint.
+                    if self.remove_mapping_if_thread(pane, thread) {
+                        println!("[topics] pruned deleted topic #{thread} ({pane}) on reopen");
+                    }
+                    return false;
                 }
                 eprintln!("[topics] reopen topic #{thread} ({pane}) failed: {e}");
                 false
@@ -57,6 +51,9 @@ impl TopicManager {
             Ok(()) => true,
             Err(e) => {
                 if crate::telegram::topic_missing(&e.to_string()) {
+                    // Corpse pruned inside (unlike the old caller-removes):
+                    // the next ensure recreates instead of reusing dead.
+                    self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
                 eprintln!("[topics] close topic #{thread} ({pane}) failed: {e}");
@@ -71,13 +68,14 @@ impl TopicManager {
         };
         match self.tg.delete_forum_topic(forum, thread).await {
             Ok(()) => {
-                self.remove_mapping(pane);
+                // Compare-and-delete: a remint mid-RPC must survive.
+                self.remove_mapping_if_thread(pane, thread);
                 println!("[topics] deleted topic #{thread} ({pane})");
                 true
             }
             Err(e) => {
                 if crate::telegram::topic_missing(&e.to_string()) {
-                    self.remove_mapping(pane);
+                    self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
                 eprintln!("[topics] delete topic #{thread} ({pane}) failed: {e}");
@@ -98,10 +96,10 @@ impl TopicManager {
         )
     }
 
-    /// Restore a mapping wiped by `clear_all` (reset retry path):
-    /// the Telegram topic survived, so re-sync reuses it with its tag,
-    /// title and icon intact instead of minting a renamed duplicate or
-    /// clobbering a user-customized icon.
+    /// Restore a mapping wiped by `clear_all` (reset retry path).
+    /// Superseded by atomic `storage_clear_except`; kept for manual
+    /// repair paths and tests.
+    #[allow(dead_code)]
     pub fn restore_identity(
         &self,
         pane: String,
@@ -122,6 +120,9 @@ impl TopicManager {
         }
     }
 
+    /// Full wipe (tests / manual repair). Reset uses atomic
+    /// `storage_clear_except` instead.
+    #[allow(dead_code)]
     pub fn clear_all(&self) {
         self.last_title_write
             .lock()
@@ -132,5 +133,17 @@ impl TopicManager {
             .unwrap_or_else(|e| e.into_inner())
             .clear();
         self.storage.clear_all();
+    }
+
+    /// Atomic clear+restore for the reset survivor path (see storage).
+    /// Preserves `creating` (in-flight guards stay): wiping it would let
+    /// a concurrent ensure double-mint while the winner still holds its
+    /// guard. Drains before the wipe cover the race instead.
+    pub fn storage_clear_except(&self, kept: Vec<crate::topics::storage::KeptIdentity>) {
+        self.last_title_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.storage.clear_except(kept);
     }
 }

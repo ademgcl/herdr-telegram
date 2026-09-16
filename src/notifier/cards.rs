@@ -19,7 +19,8 @@ pub(crate) const SETTLE_DEBOUNCE_SECS: u64 = 15;
 
 /// Debounced spontaneous push: posts the fresh reply only if this settle
 /// is still current (no newer transition, no prompt takeover, no newer
-/// card) after the grace period. Baseline is consumed either way.
+/// card) after the grace period. Baseline anchors on delivery AND on
+/// stray/empty (else the same stray re-RPCs every settle forever).
 pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Instant) {
     tokio::time::sleep(Duration::from_secs(SETTLE_DEBOUNCE_SECS)).await;
     let current = s.debounce.lock().await.get(&pane).cloned();
@@ -33,13 +34,22 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     if s.jobs.lock().await.contains_key(&pane) {
         return;
     }
-    if s.status
+    // Settle holds across idle↔done sampling: a fast done→idle collapses
+    // (no re-arm), so the done-armed check must still fire on idle —
+    // else the fresh delta rots and no card ever posts. Blocked still
+    // needs exact match (dialog turnover below re-arms its own checks).
+    let settled_ok = s
+        .status
         .lock()
         .await
         .get(&pane)
-        .map(|st| st != &settled)
-        .unwrap_or(true)
-    {
+        .map(|st| {
+            st == &settled
+                || (matches!(settled.as_str(), "idle" | "done")
+                    && matches!(st.as_str(), "idle" | "done"))
+        })
+        .unwrap_or(false);
+    if !settled_ok {
         return;
     }
     if s.last_done
@@ -57,6 +67,21 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .lines()
         .map(|l| l.trim_end().to_string())
         .collect();
+    // Post-read re-check: a prompt that landed during the RPCs above owns
+    // the pane now — the watcher's final card covers it, never us too.
+    // Same for a final that stamped last_done while we were reading.
+    if s.jobs.lock().await.contains_key(&pane) {
+        return;
+    }
+    if s.last_done
+        .lock()
+        .await
+        .get(&pane)
+        .map(|t| *t > armed_at)
+        .unwrap_or(false)
+    {
+        return;
+    }
     let base = s.seen.lock().await.get(&pane).cloned().unwrap_or_default();
     let source: Vec<String> = if base.is_empty() {
         screen.clone()
@@ -64,8 +89,9 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         delta(&screen, &base).to_vec()
     };
     let body = join_trimmed(&final_block(&source, ""));
-    // Baseline is consumed ONLY on delivery (see below): a dropped card
-    // must leave the delta for the next tick, never silently eat it.
+    // Baseline anchors on delivery; stray/empty also anchors (same-screen
+    // strays must not re-RPC every settle). Drops (topic race, outage)
+    // leave the delta for the next tick — see post_spontaneous_card.
     let info = get_agent(&s.cfg.socket, &pane).await.ok();
     let (kind, ws_id) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone()),
@@ -75,11 +101,28 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     let raw_space = ws_label(&spaces, &ws_id);
     s.topics.sync_topic(&pane, &kind, raw_space).await;
     // Single stray chars (picker echoes, vim residue) never page; real
-    // shorts ("ok", "done") do. Empty stays silent.
+    // shorts ("ok", "done") do. Empty stays silent — but the baseline
+    // still advances so the stray doesn't haunt every future settle.
     if body.chars().count() < 2 {
+        s.seen.lock().await.insert(pane.clone(), screen);
         return;
     }
-    if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body).await {
+    // Pre-post re-check (narrows the check→send window to just the send
+    // RPC): a job/final that landed during get_agent/spaces/sync above
+    // owns the reply now — never double-post with the watcher.
+    if s.jobs.lock().await.contains_key(&pane) {
+        return;
+    }
+    if s.last_done
+        .lock()
+        .await
+        .get(&pane)
+        .map(|t| *t > armed_at)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at)).await {
         s.seen.lock().await.insert(pane.clone(), screen);
     }
 }
@@ -89,6 +132,9 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
 /// Returns true when at least one part was delivered: drops (topic race,
 /// Telegram outage) must neither stamp `last_done` (it would suppress the
 /// next settle) nor consume the caller's baseline.
+/// `armed_at`: settle debounce instant (Some) or None (DM immediate) —
+/// re-checked AFTER the sync RPC, immediately before the first send, so
+/// the check→send window is the send RPC only (no sync RPC between).
 pub(crate) async fn post_spontaneous_card(
     s: &AppState,
     pane: &str,
@@ -96,6 +142,7 @@ pub(crate) async fn post_spontaneous_card(
     space: &str,
     settled: &str,
     body: &str,
+    armed_at: Option<std::time::Instant>,
 ) -> bool {
     // NOTE: deliberately NOT touching focus here — background pushes must
     // never hijack where the owner's next plain-text message gets delivered.
@@ -116,6 +163,18 @@ pub(crate) async fn post_spontaneous_card(
     let mut delivered = false;
     if let Some(forum) = s.cfg.forum {
         if let Some(thread) = s.topics.sync_topic(pane, kind, space).await {
+            // Inside-post re-check: a job/final landing during the sync
+            // above owns the reply now — send nothing (window is now the
+            // send RPC only, no sync between check and send).
+            if s.jobs.lock().await.contains_key(pane) {
+                return false;
+            }
+            if let Some(at) = armed_at
+                && let Some(t) = s.last_done.lock().await.get(pane)
+                && *t > at
+            {
+                return false;
+            }
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if mid.is_some() {
@@ -125,6 +184,16 @@ pub(crate) async fn post_spontaneous_card(
             }
         }
     } else {
+        // DM immediate: no sync RPC, check immediately before sends.
+        if s.jobs.lock().await.contains_key(pane) {
+            return false;
+        }
+        if let Some(at) = armed_at
+            && let Some(t) = s.last_done.lock().await.get(pane)
+            && *t > at
+        {
+            return false;
+        }
         for id in &s.cfg.owners {
             for part in &parts {
                 let mid = s.tg.send_msg(*id, None, part, None).await;

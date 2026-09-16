@@ -1,24 +1,13 @@
 use crate::{
-    handlers::titles::sync_titles,
-    herdr::client::{list_agents, list_panes, read_screen_adaptive, read_shell_output},
+    handlers::titles::sync_titles_with,
+    herdr::client::{list_agents, list_panes, list_workspaces, read_shell_output},
+    herdr::labels::pane_facts,
     jobs::finalize::report,
-    jobs::notices::{detect_limit, is_stuck_gated, limit_card_text},
+    notifier::limits::scan_limits,
     notifier::status::observe_status,
     state::AppState,
 };
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
-
-/// Re-remind while a background limit stall persists (prompt-owned
-/// panes alert once per episode from their watcher instead).
-pub const LIMIT_REMIND_SECS: u64 = 1800;
-/// Gated (`provider`/`error`) banners must persist this long before the
-/// watchdog buzzes: transient upstream blips (timeout → retry succeeds)
-/// stay silent, stuck stalls page once.
-const LIMIT_STUCK_SECS: u64 = 90;
-/// Consecutive confirmed-clean 60s ticks before a limit episode clears.
-/// A single scroll/RPC flap never re-arms the alert.
-const LIMIT_CLEAR_MISSES: u32 = 2;
 
 pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     let Ok(rows) = list_agents(&s.cfg.socket).await else {
@@ -47,6 +36,28 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // Shells keep their topic with the shell badge and zero alerts;
     // only truly gone panes get closed. Fail-open: a herdr hiccup must
     // never read as "everything is dead" (wiped topics + intents).
+    // Single `list_panes` per tick (shared with the DM hygiene block
+    // below): 1 RPC, not 2.
+    let mut pane_list: Option<HashSet<String>> = None;
+    async fn panes_once(
+        s: &AppState,
+        cache: &mut Option<HashSet<String>>,
+    ) -> Option<HashSet<String>> {
+        if let Some(p) = cache {
+            return Some(p.clone());
+        }
+        match list_panes(&s.cfg.socket).await {
+            Ok(l) => {
+                let set: HashSet<String> = l.into_iter().collect();
+                *cache = Some(set.clone());
+                Some(set)
+            }
+            Err(e) => {
+                eprintln!("[reconcile] pane list failed, keeping topics: {e}");
+                None
+            }
+        }
+    }
     if s.cfg.forum.is_some() {
         let stored = s.topics.all_mappings();
         let missing: Vec<String> = stored
@@ -55,8 +66,13 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
             .cloned()
             .collect();
         if !missing.is_empty() {
-            match list_panes(&s.cfg.socket).await {
-                Ok(panes) => {
+            match panes_once(s, &mut pane_list).await {
+                Some(panes) if panes.is_empty() => {
+                    // Transient Ok([]) must not read as "everything dead"
+                    // (wiped topics + intents); same fail-open as Err.
+                    eprintln!("[reconcile] pane list empty, keeping topics");
+                }
+                Some(panes) => {
                     for pane in missing {
                         if panes.contains(&pane) {
                             s.status
@@ -98,18 +114,25 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                         // Dead-pane close is silent (no card), so it never waits
                         // for a non-silent tick — orphans from a restart close on
                         // the seed pass instead of lingering a full cycle.
+                        // Compare-and-delete: a remint between snapshot and
+                        // close must survive the outer remove.
                         } else {
+                            let thread = s.topics.all_mappings().get(&pane).copied();
                             if s.topics.close_topic(&pane).await {
-                                s.topics.remove_mapping(&pane);
+                                // Some(thread): compare-delete a remint-safe
+                                // prune. None: mapping already gone (pruned
+                                // inside or raced) — no-op, never wipe a
+                                // concurrent remint blindly.
+                                if let Some(t) = thread {
+                                    s.topics.remove_mapping_if_thread(&pane, t);
+                                }
                             }
                             s.cancel_jobs_for(&pane).await;
                             s.clear_pane(&pane).await;
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!("[reconcile] pane list failed, keeping topics: {e}");
-                }
+                None => {}
             }
         }
     }
@@ -118,7 +141,8 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // jobs, durable intent, and per-pane maps for externally-closed
     // panes (no topic mapping exists to trigger the forum close flow).
     // Live panes are skipped; truly gone ones are cancelled + cleared.
-    // Fail-open: never wipe intents on a failed list call.
+    // Fail-open: never wipe intents on a failed list call (Err) or a
+    // transient empty Ok([]).
     {
         let mut known: Vec<String> = s.jobs.lock().await.keys().cloned().collect();
         known.extend(s.pending.lock().await.keys().cloned());
@@ -129,130 +153,65 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         known.extend(s.runwait.lock().await.values().cloned());
         known.extend(s.typewait.lock().await.values().cloned());
         if !known.is_empty() {
-            match list_panes(&s.cfg.socket).await {
-                Ok(live) => {
-                    for pane in known {
-                        if !live.contains(&pane) {
-                            s.cancel_jobs_for(&pane).await;
-                            s.clear_pane(&pane).await;
+            match panes_once(s, &mut pane_list).await {
+                Some(live) if live.is_empty() => {
+                    eprintln!("[reconcile] pane list empty, keeping intents");
+                }
+                Some(live) => {
+                    // Retain live-only (not live∪known): known includes
+                    // the just-cleared dead panes, so ∪ would keep
+                    // everything clear_pane missed.
+                    for pane in &known {
+                        if !live.contains(pane) {
+                            s.cancel_jobs_for(pane).await;
+                            s.clear_pane(pane).await;
                         }
                     }
+                    s.status.lock().await.retain(|p, _| live.contains(p));
+                    s.seen.lock().await.retain(|p, _| live.contains(p));
+                    s.last_done.lock().await.retain(|p, _| live.contains(p));
+                    // Atomic with status (order status→last_change).
+                    s.last_change.lock().await.retain(|p, _| live.contains(p));
+                    s.limit_alert.lock().await.retain(|p, _| live.contains(p));
+                    s.limit_seen.lock().await.retain(|p, _| live.contains(p));
+                    s.limit_miss.lock().await.retain(|p, _| live.contains(p));
+                    s.debounce.lock().await.retain(|p, _| live.contains(p));
+                    s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
+                    s.modelop.lock().await.retain(|p| live.contains(p));
+                    s.blockop.lock().await.retain(|p| live.contains(p));
+                    // Typing tasks for dead panes: abort, don't leak.
+                    for (_, h) in s
+                        .typing_tasks
+                        .lock()
+                        .await
+                        .extract_if(|p, _| !live.contains(p))
+                        .collect::<Vec<_>>()
+                    {
+                        h.abort();
+                    }
+                    // Reply targets pointing at dead panes (order
+                    // torder→targets, as in remember).
+                    {
+                        let mut ord = s.torder.lock().await;
+                        let mut map = s.targets.lock().await;
+                        map.retain(|_, p| live.contains(p));
+                        let live_keys: std::collections::HashSet<(i64, i64)> =
+                            map.keys().cloned().collect();
+                        ord.retain(|k| live_keys.contains(k));
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[reconcile] pane list failed, keeping intents: {e}");
-                }
+                None => {}
             }
         }
     }
 
     // 1:1 pane↔topic titles (herdr labels win here; native TG renames
-    // flow back via forum_topic_edited). Self-guards when forum is off.
-    sync_titles(s).await;
-}
-
-/// Buzz once per limit episode on job-less working panes (prompt-owned
-/// panes are the watcher's job — it replies in the prompt's own chat).
-/// Once-per-episode survives noise: empty/outage reads preserve all
-/// state (unknown ≠ clean), a banner must be absent for
-/// [`LIMIT_CLEAR_MISSES`] consecutive clean reads to clear the episode,
-/// gated (`provider`/`error`) banners must persist [`LIMIT_STUCK_SECS`]
-/// before buzzing, and a recent alert suppresses re-pages regardless of
-/// kind (scroll-order flips never spam; the 30-min remind still fires).
-async fn scan_limits(s: &AppState) {
-    let panes: Vec<String> = {
-        // Lock order (never inverted anywhere): status → jobs.
-        let status = s.status.lock().await;
-        let jobs = s.jobs.lock().await;
-        status
-            .iter()
-            .filter(|(p, st)| st.as_str() == "working" && !jobs.contains_key(*p))
-            .map(|(p, _)| p.clone())
-            .collect()
-    };
-    for pane in panes {
-        let screen = read_screen_adaptive(&s.cfg.socket, &pane).await;
-        // Outage/unknown: preserve everything (alert, stuck timer, miss
-        // count) so the next good read does NOT re-alert.
-        if screen.is_empty() {
-            continue;
+    // flow back via forum_topic_edited). Reuses this tick's rows plus
+    // one spaces/facts fetch — no extra list_agents per tick.
+    if s.cfg.forum.is_some() {
+        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+        if let Ok(facts) = pane_facts(&s.cfg.socket).await {
+            sync_titles_with(s, &rows, &spaces, &facts).await;
         }
-        let Some(hit) = detect_limit(&screen) else {
-            // Clean miss: only a sustained absence clears the episode.
-            let misses = {
-                let mut m = s.limit_miss.lock().await;
-                let n = m.get(&pane).copied().unwrap_or(0) + 1;
-                if n >= LIMIT_CLEAR_MISSES {
-                    m.remove(&pane);
-                } else {
-                    m.insert(pane.clone(), n);
-                }
-                n
-            };
-            if misses >= LIMIT_CLEAR_MISSES {
-                s.limit_alert.lock().await.remove(&pane);
-                s.limit_seen.lock().await.remove(&pane);
-            }
-            continue;
-        };
-        // Banner present: absence streak over.
-        s.limit_miss.lock().await.remove(&pane);
-        // Stuck gate for transient-prone kinds: a timeout blip that
-        // recovers on the next retry stays silent; only a banner that
-        // persists across watchdog ticks pages. A kind flip restarts the
-        // timer (co-present banners swapping topmost line never spam).
-        if is_stuck_gated(hit.kind) {
-            let stuck = {
-                let mut seen = s.limit_seen.lock().await;
-                match seen.get(&pane) {
-                    Some((k, t)) if k == hit.kind => {
-                        t.elapsed() >= Duration::from_secs(LIMIT_STUCK_SECS)
-                    }
-                    _ => {
-                        seen.insert(pane.clone(), (hit.kind.to_string(), Instant::now()));
-                        false
-                    }
-                }
-            };
-            if !stuck {
-                continue;
-            }
-        } else {
-            s.limit_seen.lock().await.remove(&pane);
-        }
-        {
-            let mut map = s.limit_alert.lock().await;
-            // Any recent alert suppresses, even on kind change: within one
-            // continuous stall the first card (plus /read) already told
-            // the owner everything; flips are scroll artifacts, not new
-            // errors. The next genuine episode (after a confirmed clear)
-            // or the 30-min re-remind still pages.
-            if let Some((_, t)) = map.get(&pane)
-                && t.elapsed() < Duration::from_secs(LIMIT_REMIND_SECS)
-            {
-                continue;
-            }
-            map.insert(pane.clone(), (hit.kind.to_string(), Instant::now()));
-        }
-        let text = limit_card_text(&pane, &hit);
-        if let Some(forum) = s.cfg.forum {
-            match s.topics.all_mappings().get(&pane).copied() {
-                Some(thread) => {
-                    let mid = s.tg.send_msg(forum, Some(thread), &text, None).await;
-                    s.remember(forum, mid, &pane).await;
-                }
-                None => {
-                    for id in &s.cfg.owners {
-                        let mid = s.tg.send_msg(*id, None, &text, None).await;
-                        s.remember(*id, mid, &pane).await;
-                    }
-                }
-            }
-        } else {
-            for id in &s.cfg.owners {
-                let mid = s.tg.send_msg(*id, None, &text, None).await;
-                s.remember(*id, mid, &pane).await;
-            }
-        }
-        println!("[alert] limit stall {pane}: {} ({})", hit.kind, hit.excerpt);
     }
 }

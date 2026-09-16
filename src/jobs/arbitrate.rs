@@ -29,10 +29,21 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
     if screen_failed && !acc_failed && !screen_body.is_empty() {
         return screen_body;
     }
+    let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     if acc_body.chars().count() >= STREAM_MIN_CHARS {
+        // Healthy stream — but it may be TRUNCATED (last burst landed
+        // after the final stream tick, so the settled screen holds the
+        // same answer PLUS its tail). When the screen reflow-proof
+        // contains the whole stream and is substantially longer, the
+        // extra is the missing tail, not scrollback: take the screen.
+        // Unrelated longer screens (no containment) never displace.
+        let acc_sq = squash(&acc_body);
+        let screen_sq = squash(&screen_body);
+        if screen_sq.contains(&acc_sq) && screen_sq.chars().count() > acc_sq.chars().count() + 20 {
+            return screen_body;
+        }
         return acc_body;
     }
-    let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     let acc_squashed = squash(&acc_body);
     // A tiny stream fragment ("ok") merely contained somewhere in a
     // longer screen must not summon the whole screen: takeovers need a
@@ -123,6 +134,38 @@ mod tests {
         let acc = v(&["first answer here"]);
         let screen = v(&["a completely different and much longer unrelated screen text"]);
         assert_eq!(select_final_body(&acc, &screen, "q"), "first answer here");
+    }
+
+    #[test]
+    fn test_truncated_stream_merges_settled_tail() {
+        // Stream caught the first half (>=40 chars, healthy); the last
+        // burst landed after the final stream tick, so the settled
+        // screen holds the same answer plus its tail. The tail must not
+        // be cut: screen wins via containment + margin.
+        let acc = v(&[
+            "The migration has three steps. First, back up the database",
+            "before running anything else on production.",
+        ]);
+        let mut screen = acc.clone();
+        screen.extend(v(&[
+            "Second, run the migrator with --dry-run to preview.",
+            "Third, apply and verify row counts match.",
+        ]));
+        let body = select_final_body(&acc, &screen, "how to migrate?");
+        assert!(body.contains("Third, apply"), "tail kept: {body:?}");
+        assert!(body.contains("back up the database"), "head kept: {body:?}");
+    }
+
+    #[test]
+    fn test_reflowed_screen_does_not_churn_complete_stream() {
+        // Same content, only line-wrap differs (<20 char delta): the
+        // stream stands, no churn to the screen copy.
+        let acc = v(&["The project has three services, all green and deployed."]);
+        let screen = v(&["The project has three services,", "all green and deployed."]);
+        assert_eq!(
+            select_final_body(&acc, &screen, "status?"),
+            "The project has three services, all green and deployed."
+        );
     }
 
     #[test]

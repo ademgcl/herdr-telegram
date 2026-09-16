@@ -8,7 +8,6 @@ use crate::{
 /// Run one shell line in `pane` and report its tail once the shell
 /// settles (see `await_shell_settle`).
 pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, cmd: &str) {
-    s.set_focus(pane).await;
     let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         s.tg.send_msg(
@@ -20,6 +19,9 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         .await;
         return;
     }
+    // Focus only after a live send: focusing a corpse re-arms every next
+    // bare message into the void (stale-focus loop).
+    s.set_focus(pane).await;
     // Durable intent: a restart mid-settle recovers the tail instead of
     // eating the reply (boot posts it once, then clears).
     s.remember_pending(pane, chat, thread, cmd).await;
@@ -70,7 +72,8 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         .lock()
         .await
         .insert(pane.clone(), "shell".to_string());
-    s.set_focus(&pane).await;
+    // Focus only after a live send (same rule as run_shell_cmd): a fresh
+    // tab whose first send fails must not pin focus on the orphan.
     // Fresh shells start slow (rc files, version managers) — settle first.
     let before = shell_snapshot(s, &pane).await;
     let cmd = cmd.trim();
@@ -85,6 +88,7 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
         return;
     }
+    s.set_focus(&pane).await;
     s.remember_pending(&pane, chat, thread, cmd).await;
     let (out, settled) = await_shell_settle(s, &pane, &before).await;
     // /cancel during the settle clears the intent: a stale card must not

@@ -102,15 +102,27 @@ pub async fn enqueue_prompt(
         // silently at its loop top instead of posting "cancelled" for a
         // retire that was never a user cancel.
         job.mark_stopped();
-        let mut map = s.jobs.lock().await;
-        if map
-            .get(&pane)
-            .map(|j| Arc::ptr_eq(j, &job))
-            .unwrap_or(false)
-        {
-            map.remove(&pane);
+        let owned = {
+            let mut map = s.jobs.lock().await;
+            if map
+                .get(&pane)
+                .map(|j| Arc::ptr_eq(j, &job))
+                .unwrap_or(false)
+            {
+                map.remove(&pane);
+                true
+            } else {
+                false
+            }
+        };
+        // Dropped the jobs guard BEFORE the pending lock + disk write
+        // (never nest jobs→pending). Stop our typing now: a parked
+        // watcher (5s tick / 60s backoff) would else type into the void
+        // until it exits — unless_owned keeps a successor's task.
+        if owned {
+            s.clear_pending(&pane).await;
         }
-        s.clear_pending(&pane).await;
+        s.stop_typing_unless_owned(&pane).await;
         return;
     }
     // Delivered: last-wins dest/prompt/epoch, durable intent so a restart

@@ -102,17 +102,15 @@ impl<'a> OpGuard<'a> {
 
 impl Drop for OpGuard<'_> {
     fn drop(&mut self) {
-        // No await in Drop, and the guard is never held across awaits
-        // anywhere — so a few bounded try_lock retries always land.
-        // A loud log (not silence) marks the impossible wedge.
-        for _ in 0..5 {
-            if let Ok(mut set) = self.set.try_lock() {
-                set.remove(&self.pane);
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        // No await in Drop and never blocks the executor: single
+        // try_lock, no sleep/retry (a wedged lock logs loud, never stalls
+        // the tokio thread). The guard is never held across awaits, so
+        // the try almost always lands.
+        if let Ok(mut set) = self.set.try_lock() {
+            set.remove(&self.pane);
+        } else {
+            eprintln!("[state] OpGuard drop wedged for {}", self.pane);
         }
-        eprintln!("[state] OpGuard drop wedged for {}", self.pane);
     }
 }
 
@@ -239,6 +237,15 @@ impl State {
         }
     }
 
+    /// Retire one card target (same lock order): `targets.remove` alone
+    /// leaks the `torder` entry until the 512-cap overflow.
+    pub async fn forget_target(&self, chat: i64, msg_id: i64) {
+        let mut ord = self.torder.lock().await;
+        let mut map = self.targets.lock().await;
+        map.remove(&(chat, msg_id));
+        ord.retain(|k| *k != (chat, msg_id));
+    }
+
     pub async fn set_focus(&self, pane: &str) {
         let file = Self::focus_file();
         let mut tmp = file.as_os_str().to_owned();
@@ -261,11 +268,12 @@ impl State {
     /// Drop armed input waiters for a dead pane: a typewait surviving
     /// /kill would eat the owner's next message as typed input into a
     /// pane that no longer exists.
-    pub async fn clear_pane(&self, pane: &str) {
-        // A dead pane must stop typing at once: otherwise the loop
-        // spams the action into the void every 4s until reaped.
-        self.stop_typing(pane).await;
+    pub async fn clear_pane(self: &Arc<Self>, pane: &str) {
+        // Ownership-checked: a concurrent re-mint (same pane name reused)
+        // keeps its typing task; a dead pane has no owner so it stops.
+        self.stop_typing_unless_owned(pane).await;
         self.clear_waiters(pane).await;
+        self.clear_targets_for(pane).await;
         // A killed pane must not stay focused: the next bare message
         // would route into the void instead of resolving fresh.
         if self.focus.lock().await.as_deref() == Some(pane) {

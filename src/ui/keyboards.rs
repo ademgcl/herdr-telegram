@@ -10,6 +10,33 @@ pub fn btn(text: impl Into<String>, data: &str) -> Value {
     json!({"text": text.into(), "callback_data": data})
 }
 
+/// URL button (opens a link instead of sending a callback query).
+/// Exactly one of `url` / `callback_data` per Bot API shape.
+pub fn url_btn(text: impl Into<String>, url: &str) -> Value {
+    json!({"text": text.into(), "url": url})
+}
+
+/// Deep link to a forum topic: `https://t.me/c/<id>/<thread>`.
+/// Private supergroup ids look like `-1001234567890` → `1234567890`.
+/// Returns None when no link can be built (DM mode, non-super ids).
+pub fn topic_link(chat_id: i64, thread_id: i64) -> Option<String> {
+    if thread_id <= 0 {
+        return None;
+    }
+    let raw = chat_id.to_string();
+    let inner = raw.strip_prefix("-100")?;
+    if inner.is_empty() || !inner.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("https://t.me/c/{inner}/{thread_id}"))
+}
+
+/// Single-button keyboard jumping straight into the pane's topic.
+/// None when no link exists (caller sends the card without buttons).
+pub fn open_topic_kb(chat_id: i64, thread_id: i64) -> Option<Value> {
+    topic_link(chat_id, thread_id).map(|url| json!([[url_btn("➡️ open topic", &url)]]))
+}
+
 pub fn spawn_kb(ws: Option<&str>) -> Value {
     let mut rows: Vec<Vec<Value>> = SPAWN_KINDS
         .chunks(2)
@@ -106,4 +133,36 @@ pub fn agent_card_kb(pane: &str, ws: &str) -> Value {
 
 pub fn pane_output_kb(pane: &str) -> Value {
     json!([[btn("🔄 refresh", &format!("p:{pane}"))]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_topic_link_private_super() {
+        assert_eq!(
+            topic_link(-1001234567890, 3),
+            Some("https://t.me/c/1234567890/3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_topic_link_rejects() {
+        assert_eq!(topic_link(-1001234567890, 0), None);
+        assert_eq!(topic_link(-1001234567890, -2), None);
+        assert_eq!(topic_link(12345, 3), None);
+        assert_eq!(topic_link(-12345, 3), None);
+        assert_eq!(topic_link(0, 1), None);
+    }
+
+    #[test]
+    fn test_open_topic_kb_shape() {
+        let kb = open_topic_kb(-1001234567890, 3).unwrap();
+        assert_eq!(
+            kb,
+            json!([[ {"text": "➡️ open topic", "url": "https://t.me/c/1234567890/3"} ]])
+        );
+        assert!(open_topic_kb(12345, 3).is_none());
+    }
 }
