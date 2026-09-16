@@ -1,7 +1,67 @@
 //! Blocked-dialog option-row parser: which TUI rows are tappable
 //! answers vs key-hint chrome. Pure (no I/O) so it is unit-tested.
 //! Split from `dialog` (300-line file limit).
-use crate::{handlers::model_scan::split_columns, jobs::filter::deframe};
+use crate::{
+    handlers::model_scan::split_columns,
+    jobs::{filter::deframe, segment::is_rule},
+};
+
+fn parse_numbered_option(line: &str) -> Option<(usize, String)> {
+    let t = deframe(line);
+    let s = t
+        .trim()
+        .trim_start_matches(|c: char| c == '❯' || c == '*' || c == '-')
+        .trim();
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let num: usize = digits.parse().ok()?;
+    let rest = s[digits.len()..].trim_start();
+    let after = rest.strip_prefix('.').or_else(|| rest.strip_prefix(')'))?;
+    let label = after.trim();
+    if label.is_empty() {
+        return None;
+    }
+    let clean_label = if let Some(idx) = label.find("   ") {
+        label[..idx].trim()
+    } else {
+        label
+    };
+    if clean_label.is_empty() {
+        return None;
+    }
+    Some((num, clean_label.to_string()))
+}
+
+pub fn has_numbered_options(lines: &[String]) -> bool {
+    let mut expected = 1;
+    let mut count = 0;
+    for line in lines {
+        let t = deframe(line);
+        if t.is_empty() || is_rule(&t) {
+            continue;
+        }
+        if let Some((n, _)) = parse_numbered_option(line) {
+            if n == expected {
+                count += 1;
+                expected += 1;
+                if count >= 2 {
+                    return true;
+                }
+                continue;
+            }
+        }
+        expected = 1;
+        count = 0;
+        if let Some((1, _)) = parse_numbered_option(line) {
+            expected = 2;
+            count = 1;
+        }
+    }
+    false
+}
+
 
 /// Lines that can never be options: key-hint rows and chrome-ish labels.
 /// NOTE: "confirm"/"cancel" are deliberately absent — real second
@@ -100,5 +160,34 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
     if (2..=4).contains(&run.len()) {
         return run;
     }
+    // Numbered option runs ("1. Discard", "2. Keep", "3. Test"):
+    let mut num_run: Vec<String> = Vec::new();
+    let mut expected_num = 1;
+    for line in lines {
+        let t = deframe(line);
+        if t.is_empty() || is_rule(&t) {
+            continue;
+        }
+        if let Some((n, label)) = parse_numbered_option(line) {
+            if n == expected_num {
+                num_run.push(label);
+                expected_num += 1;
+                continue;
+            }
+        }
+        if num_run.len() >= 2 {
+            return num_run;
+        }
+        num_run.clear();
+        expected_num = 1;
+        if let Some((1, label)) = parse_numbered_option(line) {
+            num_run.push(label);
+            expected_num = 2;
+        }
+    }
+    if num_run.len() >= 2 {
+        return num_run;
+    }
     Vec::new()
 }
+

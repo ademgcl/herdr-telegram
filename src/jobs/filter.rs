@@ -48,6 +48,14 @@ const CHROME_MARKERS: &[&str] = &[
     "⣻", // spinner
     "⢿", // spinner
     "└ Tip:",
+    "auto mode on",
+    "shift+tab to cycle",
+    "Enter to select",
+    "enter to select",
+    "Tab/Arrow",
+    "tab/arrow",
+    "ctrl+f fullscreen",
+    "view transcript",
 ];
 
 /// Start-anchored prefixes for tool-call echoes, reasoning headers,
@@ -61,10 +69,15 @@ const CHROME_PREFIXES: &[&str] = &[
     "←",
     "●",
     "○",
+    "⏺",
     "⎿",
     "☰",
     "❯",
     "›",
+    "⏵",
+    "✻",
+    "※",
+    "• OpenCode",
     "Thought",
     "+ Thought",
     "▸ Thought",
@@ -176,78 +189,28 @@ pub fn deframe(line: &str) -> String {
     t.to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_chrome_strips_opencode_tui() {
-        assert!(is_chrome("┃  [forum] topic msg for wG:p1: hii"));
-        assert!(is_chrome("   Thought · 359ms"));
-        assert!(is_chrome("+ Thought: 6.8s"));
-        assert!(is_chrome("  ▣  Build · Muse Spark 1.3 Free · 1m 3s"));
-        assert!(is_chrome("  Plan · Ling · Zen · high"));
-        assert!(is_chrome("╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀"));
-        assert!(is_chrome("  ⠋ working…"));
-        assert!(is_chrome("→Read src/telegram/router.rs"));
-        assert!(is_chrome("← Edit src/jobs/reply.rs"));
-        assert!(is_chrome("[watcher] start wG:p1"));
-        assert!(is_chrome("[✓] Add session_id to AgentDetail"));
-        assert!(is_chrome("# Todos"));
-        assert!(is_chrome("Click to expand"));
-        assert!(!is_chrome("hello there, how can I help?"));
+/// In blocked dialogs, '←' heads the requested action or header (← Access ...,
+/// ← ☐ Partial ...), never tool echoes, so it survives as content.
+pub fn is_dialog_chrome(line: &str) -> bool {
+    let t = line.trim();
+    if t.starts_with('←') {
+        return false;
     }
-
-    #[test]
-    fn test_chrome_keeps_prose() {
-        // Bare provider words / key hints in normal answers must survive.
-        assert!(!is_chrome("refresh tokens expire after an hour"));
-        assert!(!is_chrome("I spent an hour on this"));
-        assert!(!is_chrome("OpenCode is great for this"));
-        assert!(!is_chrome("press ctrl+c to stop"));
-        assert!(!is_chrome("Hi! I'm Muse Spark. How can I help today?"));
-        // Short indented lines are answers, not padding.
-        assert!(!is_chrome("     hi"));
-        assert!(!is_chrome("     2"));
-        assert!(!is_chrome("     ok"));
-        // …but long whitespace-padded art still goes.
-        assert!(is_chrome("                              *  *  *"));
-    }
-
-    #[test]
-    fn test_chrome_strips_agy_tui() {
-        assert!(is_chrome(
-            "────────────────────────────────────────────────"
-        ));
-        assert!(is_chrome(">"));
-        assert!(is_chrome(
-            "? for shortcuts             Gemini 3.8 Flash · high"
-        ));
-        assert!(is_chrome("Antigravity CLI 1.2.2"));
-        assert!(is_chrome(
-            "  ADC: firebase-adminsdk-fbsvc@ajgc-dig-pdi-dev-cdp"
-        ));
-        assert!(is_chrome("○ Bash(cargo test)"));
-        assert!(is_chrome("⡿ Running command..."));
-        assert!(is_chrome("└ Tip: Run with --nocapture"));
-        assert!(is_chrome("▸ Thought for 11s, 1.5k tokens"));
-        assert!(is_chrome("  ▸ Thought for 4s"));
-        // …but quoted/diff/table content and ASCII rules survive.
-        assert!(!is_chrome("> quoted text"));
-        assert!(!is_chrome("> added line"));
-        assert!(!is_chrome("| a | b |"));
-        assert!(!is_chrome("intro --- still content"));
-        assert!(!is_chrome("here is a tip for your code"));
-        // …and prose mentioning the CLI inline survives (anchored only).
-        assert!(!is_chrome("I use Antigravity CLI daily"));
-        assert!(!is_chrome("the ADC value rose today"));
-    }
-
-    #[test]
-    fn test_chrome_keeps_fatal_provider_error_even_framed() {
-        let err = "Error from provider (Console): Upstream request failed: [invalid_request_error] reasoning `encrypted_content` was not issued to this caller";
-        assert!(!is_chrome(err));
-        assert!(!is_chrome(&format!("  ┃  {err}")));
-        assert!(!chrome_filtered(&[format!("  ┃  {err}")]).is_empty());
-    }
+    is_chrome(line)
 }
+
+/// Chrome filtering for blocked dialog questions: preserves header arrows.
+pub fn dialog_chrome_filtered(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|l| l.as_str())
+        .filter(|l| !is_dialog_chrome(l))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "filter_tests.rs"]
+mod tests;
+
+

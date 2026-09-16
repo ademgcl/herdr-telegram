@@ -9,19 +9,42 @@ use super::{
     filter::chrome_filtered,
 };
 
-/// Tool-call echo prefixes across providers (opencode →/←, claude ●/⎿,
+/// Tool-call echo prefixes across providers (opencode →/←, claude ●/○/⏺/⎿,
 /// codex/pi ☰/❯ …): after one of these, prior prose is intermediate work.
-const TOOL_PREFIXES: &[&str] = &["→", "←", "●", "○", "⎿", "☰", "❯", "›"];
+const TOOL_PREFIXES: &[&str] = &["→", "←", "●", "○", "⏺", "⎿", "☰", "❯", "›"];
 
 /// A full-width box-rule turn separator (────…): turns are wrapped in these,
 /// so the fresh reply follows the last one. ASCII "---" is deliberately NOT
 /// a rule — markdown answers use it as content.
-fn is_rule(line: &str) -> bool {
+pub fn is_rule(line: &str) -> bool {
     let t = line.trim();
     t.chars().count() >= 8
         && t.chars()
             .all(|c| c.is_whitespace() || matches!(c, '─' | '━' | '═' | '╍'))
         && t.contains(&['─', '━', '═', '╍'][..])
+}
+
+pub(crate) fn is_numbered_option_line(s: &str) -> bool {
+    let t = s.trim().trim_start_matches('❯').trim_start();
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 {
+        let rest = &t[digits..];
+        rest.starts_with('.') || rest.starts_with(')')
+    } else {
+        false
+    }
+}
+
+fn is_continuation_numbered_option(s: &str) -> bool {
+    let t = s.trim().trim_start_matches('❯').trim_start();
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if let Ok(num) = digits.parse::<usize>() {
+        if num > 1 {
+            let rest = &t[digits.len()..];
+            return rest.starts_with('.') || rest.starts_with(')');
+        }
+    }
+    false
 }
 
 /// A line that opens a new output cycle: tool-call echoes, reasoning
@@ -34,6 +57,9 @@ pub fn is_boundary(line: &str) -> bool {
         return true;
     }
     let t = line.trim();
+    if t.starts_with('❯') && is_numbered_option_line(t) {
+        return false;
+    }
     if TOOL_PREFIXES.iter().any(|p| t.starts_with(p)) {
         return true;
     }
@@ -50,27 +76,85 @@ pub fn is_boundary(line: &str) -> bool {
     t.contains('▣') || t.contains("Build ·")
 }
 
+pub fn is_dialog_boundary(line: &str, next_line: Option<&str>) -> bool {
+    if is_rule(line) {
+        if let Some(next) = next_line {
+            if is_continuation_numbered_option(next) {
+                return false;
+            }
+        }
+        return true;
+    }
+    let t = line.trim();
+    if t.starts_with('❯') && is_numbered_option_line(t) {
+        return false;
+    }
+    // In dialog mode, headers live behind '←' (← Access ..., ← ☐ Partial ...)
+    if t.starts_with('←') {
+        return false;
+    }
+    if TOOL_PREFIXES.iter().any(|p| *p != "←" && t.starts_with(p)) {
+        return true;
+    }
+    if t.starts_with("Thought")
+        || t.starts_with("+ Thought")
+        || t.starts_with("▸ Thought")
+        || t.starts_with("Thinking")
+        || t.starts_with("Working…")
+        || t.starts_with("Working...")
+        || t.starts_with("Click to expand")
+    {
+        return true;
+    }
+    t.contains('▣') || t.contains("Build ·")
+}
+
+fn is_footer_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return true;
+    }
+    if t.starts_with('⏵') || t.contains("auto mode on") || t.contains("shift+tab to cycle") {
+        return true;
+    }
+    if t.contains("· ←") && t.ends_with("agent") {
+        return true;
+    }
+    if (t.contains(" · ~/") || t.contains(" · /"))
+        && (t.starts_with("gpt-")
+            || t.starts_with("claude-")
+            || t.starts_with("gemini-")
+            || t.starts_with("o1-")
+            || t.starts_with("o3-")
+            || t.contains("medium ·")
+            || t.contains("high ·")
+            || t.contains("low ·"))
+    {
+        return true;
+    }
+    if t.contains("Enter to select")
+        || t.contains("Tab/Arrow")
+        || t.contains("ctrl+f fullscreen")
+        || t.contains("? for shortcuts")
+    {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn is_footer_segment(seg: &[String]) -> bool {
+    if seg.is_empty() || seg.len() > 2 {
+        return false;
+    }
+    seg.iter().all(|l| is_footer_line(l))
+}
+
 /// Fresh reply = chrome-cleaned last non-empty segment after cycle
 /// boundaries and prompt echoes. A trailing footer/input box yields an
 /// empty tail, so the last NON-EMPTY segment wins instead of blanking.
-///
-/// Two echo hazards, both agy-shaped. Prompted path: only the echo opener
-/// carries framing, so a multi-line prompt's wrap lines would outlive the
-/// opener split and shadow the real answer above — they are skipped as an
-/// echo region instead (opener + prompt-matching wraps, see echo.rs).
-/// Spontaneous path (no prompt to match): the settled screen always ends
-/// on the input box, so leading `>` lines of a RULE-terminated winning
-/// segment are the box, never the reply — strip them and fall back to the
-/// previous segment. The rule gate matters: a `>`-led question with no
-/// closing rule (blocked dialogs, quote excerpts) is content and stays.
-/// (Residual: wraps of a multi-line terminal-typed prompt are
-/// indistinguishable from indented prose without the prompt text — only
-/// the `>` opener strips there.)
 pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let want = prompt.lines().next().map(str::trim).unwrap_or("");
     let rest = echo_rest(prompt);
-    // (segment, closed_by_rule): the strip gate needs each candidate's
-    // terminator, so history keeps it alongside.
     let mut cands: Vec<(Vec<String>, bool)> = Vec::new();
     let mut seg: Vec<String> = Vec::new();
     let mut echo_pos: Option<usize> = None;
@@ -94,8 +178,6 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
             continue;
         }
         if let Some(pos) = echo_pos {
-            // Blank echo lines ride along without advancing the chain
-            // (multi-line prompts echo their blank lines too).
             if l.trim().is_empty() {
                 continue;
             }
@@ -111,15 +193,13 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let Some((mut win, mut gated)) = cands.pop() else {
         return Vec::new();
     };
-    // The prompted path already split its echo above; stripping there
-    // would eat blockquote-led answers, so it stays untouched.
     if want.is_empty() {
         loop {
             if gated {
                 let openers = win.iter().take_while(|l| is_input_opener(l)).count();
                 win.drain(..openers);
             }
-            if !win.is_empty() {
+            if !win.is_empty() && !is_footer_segment(&win) {
                 break;
             }
             match cands.pop() {
@@ -134,161 +214,58 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     win
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn v(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
+/// Dialog-specific segmentation: returns (cleaned_winner, raw_winner).
+/// In blocked dialogs, '←' does not split headers and options are preserved
+/// in raw form so terminal padding rules never drop them before parsing.
+pub fn dialog_block(lines: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut cands: Vec<(Vec<String>, Vec<String>, bool)> = Vec::new();
+    let mut raw_seg: Vec<String> = Vec::new();
+    let flush = |raw_seg: &mut Vec<String>,
+                 cands: &mut Vec<(Vec<String>, Vec<String>, bool)>,
+                 closed_by_rule: bool| {
+        let cand = super::filter::dialog_chrome_filtered(raw_seg);
+        if !cand.is_empty() {
+            cands.push((cand, raw_seg.clone(), closed_by_rule));
+        }
+        raw_seg.clear();
+    };
+    for (i, l) in lines.iter().enumerate() {
+        let next_non_blank = lines[i + 1..]
+            .iter()
+            .find(|s| !s.trim().is_empty())
+            .map(String::as_str);
+        if is_dialog_boundary(l, next_non_blank) {
+            flush(&mut raw_seg, &mut cands, is_rule(l));
+            continue;
+        }
+        raw_seg.push(l.clone());
     }
-
-    #[test]
-    fn test_idle_screen_yields_answer_not_footer() {
-        // A settled screen (frame + Thought header + answer + step footer
-        // + idle footer) reduces to the answer — never status-bar soup.
-        let screen = v(&[
-            "  ┃",
-            "  ┃  hi",
-            "  ┃",
-            "     Thought · 539ms",
-            "     Hi! I'm Muse Spark. How can I help with herdr-telegram today?",
-            "     ▣  Build · Muse Spark 1.3 Free · 5.1s",
-            "  ┃",
-            "  ┃  Build · Muse Spark 1.3 Free OpenCode Zen · xhigh",
-            "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-            "   /home/user/projects/herdr-telegram        10.8K (1%)  ctrl+p commands",
-        ]);
-        assert_eq!(
-            final_block(&screen, "hi"),
-            v(&["     Hi! I'm Muse Spark. How can I help with herdr-telegram today?"])
-        );
+    flush(&mut raw_seg, &mut cands, false);
+    let Some((mut cleaned, mut raw, mut gated)) = cands.pop() else {
+        return (Vec::new(), Vec::new());
+    };
+    loop {
+        if gated {
+            let openers = cleaned.iter().take_while(|l| is_input_opener(l)).count();
+            cleaned.drain(..openers);
+        }
+        if !cleaned.is_empty() && !is_footer_segment(&cleaned) {
+            break;
+        }
+        match cands.pop() {
+            Some((prev_clean, prev_raw, prev_rule)) => {
+                cleaned = prev_clean;
+                raw = prev_raw;
+                gated = prev_rule;
+            }
+            None => return (Vec::new(), Vec::new()),
+        }
     }
-
-    #[test]
-    fn test_final_block_drops_work_before_tool_call() {
-        let lines = v(&[
-            "     I'll take a look first.",
-            "→Read src/main.rs",
-            "     Found it — the guard is missing.",
-        ]);
-        assert_eq!(
-            final_block(&lines, "fix it"),
-            v(&["     Found it — the guard is missing."])
-        );
-    }
-
-    #[test]
-    fn test_final_block_splits_multi_turn_scrollback() {
-        // Earlier turns above the prompt echo are dropped; only the fresh
-        // reply survives.
-        let lines = v(&[
-            "     Hi — this is herdr-telegram.",
-            "     You've got 4 modified files.",
-            "  ┃",
-            "  ┃  hi",
-            "  ┃",
-            "     Hey — what do you need in herdr-telegram?",
-        ]);
-        assert_eq!(
-            final_block(&lines, "hi"),
-            v(&["     Hey — what do you need in herdr-telegram?"])
-        );
-    }
-
-    #[test]
-    fn test_final_block_keeps_unframed_prompt_repeat() {
-        // An answer line repeating the prompt is content, not an echo:
-        // only the framed echo splits.
-        let lines = v(&["  ┃  hi", "     hi", "     How can I help?"]);
-        assert_eq!(
-            final_block(&lines, "hi"),
-            v(&["     hi", "     How can I help?"])
-        );
-    }
-
-    #[test]
-    fn test_final_block_no_boundaries_returns_all() {
-        let lines = v(&["first line", "second line"]);
-        assert_eq!(final_block(&lines, "hi"), lines);
-    }
-
-    #[test]
-    fn test_ascii_rule_and_quotes_never_split() {
-        // Markdown `---`, blockquotes, diff and table lines are content.
-        let lines = v(&["intro", "---", "> quoted", "> added", "| a | b |", "end"]);
-        assert_eq!(final_block(&lines, "q"), lines);
-    }
-
-    #[test]
-    fn test_permission_dialog_keeps_question_and_options() {
-        // Real opencode permission dialog as herdr reports it: everything
-        // framed. De-framed, path + options survive the pipeline while
-        // footers drop (see waiting_text).
-        use crate::jobs::filter::deframe;
-        let raw = v(&[
-            "  ┃",
-            "  ┃  △ Permission required",
-            "  ┃    ← Access external directory ~/.config/opencode",
-            "  ┃",
-            "  ┃  Patterns",
-            "  ┃",
-            "  ┃  - /home/user/.config/opencode/*",
-            "  ┃",
-            "  ┃",
-            "  ┃   Allow once   Allow always   Reject",
-            "  ┃",
-            "  ┃  ctrl+f fullscreen  ⇆ select  enter confirm",
-            "  ┃",
-        ]);
-        assert_eq!(
-            deframe("  ┃  △ Permission required"),
-            "△ Permission required"
-        );
-        assert_eq!(deframe("plain line"), "plain line");
-        let lines: Vec<String> = raw.iter().map(|l| deframe(l)).collect();
-        let out = final_block(&lines, "");
-        let body = out.join("\n");
-        assert!(body.contains("Allow once"), "options kept: {body}");
-        assert!(body.contains("opencode/*"), "path kept: {body}");
-        assert!(!body.contains("ctrl+p"), "footer dropped: {body}");
-    }
-
-    #[test]
-    fn test_final_block_drops_agy_tool_noise() {
-        let lines = v(&[
-            "> build the project",
-            "▸ Thought for 11s, 1.5k tokens",
-            "● Edit(src/main.rs)",
-            "○ Bash(cargo test)",
-            "⡿ Running command...",
-            "└ Tip: Use --release for faster builds",
-            "────────────────────────────────────────────────",
-            ">",
-            "? for shortcuts             Gemini 3.8 Flash · high",
-        ]);
-        assert_eq!(
-            final_block(&lines, "build the project"),
-            Vec::<String>::new()
-        );
-
-        let lines_with_answer = v(&[
-            "> build the project",
-            "▸ Thought for 11s, 1.5k tokens",
-            "● Edit(src/main.rs)",
-            "○ Bash(cargo test)",
-            "     Build succeeded with 0 errors.",
-            "────────────────────────────────────────────────",
-            ">",
-        ]);
-        assert_eq!(
-            final_block(&lines_with_answer, "build the project"),
-            v(&["     Build succeeded with 0 errors."])
-        );
-
-        let lines_thinking = v(&["> build the project", "▸ Thought for 11s, 1.5k tokens"]);
-        assert_eq!(
-            final_block(&lines_thinking, "build the project"),
-            Vec::<String>::new()
-        );
-    }
+    (cleaned, raw)
 }
+
+#[cfg(test)]
+#[path = "segment_tests.rs"]
+mod tests;
+
+

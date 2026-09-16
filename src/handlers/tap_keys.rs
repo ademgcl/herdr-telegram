@@ -39,8 +39,19 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                             return TapCall::Unknown;
                         }
                     }
-                    let mut full = opt_keys(i);
-                    let confirm = vec![full.pop().expect("opt_keys ends with enter")];
+                    let (full, confirm) = if crate::handlers::dialog::has_numbered_options(&before) {
+                        let num = match i {
+                            0 => "1",
+                            1 => "2",
+                            2 => "3",
+                            _ => "4",
+                        };
+                        (vec![num], vec!["enter"])
+                    } else {
+                        let mut full = opt_keys(i);
+                        let confirm = vec![full.pop().expect("opt_keys ends with enter")];
+                        (full, confirm)
+                    };
                     (full, confirm, format!("option {}", i + 1))
                 }
                 _ => return TapCall::Unknown,

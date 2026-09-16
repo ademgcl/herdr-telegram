@@ -1,6 +1,6 @@
 use crate::{
     herdr::client::{get_agent, read_screen_visible},
-    jobs::{filter::deframe, segment::final_block, stream::join_trimmed},
+    jobs::{filter::deframe, segment::dialog_block, stream::join_trimmed},
     state::AppState,
 };
 /// Blocked-pane dialogs (permission confirms, pickers, y/n prompts).
@@ -18,13 +18,25 @@ mod options;
 #[cfg(test)]
 mod tests;
 
-pub use options::parse_options;
+pub use options::{has_numbered_options, parse_options};
 
 /// Question + options off one screen, parsed from the same final-block
 /// source the cards use — tap paths must never diverge from it.
 pub(crate) fn live_card(screen: &[String]) -> (String, Vec<String>) {
-    let q = waiting_lines(screen);
-    let opts = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
+    let lines: Vec<String> = screen.iter().map(|l| deframe(l)).collect();
+    let (cleaned, raw) = dialog_block(&lines);
+    let body = join_trimmed(&cleaned);
+    let q = if body.is_empty() {
+        "(waiting for input)".to_string()
+    } else {
+        body
+    };
+    // Rule 5: options parsed from raw winner lines so terminal padding
+    // never eats the options row before parse_options sees it.
+    let mut opts = parse_options(&raw);
+    if opts.is_empty() {
+        opts = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
+    }
     (q, opts)
 }
 
@@ -32,13 +44,15 @@ pub(crate) fn live_card(screen: &[String]) -> (String, Vec<String>) {
 /// on blocked panes), de-framed so dialog text and option rows survive.
 pub(crate) fn waiting_lines(screen: &[String]) -> String {
     let lines: Vec<String> = screen.iter().map(|l| deframe(l)).collect();
-    let body = join_trimmed(&final_block(&lines, ""));
+    let (cleaned, _) = dialog_block(&lines);
+    let body = join_trimmed(&cleaned);
     if body.is_empty() {
         "(waiting for input)".to_string()
     } else {
         body
     }
 }
+
 
 /// Signature of the displayed dialog: same dialog → same sig across
 /// re-reads; a turned-over dialog (allow → confirm) → new sig.

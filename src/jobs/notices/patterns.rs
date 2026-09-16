@@ -22,6 +22,8 @@ pub(crate) const STRONG: &[(&str, &str)] = &[
     ("retrying in", "rate-limit"),
     ("rate limited", "rate-limit"),
     ("rate-limited", "rate-limit"),
+    ("hit your usage limit", "rate-limit"),
+    ("you've hit your usage limit", "rate-limit"),
     // Fatal provider request failures (opencode surfaces these as
     // `Error from provider (Console): Upstream request failed:
     // [invalid_request_error] ...`). Unlike overloads they settle fast
@@ -54,6 +56,8 @@ pub(crate) const FATAL_PROVIDER_MARKERS: &[&str] = &[
     "invalid_request",
     "encrypted_content",
     "was not issued to this caller",
+    "hit your usage limit",
+    "you've hit your usage limit",
 ];
 
 /// Weak patterns: common words that also occur in normal prose — they
