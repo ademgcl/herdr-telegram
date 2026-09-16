@@ -131,16 +131,29 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                         // Job-only flip: no competing intent.
                                         None => true,
                                     };
-                                    // Quiet retire: the pane died (agent quit
-                                    // to shell), so the parked watcher must
-                                    // exit silently — a loud cancel would
-                                    // post "✋ cancelled" next to the quit
-                                    // notice below (two cards, one prompt).
+                                    // Claim the report slot first: a concurrent
+                                    // tick (watchdog + event reconnect) must
+                                    // not double-report the same quit — the
+                                    // loser sees shell and stands down.
+                                    let prev_status = {
+                                        s.status
+                                            .lock()
+                                            .await
+                                            .insert(pane.clone(), "shell".to_string())
+                                    };
+                                    if prev_status.as_deref() == Some("shell") {
+                                        continue;
+                                    }
+                                    // Turned-over intent (submit raced the
+                                    // flip): retire the dead watcher only,
+                                    // preserving the new pending — quiet
+                                    // would wipe it with no restore.
+                                    if !mine {
+                                        s.cancel_job_only_for(&pane).await;
+                                        continue;
+                                    }
                                     s.cancel_jobs_for_quiet(&pane).await;
                                     if let Some(pp) = owed {
-                                        if !mine {
-                                            continue;
-                                        }
                                         let tail = read_shell_output(&s.cfg.socket, &pane, 60)
                                             .await
                                             .map(|t| t.trim().to_string())
@@ -163,9 +176,17 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                             // Intent was already cancelled above:
                                             // keep it so boot-recover retries
                                             // the notice instead of losing it.
-                                            // Status stays un-shell so the
-                                            // next tick retries the retire
+                                            // Restore the pre-claim status so
+                                            // the next tick retries the retire
                                             // instead of going quiet.
+                                            match prev_status {
+                                                Some(p) => {
+                                                    s.status.lock().await.insert(pane.clone(), p);
+                                                }
+                                                None => {
+                                                    s.status.lock().await.remove(&pane);
+                                                }
+                                            }
                                             s.remember_pending(
                                                 &pane, pp.chat, pp.thread, &pp.prompt,
                                             )

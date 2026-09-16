@@ -32,23 +32,33 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
 
     // Thread for ack messages (forum topics carry it, DMs don't).
     let thread = cbq["message"]["message_thread_id"].as_i64();
-    let date = cbq["message"]["date"].as_u64().unwrap_or(0);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
     // Stale cards must not re-execute (days-old spawn-confirm/kill taps):
     // one gate covers both relic (86400s+) and merely outdated taps.
-    if now.saturating_sub(date) > crate::types::STALE_SECS {
-        println!("[callback] dropping stale tap");
-        s.tg.send_msg(
-            chat,
-            thread,
-            "⌛️ that card expired — /card for a fresh one",
-            None,
-        )
-        .await;
-        return;
+    // Dialog (B) taps are exempt — they re-validate against the live
+    // pane at tap time (count/shape/footer checks), so a long-lived
+    // blocked card stays tappable while destructive arms keep the
+    // birth-date gate. Model taps are gated except the read-only list
+    // re-render (M:list:<pane>); an M:<idx> switch is a side effect.
+    let (head, rest0) = split_head(data);
+    let exempt =
+        head == "B" || (head == "M" && rest0.map(|r| r.starts_with("list:")).unwrap_or(false));
+    if !exempt {
+        let date = cbq["message"]["date"].as_u64().unwrap_or(0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now.saturating_sub(date) > crate::types::STALE_SECS {
+            println!("[callback] dropping stale tap");
+            s.tg.send_msg(
+                chat,
+                thread,
+                "⌛️ that card expired — /card for a fresh one",
+                None,
+            )
+            .await;
+            return;
+        }
     }
     let (head, rest) = split_head(data);
     match (head, rest) {

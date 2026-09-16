@@ -59,13 +59,21 @@ pub(crate) async fn handle_topic_agent_message(
         s.keywait.lock().await.remove(&(chat, Some(thread_id)));
         s.runwait.lock().await.remove(&(chat, Some(thread_id)));
         s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+        // Parity with General/DM: an explicit arg routes via scope
+        // (all | pane id — a mismatch warns instead of cancelling the
+        // wrong pane); bare cancels this topic's pane, never focus.
+        if arg.split_whitespace().next().is_some() {
+            let msg = s.cancel_scoped(arg).await;
+            s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
+            return;
+        }
         let n = s.cancel_jobs_for(pane).await;
         let msg = if n {
-            "cancelled pane job(s)"
+            format!("✋ cancelled {pane}")
         } else {
-            "nothing running"
+            format!("nothing running for {pane}")
         };
-        s.tg.send_msg(chat, Some(thread_id), msg, None).await;
+        s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
         return;
     }
 
@@ -88,9 +96,28 @@ pub(crate) async fn handle_topic_agent_message(
     // prompt. Intentional parity with DM/General — a literal "/kill" can
     // itself be the answer a dialog is waiting for. A race
     // lost to a resume falls through to prompt routing below.
-    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, Some(thread_id))) {
+    // Peek first: a blockop race or failed send must not consume the
+    // waiter — the retry is just sending the message again.
+    if let Some(wpane) = s
+        .typewait
+        .lock()
+        .await
+        .get(&(chat, Some(thread_id)))
+        .cloned()
+    {
+        if s.blockop.lock().await.contains(&wpane) {
+            s.tg.send_msg(
+                chat,
+                Some(thread_id),
+                "answer already in flight — wait a beat",
+                None,
+            )
+            .await;
+            return;
+        }
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => {
+                s.typewait.lock().await.remove(&(chat, Some(thread_id)));
                 s.tg.send_msg(
                     chat,
                     Some(thread_id),
@@ -100,10 +127,17 @@ pub(crate) async fn handle_topic_agent_message(
                 .await;
                 return;
             }
-            Err(super::tap::TypeError::Resumed) => {}
+            Err(super::tap::TypeError::Resumed) => {
+                s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+            }
             Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None)
-                    .await;
+                s.tg.send_msg(
+                    chat,
+                    Some(thread_id),
+                    &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
+                    None,
+                )
+                .await;
                 return;
             }
         }

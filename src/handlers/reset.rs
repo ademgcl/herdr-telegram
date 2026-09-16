@@ -269,7 +269,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     }
 
     let mut summary = format!(
-        "✅ Paced reset complete: migrated {migrated} topic(s) (queue carried over), cleaned {dead_deleted} dead topic(s)."
+        "✅ Paced reset complete: migrated {migrated} topic(s) (queue carried over), cleaned {dead_deleted} dead topic(s). Any running prompt was cancelled — re-prompt if it went quiet."
     );
     if !failed.is_empty() {
         summary.push_str(&format!(

@@ -26,7 +26,7 @@ pub(crate) async fn handle_general_forum_message(
                    • `/model` — inside an agent topic: model picker\n\
                    • `/card` `/esc` — inside an agent topic: fresh buttons / guarded dismiss\n\
                    • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
-                   • `/cancel` — abort pending jobs\n\n\
+                    • `/cancel [all|<pane>]` — abort focused job(s), all = everything\n\n\
                    💡 Each active agent has its own dedicated topic in this group! Switch to an agent's topic to chat with it directly.";
         s.tg.send_msg(chat, thread_id, msg, None).await;
         return;
@@ -115,11 +115,18 @@ pub(crate) async fn handle_general_forum_message(
         s.keywait.lock().await.remove(&(chat, thread_id));
         s.runwait.lock().await.remove(&(chat, thread_id));
         s.typewait.lock().await.remove(&(chat, thread_id));
-        let count = s.cancel_all_jobs().await;
+        // Scoped (never a silent global nuke): `all`, a pane id, or focus.
+        let msg = s.cancel_scoped(arg).await;
+        s.tg.send_msg(chat, thread_id, &msg, None).await;
+        return;
+    }
+    // Never-stuck escapes precede ALL waiters (run/key/type): an armed
+    // waiter must never eat /card or /esc as keys or a command.
+    if cmd == "/card" || cmd == "/esc" {
         s.tg.send_msg(
             chat,
             thread_id,
-            &format!("✋ cancelled {count} pending job(s)"),
+            "open the agent's topic and run it there — each topic is one agent.",
             None,
         )
         .await;
@@ -134,31 +141,39 @@ pub(crate) async fn handle_general_forum_message(
     // (chat, thread)). Checked before commands so the answer can't be
     // eaten by General's fallback and leak onto a later unrelated message.
     // A race lost to a resume falls through to normal routing below.
-    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, thread_id)) {
+    // Peek first (mirrors topics): failures keep the waiter for retry.
+    if let Some(wpane) = s.typewait.lock().await.get(&(chat, thread_id)).cloned() {
+        if s.blockop.lock().await.contains(&wpane) {
+            s.tg.send_msg(
+                chat,
+                thread_id,
+                "answer already in flight — wait a beat",
+                None,
+            )
+            .await;
+            return;
+        }
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => {
+                s.typewait.lock().await.remove(&(chat, thread_id));
                 s.tg.send_msg(chat, thread_id, &format!("⌨️ typed into {wpane} + ⏎"), None)
                     .await;
                 return;
             }
-            Err(super::tap::TypeError::Resumed) => {}
+            Err(super::tap::TypeError::Resumed) => {
+                s.typewait.lock().await.remove(&(chat, thread_id));
+            }
             Err(e) => {
-                s.tg.send_msg(chat, thread_id, &format!("⚠️ type failed: {e}"), None)
-                    .await;
+                s.tg.send_msg(
+                    chat,
+                    thread_id,
+                    &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
+                    None,
+                )
+                .await;
                 return;
             }
         }
-    }
-
-    if cmd == "/card" || cmd == "/esc" {
-        s.tg.send_msg(
-            chat,
-            thread_id,
-            "open the agent's topic and run it there — each topic is one agent.",
-            None,
-        )
-        .await;
-        return;
     }
 
     if cmd == "/model" {

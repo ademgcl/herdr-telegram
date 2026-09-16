@@ -37,14 +37,9 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         s.keywait.lock().await.remove(&(chat, None));
         s.runwait.lock().await.remove(&(chat, None));
         s.typewait.lock().await.remove(&(chat, None));
-        let count = s.cancel_all_jobs().await;
-        s.tg.send_msg(
-            chat,
-            None,
-            &format!("✋ cancelled {count} pending job(s) (all panes)"),
-            None,
-        )
-        .await;
+        // Scoped like General (never a silent global nuke).
+        let msg = s.cancel_scoped(arg).await;
+        s.tg.send_msg(chat, None, &msg, None).await;
         return;
     }
 

@@ -28,9 +28,9 @@ impl State {
                 return false;
             }
             self.clear_pending(pane).await;
-            // No job: still disarm debounce/waiters for the pane (a stale
-            // arm must not fire after the confirmation).
+            // No job: disarm waiters/debounce/episode (stale arms stay dead).
             self.clear_waiters(pane).await;
+            self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
             return false;
         };
@@ -41,8 +41,9 @@ impl State {
         }
         self.clear_pending(pane).await;
         self.clear_waiters(pane).await;
-        // Disarm a pending settle debounce: without this a card armed
-        // before the cancel lands after the confirmation.
+        // Fresh stall episode after cancel (no 30-min inherit).
+        self.clear_limit_episode(pane).await;
+        // Disarm a pending settle debounce (armed card must not land after).
         self.debounce.lock().await.remove(pane);
         job.mark_stopped();
         // Bump the epoch: an in-flight finalize aborts at its next
@@ -146,6 +147,9 @@ impl State {
         self.keywait.lock().await.clear();
         self.runwait.lock().await.clear();
         self.debounce.lock().await.clear();
+        // Fresh episodes everywhere after a global cancel (see
+        // cancel_jobs_for for the per-pane reason).
+        self.clear_all_limit_episodes().await;
         let count = jobs.len();
         for job in jobs.values() {
             job.mark_stopped();
@@ -222,7 +226,7 @@ mod tests {
     use crate::jobs::persist::PendingPrompt;
 
     fn prompt(chat: i64) -> PendingPrompt {
-        PendingPrompt { chat, thread: None, prompt: "hi".into(), started_unix: 0 }
+        PendingPrompt { chat, thread: None, prompt: "hi".into(), started_unix: 0 } // fmt:keep 1-line (300-line file limit)
     }
 
     #[tokio::test]

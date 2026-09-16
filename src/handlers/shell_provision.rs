@@ -80,7 +80,7 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
         },
     };
     if let Some(pane) = reuse {
-        attach_shell_pane(s, chat, thread, &pane, &space_label(s, &ws_id).await).await;
+        attach_shell_pane(s, chat, thread, &pane, &space_label(s, &ws_id).await, true).await;
         return;
     }
     create_tab_and_attach(s, chat, thread, &ws_id).await;
@@ -98,7 +98,9 @@ pub async fn open_space_shell(s: &AppState, chat: i64, thread: Option<i64>, ws_i
         return;
     }
     match await_fresh_root(&s.cfg.socket, ws_id).await {
-        Some(pane) => attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await).await,
+        Some(pane) => {
+            attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await, true).await
+        }
         None => create_tab_and_attach(s, chat, thread, ws_id).await,
     }
 }
@@ -118,7 +120,7 @@ async fn create_tab_and_attach(s: &AppState, chat: i64, thread: Option<i64>, ws_
             return;
         }
     };
-    attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await).await;
+    attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await, true).await;
 }
 
 async fn space_label(s: &AppState, ws_id: &str) -> String {
@@ -131,7 +133,14 @@ async fn space_label(s: &AppState, ws_id: &str) -> String {
 /// relying on a pin inside the new topic. Shared by fresh tabs, reused
 /// space roots, and splits. Takes the display label (splits fall back to
 /// the pane when the space is gone).
-async fn attach_shell_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, space: &str) {
+async fn attach_shell_pane(
+    s: &AppState,
+    chat: i64,
+    thread: Option<i64>,
+    pane: &str,
+    space: &str,
+    follow_focus: bool,
+) {
     // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
     let topic = s.topics.sync_topic(pane, "shell", space).await;
     s.status
@@ -143,7 +152,11 @@ async fn attach_shell_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         s.tg.send_msg(chat, thread, &shell_card_text(pane), kb)
             .await;
     s.remember(chat, mid, pane).await;
-    s.set_focus(pane).await;
+    // Explicit shells take focus; side splits must not steal global
+    // DM/General routing from live work (topics route by thread anyway).
+    if follow_focus {
+        s.set_focus(pane).await;
+    }
 }
 
 /// Split the pane sideways in the SAME tab: sibling shell pane + its own
@@ -165,5 +178,5 @@ pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
         .unwrap_or_default();
     let space = ws_label(&spaces, &ws_id).to_string();
     let space = if space.is_empty() { pane } else { &space };
-    attach_shell_pane(s, chat, thread, &new, space).await;
+    attach_shell_pane(s, chat, thread, &new, space, false).await;
 }

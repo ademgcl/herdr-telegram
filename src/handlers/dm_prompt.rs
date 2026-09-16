@@ -5,24 +5,40 @@ use crate::{jobs::enqueue_prompt, state::AppState, types::AgentRow};
 /// Checked before routing: the next message belongs to the waiter.
 /// Returns true when the message was consumed.
 pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool {
-    if let Some(wpane) = s.typewait.lock().await.remove(&(chat, None)) {
-        match super::tap::type_text(s, &wpane, text).await {
-            Ok(()) => {
-                s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None)
-                    .await;
-                return true;
-            }
-            // Raced by a resume: the waiter is already consumed, so route
-            // the text as a fresh prompt below instead of dropping it.
-            Err(super::tap::TypeError::Resumed) => return false,
-            Err(e) => {
-                s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None)
-                    .await;
-                return true;
-            }
+    // Peek first (mirrors topics): a blockop race or failed send must
+    // not consume the waiter — the retry is just sending again.
+    let Some(wpane) = s.typewait.lock().await.get(&(chat, None)).cloned() else {
+        return false;
+    };
+    if s.blockop.lock().await.contains(&wpane) {
+        s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None)
+            .await;
+        return true;
+    }
+    match super::tap::type_text(s, &wpane, text).await {
+        Ok(()) => {
+            s.typewait.lock().await.remove(&(chat, None));
+            s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None)
+                .await;
+            true
+        }
+        // Raced by a resume: the waiter is already consumed, so route
+        // the text as a fresh prompt below instead of dropping it.
+        Err(super::tap::TypeError::Resumed) => {
+            s.typewait.lock().await.remove(&(chat, None));
+            false
+        }
+        Err(e) => {
+            s.tg.send_msg(
+                chat,
+                None,
+                &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
+                None,
+            )
+            .await;
+            true
         }
     }
-    false
 }
 
 /// Bare text prompt routing: explicit `<pane> <prompt>`, else reply,

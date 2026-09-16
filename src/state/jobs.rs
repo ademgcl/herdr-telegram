@@ -56,6 +56,55 @@ impl State {
         persist::save_file(&persist::store_path(), &empty);
     }
 
+    /// Scoped /cancel for General/DM (topic /cancel already names its
+    /// pane): `all` nukes everything explicitly, an explicit pane id
+    /// cancels one, bare follows focus — a bare global nuke with no
+    /// warning wiped every recovered/running prompt's intent. Callers
+    /// clear their own chat waiters first; returns the ack text.
+    pub async fn cancel_scoped(self: &Arc<Self>, pane_arg: &str) -> String {
+        // First word only (`/cancel w1:p1 extra` still names the pane);
+        // `all` is case-insensitive. Hash-only (`#`) is a typo, never
+        // focus: fall through to the no-job message with the raw echo.
+        let raw = pane_arg.split_whitespace().next().unwrap_or("").trim();
+        let arg = raw.trim_start_matches('#');
+        let running: Vec<String> = {
+            let mut v: Vec<String> = self.jobs.lock().await.keys().cloned().collect();
+            for p in self.pending.lock().await.keys() {
+                if !v.contains(p) {
+                    v.push(p.clone());
+                }
+            }
+            v.sort();
+            v
+        };
+        if arg.eq_ignore_ascii_case("all") {
+            let n = running.len();
+            self.cancel_all_jobs().await;
+            return format!("✋ cancelled {n} pending job(s) (all panes)");
+        }
+        let list = if running.is_empty() {
+            "none".to_string()
+        } else {
+            running.join(", ")
+        };
+        let target: Option<String> = if !arg.is_empty() {
+            Some(arg.to_string())
+        } else if !raw.is_empty() {
+            // Hash-only typo: surface it instead of cancelling focus.
+            Some(raw.to_string())
+        } else {
+            self.get_focus().await
+        };
+        match target {
+            Some(p) if running.contains(&p) => {
+                self.cancel_jobs_for(&p).await;
+                format!("✋ cancelled {p}")
+            }
+            Some(p) => format!("no job for {p} — running: {list}"),
+            None => format!("nothing focused — running: {list} — /cancel <pane> or /cancel all"),
+        }
+    }
+
     /// True when the durable intent still belongs to this exact submit.
     /// One slot per pane is shared by agent prompts and shell commands —
     /// last-writer-wins by overwrite — so waiters must only serve (and
@@ -86,6 +135,14 @@ impl State {
         self.limit_seen.lock().await.remove(pane);
         self.limit_miss.lock().await.remove(pane);
         self.limit_send_cool.lock().await.remove(pane);
+    }
+
+    /// End ALL stall episodes (global /cancel starts every pane fresh).
+    pub async fn clear_all_limit_episodes(&self) {
+        self.limit_alert.lock().await.clear();
+        self.limit_seen.lock().await.clear();
+        self.limit_miss.lock().await.clear();
+        self.limit_send_cool.lock().await.clear();
     }
 
     /// Drop armed input waiters for a dead pane: a typewait surviving

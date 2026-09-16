@@ -52,6 +52,17 @@ pub async fn answer_tap(
         s.remember(chat, mid, pane).await;
         return;
     };
+    // A button tap supersedes an armed typed answer for THIS pane: drop
+    // the waiter so the next message prompts instead of typing into the
+    // turned-over dialog the tap just answered. After the claim (a
+    // contended tap must not eat the waiter) and only on pane match —
+    // DM shares one (chat,None) key across panes.
+    {
+        let mut tw = s.typewait.lock().await;
+        if tw.get(&(chat, thread)).map(|p| p == pane).unwrap_or(false) {
+            tw.remove(&(chat, thread));
+        }
+    }
     println!("[tap] {pane} action={action}");
     let call = tap_keys(&s.cfg.socket, pane, action).await;
     match call {

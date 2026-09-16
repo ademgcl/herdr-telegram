@@ -124,6 +124,9 @@ pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pan
 /// transition. Skips while a tap is in flight (it owns the update) and
 /// when fresh herdr truth says the pane already moved on.
 pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
+    // Taps own the update: a tap in flight wins over an observation.
+    // Refresh-refresh single-flight happens at send time below (claim +
+    // sig re-check), so a slow watchdog read never rejects user taps.
     if s.blockop.lock().await.contains(pane) {
         return false;
     }
@@ -164,6 +167,20 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     // Baseline follows delivery: a dropped card stays "new" (sig
     // unstamped on failure), so the next observation reposts from an
     // intact baseline instead of skewing the later idle delta.
+    // Send-time single-flight: claim, then re-check the sig — a racing
+    // refresh/tap that posted while we were reading wins, we stand down.
+    let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
+        return false;
+    };
+    if s.blocked_sig
+        .lock()
+        .await
+        .get(pane)
+        .map(|v| v == &sig)
+        .unwrap_or(false)
+    {
+        return false;
+    }
     let posted = if let Some(forum) = s.cfg.forum {
         let thread = s.topics.all_mappings().get(pane).copied();
         send_with(s, forum, thread, pane, &screen).await

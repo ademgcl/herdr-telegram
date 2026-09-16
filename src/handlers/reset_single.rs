@@ -75,7 +75,7 @@ pub async fn run_single_topic_reset(
     };
     let census = tab_census(&facts);
 
-    s.cancel_jobs_for(&pane).await;
+    let had_job = s.cancel_jobs_for(&pane).await;
 
     let (kind, status, raw_title) = if let Ok(agent) = get_agent(&s.cfg.socket, &pane).await {
         let title = facts
@@ -126,7 +126,14 @@ pub async fn run_single_topic_reset(
             let old_desc = old_thread
                 .map(|t| format!("#{t}"))
                 .unwrap_or_else(|| "none".into());
-            let msg = format!("✅ Reset topic for {pane} ({kind}): old {old_desc} → new #{new_th}");
+            let suffix = if had_job {
+                " (running prompt cancelled — re-prompt to resume)"
+            } else {
+                ""
+            };
+            let msg = format!(
+                "✅ Reset topic for {pane} ({kind}): old {old_desc} → new #{new_th}{suffix}"
+            );
             if chat != 0 {
                 s.tg.send_msg(chat, thread_id, &msg, None).await;
             }

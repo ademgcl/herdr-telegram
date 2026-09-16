@@ -29,14 +29,20 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     if crate::handlers::reset::is_resetting() {
         return;
     }
-    let current = s.debounce.lock().await.get(&pane).cloned();
-    if current
-        .map(|(st, at)| st != settled || at != armed_at)
-        .unwrap_or(true)
     {
-        return;
+        // Single guard: a newer arm inserted between a separate get and
+        // remove would be deleted with the stale one (dropped answer).
+        let mut db = s.debounce.lock().await;
+        let cur = db.get(&pane).cloned();
+        if cur
+            .as_ref()
+            .map(|(st, at)| st != &settled || at != &armed_at)
+            .unwrap_or(true)
+        {
+            return;
+        }
+        db.remove(&pane);
     }
-    s.debounce.lock().await.remove(&pane);
     if s.jobs.lock().await.contains_key(&pane) {
         return;
     }
@@ -139,7 +145,55 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     {
         return;
     }
-    if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at)).await {
+    // Bounded retry on SEND outage only: a blip exactly at settle must
+    // not eat a one-shot reply no future transition would surface. Two
+    // extra tries, then the next transition owns it as before. Refusals
+    // (job takeover, newer last_done, newer arm, status moved on) break
+    // instead of spinning 30s on a stale screen; reset aborts the loop.
+    let mut delivered = false;
+    for _ in 0..3 {
+        if crate::handlers::reset::is_resetting() {
+            break;
+        }
+        if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at)).await
+        {
+            delivered = true;
+            break;
+        }
+        if s.jobs.lock().await.contains_key(&pane) {
+            break;
+        }
+        if s.last_done
+            .lock()
+            .await
+            .get(&pane)
+            .map(|t| *t > armed_at)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        // A newer arm owns the reply now (stale body must not beat it).
+        if s.debounce.lock().await.contains_key(&pane) {
+            break;
+        }
+        // Spontaneous new work started mid-retry: down-window silence.
+        let moved_on = s
+            .status
+            .lock()
+            .await
+            .get(&pane)
+            .map(|st| {
+                st != &settled
+                    && !(matches!(settled.as_str(), "idle" | "done")
+                        && matches!(st.as_str(), "idle" | "done"))
+            })
+            .unwrap_or(true);
+        if moved_on {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(15)).await;
+    }
+    if delivered {
         s.seen.lock().await.insert(pane.clone(), screen);
     }
 }

@@ -60,13 +60,36 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         s.keywait.lock().await.remove(&(chat, Some(thread_id)));
         s.runwait.lock().await.remove(&(chat, Some(thread_id)));
         s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+        // Non-empty arg routes via scope (all | pane id); bare cancels
+        // this topic's pane (never focus — topics name their pane).
+        if arg.split_whitespace().next().is_some() {
+            let msg = s.cancel_scoped(arg).await;
+            s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
+            return;
+        }
         let n = s.cancel_jobs_for(pane).await;
         let msg = if n {
-            "✋ cancelled pane job"
+            format!("✋ cancelled {pane}")
         } else {
-            "shell mode — nothing running"
+            format!("nothing running for {pane}")
         };
-        s.tg.send_msg(chat, Some(thread_id), msg, None).await;
+        s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
+        return;
+    }
+    // Never-stuck escapes precede run/key waiters: an armed waiter must
+    // never eat /card or /esc as keys or a command.
+    if cmd == "/card" {
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            "this is a shell — nothing to answer.",
+            None,
+        )
+        .await;
+        return;
+    }
+    if cmd == "/esc" {
+        super::escape::handle_esc_shell(&s, chat, Some(thread_id), pane).await;
         return;
     }
     if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
@@ -88,20 +111,6 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
                     .await;
             }
         }
-        return;
-    }
-    if cmd == "/card" {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "this is a shell — nothing to answer.",
-            None,
-        )
-        .await;
-        return;
-    }
-    if cmd == "/esc" {
-        super::escape::handle_esc_shell(&s, chat, Some(thread_id), pane).await;
         return;
     }
     if cmd == "/keys" {

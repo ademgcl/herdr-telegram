@@ -67,15 +67,25 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                     s.clear_pane(pane).await;
                 }
             }
-            s.status.lock().await.retain(|p, _| live.contains(p));
             s.seen.lock().await.retain(|p, _| live.contains(p));
             s.last_done.lock().await.retain(|p, _| live.contains(p));
-            // Atomic with status (order status→last_change).
-            s.last_change.lock().await.retain(|p, _| live.contains(p));
+            // status+last_change under one scope (order status→last_change,
+            // no awaits inside): an event inserting between torn retains
+            // would orphan status without its change instant and skip
+            // flap-collapse on the next bounce.
+            {
+                let mut st = s.status.lock().await;
+                let mut lc = s.last_change.lock().await;
+                st.retain(|p, _| live.contains(p));
+                lc.retain(|p, _| live.contains(p));
+            }
             s.limit_alert.lock().await.retain(|p, _| live.contains(p));
             s.limit_seen.lock().await.retain(|p, _| live.contains(p));
             s.limit_miss.lock().await.retain(|p, _| live.contains(p));
-            s.limit_send_cool.lock().await.retain(|p, _| live.contains(p));
+            s.limit_send_cool
+                .lock()
+                .await
+                .retain(|p, _| live.contains(p));
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
             s.modelop.lock().await.retain(|p| live.contains(p));
@@ -123,10 +133,22 @@ mod tests {
         let (s, _dir) = isolated_state();
         let dead_job = Job::new(vec![], 1, None);
         let live_job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("dead:p1".into(), dead_job.clone());
-        s.jobs.lock().await.insert("live:p1".into(), live_job.clone());
-        s.status.lock().await.insert("dead:p1".into(), "working".into());
-        s.status.lock().await.insert("live:p1".into(), "working".into());
+        s.jobs
+            .lock()
+            .await
+            .insert("dead:p1".into(), dead_job.clone());
+        s.jobs
+            .lock()
+            .await
+            .insert("live:p1".into(), live_job.clone());
+        s.status
+            .lock()
+            .await
+            .insert("dead:p1".into(), "working".into());
+        s.status
+            .lock()
+            .await
+            .insert("live:p1".into(), "working".into());
         let mut cache = Some(HashSet::from(["live:p1".to_string()]));
         reap_orphans(&s, &mut cache).await;
         assert!(!s.jobs.lock().await.contains_key("dead:p1"));

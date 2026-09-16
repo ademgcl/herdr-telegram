@@ -210,7 +210,7 @@ pub fn help_text() -> &'static str {
      /card     re-post the question + buttons (never stuck)\n\
      /esc      guarded Esc: dismiss, blocked-only\n\
      /status   refresh agent status card\n\
-     /cancel   abort prompts / exit keys-mode\n\
+      /cancel [all|<pane>] abort focused job(s), all = everything / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
      ↩️ reply to any bot message → talks to that agent\n\
      plain text → focused agent\n\n\
@@ -231,9 +231,9 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
           • `/space [name]` — new space + shell topic\n\
           • `/split [right|down]` — sibling shell pane in this tab\n\
            • `/keys y enter` — send keystrokes\n\
-         • `/cancel` — abort running prompt\n\
-         • `/status` — refresh agent status card\n\
-         • ✏️ rename this topic = renames in herdr (kept in sync)"
+          • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
+          • `/status` — refresh agent status card\n\
+          • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
 }
 
@@ -245,7 +245,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • `opencode` — re-enter the agent\n\
          • `/read` — recent shell output (`/output` too)\n\
          • `/esc` — send Esc (vim toggles mode)\n\
-         • `/cancel` — abort running prompt\n\
+          • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
          • `/keys y enter` — send keystrokes\n\
           • `/kill` — close this pane completely (confirms first)\n\
          • `/split [right|down]` — sibling shell pane in this tab\n\
