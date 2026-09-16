@@ -1,3 +1,7 @@
+//! Prompt watcher loop: event stream + 5s fallback tick, live-message
+//! streaming, stall watch, and settle→finalize on completion. Split
+//! from `finalize`/`settle` (300-line file limit). One task per prompt;
+//! supersede/cancel retire via epoch + cancel signal, never by killing.
 use crate::jobs::episode::BuzzEpisode;
 use crate::jobs::stall::watch_stall;
 use crate::{
@@ -5,7 +9,7 @@ use crate::{
     jobs::finalize::{edit_live, fold_live},
     jobs::job::Job,
     jobs::segment::final_block,
-    jobs::settle::{SettleStep, settle_step},
+    jobs::settle::{SettleStep, SettledArm, settle_step},
     jobs::stream::{EvStream, WatchEvent, delta},
     state::AppState,
     types::LIVE_EDIT_COOLDOWN_SECS,
@@ -67,8 +71,10 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // First settled sample arms the report timer (see settle.rs): agy
     // idles briefly between phases mid-run, and retiring on that
     // transient leaves the agent working unwatched. Cleared on working
-    // samples, herdr errors, and epoch changes.
-    let mut settled_since: Option<Instant> = None;
+    // samples, herdr errors, and epoch changes. Tracks the arming kind:
+    // done→blocked→idle flips re-arm instead of committing as one
+    // persistence.
+    let mut settled_since: SettledArm = None;
 
     loop {
         if job.is_stopped() {

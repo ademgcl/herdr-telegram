@@ -1,3 +1,5 @@
+//! Message reactions (`setMessageReaction`) + message-effect sends.
+//! Split from `client` (300-line file limit).
 use super::client::TelegramClient;
 use crate::types::Res;
 use serde_json::{Value, json};

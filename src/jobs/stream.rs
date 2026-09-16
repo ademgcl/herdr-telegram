@@ -14,7 +14,10 @@ pub enum WatchEvent {
 }
 
 /// Persistent per-pane subscription to `pane.scroll_changed` and
-/// `pane.agent_status_changed` on its own unix socket.
+/// `pane.agent_status_changed` on its own unix socket. Dials directly
+/// (not via `herdr::rpc`) on purpose: `rpc()` consumes the connection
+/// for one request/reply, while this needs the split halves held open
+/// for a long-lived subscription + ack check.
 pub struct EvStream {
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
 }

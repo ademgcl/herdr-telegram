@@ -1,3 +1,8 @@
+//! Prompt result finalization: turn the live message into the final
+//! card. Split from `runner` (300-line file limit). `watch_job` calls
+//! `finalize` on settle; `enqueue_prompt` reports submit errors.
+//! Stamps (baseline, done-mark, books) are epoch-gated: a submit landing
+//! mid-RPC owns the pane, and the old prompt must stamp nothing.
 use crate::{
     handlers::dialog::send_blocked_card,
     herdr::client::read_screen_adaptive,
@@ -75,7 +80,6 @@ pub async fn finalize(
     if body.is_empty() && snapshot.is_empty() {
         if matches!(settled, "dead" | "closed" | "exited") {
             println!("[prompt] finalize {pane}: pane gone with no output, retiring");
-            s.seen.lock().await.insert(pane.to_string(), snapshot);
             // A submit racing the settle read retargets everything: the
             // epoch handoff below owns the live slot then, so fold only
             // for the prompt that is still current.
@@ -83,6 +87,7 @@ pub async fn finalize(
                 acc.clear();
                 return false;
             }
+            s.seen.lock().await.insert(pane.to_string(), snapshot);
             // Fold the live slot: retiring with it set would orphan a
             // frozen "working…" card (the caller only drops the address
             // when the slot is already consumed).
@@ -128,12 +133,17 @@ pub async fn finalize(
         // Silent icon sync (later observations dedupe via blocked_sig).
         observe_status(s, pane, settled, true, "job").await;
         if posted {
-            s.last_done
-                .lock()
-                .await
-                .insert(pane.to_string(), std::time::Instant::now());
-            // Anchor the baseline so later settles don't repost the dialog.
-            s.seen.lock().await.insert(pane.to_string(), snapshot);
+            // A submit landing during the card post owns the pane now:
+            // stamp nothing, or the new prompt's fresh output anchors
+            // away into the old prompt's baseline.
+            if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+                s.last_done
+                    .lock()
+                    .await
+                    .insert(pane.to_string(), std::time::Instant::now());
+                // Anchor the baseline so later settles don't repost the dialog.
+                s.seen.lock().await.insert(pane.to_string(), snapshot);
+            }
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -161,7 +171,10 @@ pub async fn finalize(
                 .await;
             let _ = s.tg.set_reaction(chat, mid, Some("✅")).await;
         }
-        s.seen.lock().await.insert(pane.to_string(), snapshot);
+        // Superseded during the RPCs above: stamp nothing (blocked-path rule).
+        if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+            s.seen.lock().await.insert(pane.to_string(), snapshot);
+        }
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return false;
     }

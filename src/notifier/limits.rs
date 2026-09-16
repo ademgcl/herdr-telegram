@@ -141,6 +141,12 @@ pub(crate) async fn scan_limits(s: &AppState) {
                 s.remember(*id, mid, &pane).await;
             }
         }
-        println!("[alert] limit stall {pane}: {} ({})", hit.kind, hit.excerpt);
+        // Screen excerpts stay out of the log (terminal content can hold
+        // secrets); kind + length are enough for stall forensics.
+        println!(
+            "[alert] limit stall {pane}: {} ({} chars)",
+            hit.kind,
+            hit.excerpt.chars().count()
+        );
     }
 }

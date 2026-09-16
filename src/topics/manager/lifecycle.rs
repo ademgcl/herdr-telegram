@@ -14,6 +14,10 @@ pub struct ResetNames<'a> {
     /// Tab-derived core; None → stable tag default (never verbatim,
     /// matching the watchdog which never preserves a bare tag).
     pub core: Option<&'a str>,
+    /// Split-tab flag: verbatim-raw survives only when single (the
+    /// watchdog always formats split cores, so a bare re-apply would
+    /// be renamed on the next tick).
+    pub multi: bool,
 }
 
 impl TopicManager {
@@ -201,11 +205,14 @@ impl TopicManager {
     /// F6 + F3: Paced reset for a single pane:
     /// 1. Look up existing thread and recent messages before deletion.
     /// 2. Mint new topic on Telegram.
-    /// 3. Set context icon (or preserve user icon).
-    /// 4. Copy recent messages from the old topic to the new topic (F6).
-    /// 5. Sweep any pins and pin fresh identity card (F3 + F2).
-    /// 6. Delete old topic on Telegram (if one existed).
-    /// 7. Update storage mappings to the new thread.
+    /// 3. Record the new mapping immediately (insert-before-delete: a
+    ///    crash must never leave the mapping pointing at a deleted
+    ///    thread — a leftover old topic is just an orphan, while the
+    ///    mapping stays valid).
+    /// 4. Set context icon (or preserve user icon).
+    /// 5. Copy recent messages from the old topic to the new topic (F6).
+    /// 6. Sweep any pins and pin fresh identity card (F3 + F2).
+    /// 7. Delete old topic on Telegram (if one existed).
     pub async fn reset_topic(
         &self,
         pane: &str,
@@ -225,9 +232,13 @@ impl TopicManager {
         // Same `naming_core` source as the watchdog: no drift.
         let pre = self.storage.get_title(pane);
         let name = match names.core {
-            Some(core) => {
-                crate::handlers::title_rules::reset_desired_title(pre.as_deref(), space, core, kind)
-            }
+            Some(core) => crate::handlers::title_rules::reset_desired_title(
+                pre.as_deref(),
+                space,
+                core,
+                kind,
+                names.multi,
+            ),
             None => names::format_title(space, &tag, kind),
         };
 
@@ -241,11 +252,16 @@ impl TopicManager {
             }
         };
 
+        // Record the mapping before touching the old topic (see step 3).
+        self.storage
+            .insert_with_title(pane.to_string(), new_thread, &name);
+
         // Icon: preserve user-customized icon if one was set, else context icon
         let icon = self
             .storage
             .get_icon(pane)
             .unwrap_or_else(|| names::context_icon_emoji_id(kind).to_string());
+        self.storage.set_icon(pane, &icon);
         let _ = self.tg.set_topic_icon(forum, new_thread, &icon).await;
 
         // F6: copy recent messages to the new topic before old topic is deleted
@@ -265,15 +281,12 @@ impl TopicManager {
             self.storage.set_pin(pane, mid);
         }
 
-        // Delete old topic now that messages are copied
+        // Delete old topic now that the mapping already points at the
+        // new one (a crash here leaves an orphan, never a corpse mapping).
         if let Some(old) = old_thread {
             let _ = self.tg.delete_forum_topic(forum, old).await;
         }
 
-        // Update storage with new thread mapping and title
-        self.storage
-            .insert_with_title(pane.to_string(), new_thread, &name);
-        self.storage.set_icon(pane, &icon);
         println!(
             "[reset] migrated topic for {pane}: #{:?} → #{new_thread}",
             old_thread

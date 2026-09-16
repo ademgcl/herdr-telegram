@@ -13,7 +13,7 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 
 ## 2. Layout
 
-- `main.rs` init/loop · `types.rs` · `config.rs` · `state/` shared State · `herdr/` socket layer · `telegram/` HTTP layer · `topics/` forum topics · `handlers/` updates · `jobs/` prompts · `notifier/` alerts · `ui/` views
+- `main.rs` init/loop · `types.rs` · `config.rs` · `ctl.rs` + `ctl_auth.rs` + `ctl_cmd.rs` local control socket · `state/` shared State · `herdr/` socket layer · `telegram/` HTTP layer · `topics/` forum topics · `handlers/` updates · `jobs/` prompts · `notifier/` alerts · `ui/` views
 - Details live in per-file module docs — read them, don't duplicate here.
 
 ## 3. Behavior

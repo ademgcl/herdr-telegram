@@ -10,10 +10,9 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     if text.is_empty() {
         return;
     }
-    println!(
-        "[dm] from {chat}: {}",
-        text.chars().take(40).collect::<String>()
-    );
+    // Message bodies stay out of the log (DMs can carry pasted
+    // secrets); length suffices for traffic forensics.
+    println!("[dm] message ({} chars)", text.chars().count());
 
     let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),

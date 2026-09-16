@@ -29,10 +29,14 @@ pub(crate) async fn handle_topic_agent_message(
         super::shell_topic::handle_shell_topic(s, chat, thread_id, pane, text).await;
         return;
     };
+    // Args stay out of the log (prompts can carry pasted secrets); the
+    // command word logs only when it IS a command — a bare single-word
+    // prompt would else leak fully, a multi-word one its first word.
     println!(
-        "[forum] got agent {} cmd={arg:?}...",
+        "[forum] got agent {} cmd={} ({} chars)",
         agent.pane,
-        arg = text.chars().take(30).collect::<String>()
+        if cmd.starts_with('/') { cmd } else { "prompt" },
+        text.chars().count()
     );
 
     if cmd == "/help" {

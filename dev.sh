@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # herdr-telegram interactive development, management and test script.
 set -u
+# Private logs/state by default (bot.log can carry chat IDs + excerpts).
+umask 077
 cd "$(dirname "$0")" || exit 1
 
 BIN="./target/debug/herdr-telegram"
@@ -30,6 +32,19 @@ get_port_pid() { lsof -ti ":$PORT" 2>/dev/null | head -n 1; }
 get_bot_pids() { pgrep -f "target/(debug|release)/herdr-telegram" 2>/dev/null || true; }
 checksum() { find src Cargo.toml Cargo.lock -type f -exec stat -f '%m %N' {} + 2>/dev/null | sort | cksum; }
 
+# Mask secrets/PII in displayed output (files untouched):
+# home-dir user, bot tokens, Telegram chat IDs, TELEGRAM_* assignments.
+mask() {
+  local home="${HOME:-/nonexistent-home}"
+  sed -e "s|$home|~|g" \
+      -e 's|/Users/[^ /]*|/Users/***|g' \
+      -e 's|/home/[^ /]*|/home/***|g' \
+      -e 's|\(chat_id *= *\)-\?[0-9][0-9]*|\1***|g' \
+      -e 's|-100[0-9][0-9]*|-100***|g' \
+      -e 's|[0-9]\{6,\}:[A-Za-z0-9_-]\{20,\}|***TOKEN***|g' \
+      -e 's|\(TELEGRAM_[A-Z_]*=\)[^ ]*|\1***|g'
+}
+
 stop_pid() {
   local target_pid="$1" timeout="${2:-5}"
   if [ -n "$target_pid" ] && kill -0 "$target_pid" 2>/dev/null; then
@@ -48,7 +63,7 @@ cleanup_and_exit() { trap - INT TERM EXIT; echo -e "\n${CYAN}[dev] Shutting down
 
 cmd_ctl() {
   if [ ! -x "$BIN" ]; then cargo build || return 1; fi
-  "$BIN" ctl "$@"
+  "$BIN" ctl "$@" | mask
 }
 
 cmd_cleanup() {
@@ -76,7 +91,7 @@ cmd_status() {
     echo -e "  Bot Status:   ${GREEN}Running${NC} (PID: $pids)"
     for p in $pids; do
       ps -o pid,pcpu,pmem,etime,command -p "$p" 2>/dev/null | tail -n +2 | while read -r line; do
-        echo -e "                ${DIM}$line${NC}"
+        echo -e "                ${DIM}$line${NC}" | mask
       done
     done
   else
@@ -85,7 +100,7 @@ cmd_status() {
   [ -n "$port_pid" ] && echo -e "  Guard Port:   ${YELLOW}In use :$PORT${NC} (PID: $port_pid)" || echo -e "  Guard Port:   ${GREEN}Free :$PORT${NC}"
   sock="${HERDR_SOCKET:-$HOME/.config/herdr/herdr.sock}"
   sock="${sock/#\~/$HOME}"
-  [ -S "$sock" ] && echo -e "  Herdr Socket: ${GREEN}Available${NC} ($sock)" || echo -e "  Herdr Socket: ${YELLOW}Not found${NC} ($sock)"
+  [ -S "$sock" ] && echo -e "  Herdr Socket: ${GREEN}Available${NC} ($sock)" | mask || echo -e "  Herdr Socket: ${YELLOW}Not found${NC} ($sock)" | mask
   [ -f "offset.state" ] && echo -e "  Offset State: $(cat offset.state 2>/dev/null)"
   [ -f "topics.state" ] && echo -e "  Topics State: ~$(grep -c '":' topics.state 2>/dev/null || echo 0) titles"
   [ -f "$LOG_FILE" ] && echo -e "  Log File:     $LOG_FILE ($(ls -lh "$LOG_FILE" 2>/dev/null | awk '{print $5}'))"
@@ -97,10 +112,10 @@ cmd_logs() {
   [ ! -f "$LOG_FILE" ] && { echo -e "${YELLOW}$LOG_FILE not created yet.${NC}"; return; }
   if [ "$follow" -eq 1 ]; then
     echo -e "${CYAN}--- $LOG_FILE following live (Ctrl+C to exit) ---${NC}"
-    tail -n "$lines" -f "$LOG_FILE"
+    tail -n "$lines" -f "$LOG_FILE" | mask
   else
     echo -e "${CYAN}--- $LOG_FILE last $lines lines ---${NC}"
-    tail -n "$lines" "$LOG_FILE"
+    tail -n "$lines" "$LOG_FILE" | mask
     echo -e "${CYAN}---------------------------------${NC}"
   fi
 }
@@ -159,7 +174,7 @@ check_health() {
     if [ "$diff" -lt 4 ]; then
       CRASH_COUNT=$((CRASH_COUNT + 1))
       echo -e "\n${RED}⚠️  [dev] Bot exited immediately (within ${diff}s)!${NC}\n${RED}--- Recent Logs ($LOG_FILE) ---${NC}"
-      tail -n 8 "$LOG_FILE" 2>/dev/null; echo -e "${RED}------------------------------${NC}"
+      tail -n 8 "$LOG_FILE" 2>/dev/null | mask; echo -e "${RED}------------------------------${NC}"
       port_pid=$(get_port_pid)
       [ -n "$port_pid" ] && echo -e "${YELLOW}💡 Port $PORT busy (PID: $port_pid). Press [x] to clear it.${NC}"
       if [ "$CRASH_COUNT" -ge 3 ]; then

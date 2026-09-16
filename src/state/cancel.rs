@@ -172,3 +172,124 @@ impl State {
         }
     }
 }
+
+/// Isolated AppState for tests (shared by cancel/hygiene/ctl suites).
+/// Cancel + reap paths persist jobs.state, so tests must never touch the
+/// repo's live files: each call mints a fresh temp state dir. Env is
+/// set-and-left (unique dir per call — restoring would race parallel
+/// tests worse). No other test reads HERDR_STATE_DIR; the live bot is a
+/// separate process. Edition 2024 marks env mutation unsafe — justified
+/// here by the above.
+#[cfg(test)]
+pub(crate) struct TestStateDir {
+    path: std::path::PathBuf,
+}
+
+#[cfg(test)]
+impl Drop for TestStateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+#[cfg(test)]
+static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
+    let n = TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("ht-{n}-{nanos}"));
+    std::fs::create_dir_all(&path).expect("test tempdir");
+    unsafe { std::env::set_var("HERDR_STATE_DIR", &path) };
+    let cfg = crate::config::Cfg {
+        token: "test-token".to_string(),
+        socket: "nonexistent-test.sock".to_string(),
+        owners: vec![],
+        forum: None,
+    };
+    let s = super::State::new(cfg).expect("test state");
+    (s, TestStateDir { path })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs::job::Job;
+    use crate::jobs::persist::PendingPrompt;
+
+    fn prompt(chat: i64) -> PendingPrompt {
+        PendingPrompt { chat, thread: None, prompt: "hi".into(), started_unix: 0 }
+    }
+
+    #[tokio::test]
+    async fn test_cancel_retires_job_and_bumps_epoch() {
+        let (s, _dir) = isolated_state();
+        let job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), job.clone());
+        s.pending.lock().await.insert("t:p1".into(), prompt(1));
+        assert!(s.cancel_jobs_for("t:p1").await);
+        assert!(job.is_stopped());
+        assert_eq!(job.epoch.load(Ordering::Relaxed), 1);
+        assert!(!s.jobs.lock().await.contains_key("t:p1"));
+        assert!(!s.pending.lock().await.contains_key("t:p1"));
+    }
+
+    #[tokio::test]
+    async fn test_remove_if_same_is_last_writer_wins() {
+        let (s, _dir) = isolated_state();
+        let old = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), old.clone());
+        assert!(State::remove_if_same(&s.jobs, "t:p1", &old).await);
+        // Successor inserted after the snapshot survives.
+        let a = Job::new(vec![], 1, None);
+        let b = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), a.clone());
+        s.jobs.lock().await.insert("t:p1".into(), b.clone());
+        assert!(!State::remove_if_same(&s.jobs, "t:p1", &a).await);
+        assert!(Arc::ptr_eq(
+            &s.jobs.lock().await.get("t:p1").unwrap().clone(),
+            &b
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_quiet_retires_silently() {
+        // Quiet retire removes the job like loud but without the cancel
+        // notify (the parked watcher exits silently via is_stopped).
+        let (s, _dir) = isolated_state();
+        let job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), job.clone());
+        assert!(s.cancel_jobs_for_quiet("t:p1").await);
+        assert!(job.is_stopped());
+        assert_eq!(job.epoch.load(Ordering::Relaxed), 1);
+        assert!(!s.jobs.lock().await.contains_key("t:p1"));
+    }
+
+    #[tokio::test]
+    async fn test_job_only_preserves_pending_intent() {
+        // Already-shell branch: stale watcher dies, live shell intent stays.
+        let (s, _dir) = isolated_state();
+        let job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), job.clone());
+        s.pending.lock().await.insert("t:p1".into(), prompt(1));
+        assert!(s.cancel_job_only_for("t:p1").await);
+        assert!(job.is_stopped());
+        assert!(s.pending.lock().await.contains_key("t:p1"));
+    }
+
+    #[tokio::test]
+    async fn test_cancel_all_counts_and_stops() {
+        let (s, _dir) = isolated_state();
+        let a = Job::new(vec![], 1, None);
+        let b = Job::new(vec![], 2, None);
+        s.jobs.lock().await.insert("t:p1".into(), a.clone());
+        s.jobs.lock().await.insert("t:p2".into(), b.clone());
+        assert_eq!(s.cancel_all_jobs().await, 2);
+        assert!(a.is_stopped() && b.is_stopped());
+        assert!(s.jobs.lock().await.is_empty());
+    }
+}

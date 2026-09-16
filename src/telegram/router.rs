@@ -6,6 +6,14 @@ use crate::{
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Strip newlines from user-controlled titles before logging: logged
+/// titles must never forge log lines.
+fn log_safe(s: &str) -> String {
+    s.chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .collect()
+}
+
 pub async fn handle_update(s: AppState, u: &Value) {
     let kind = if u.get("callback_query").is_some() {
         "callback"
@@ -27,14 +35,16 @@ pub async fn handle_update(s: AppState, u: &Value) {
     if let Some(member) = u.get("my_chat_member") {
         let from = member["from"]["id"].as_i64().unwrap_or(0);
         let chat = &member["chat"];
-        let chat_id = chat["id"].as_i64().unwrap_or(0);
         let title = chat["title"].as_str().unwrap_or("");
         // Read the actual membership change: a kick/leave must not log as
         // an add (the removal case is when this log matters most).
         let status = member["new_chat_member"]["status"].as_str().unwrap_or("?");
         if s.cfg.owners.contains(&from) {
+            // Forensics need the group name, not numeric IDs: titles
+            // suffice, IDs stay out of the log.
             println!(
-                "[telegram] bot membership {status} in group '{title}' (ID: {chat_id}) by owner {from}"
+                "[telegram] bot membership {status} in group '{}'",
+                log_safe(title)
             );
         }
         return;
@@ -108,8 +118,8 @@ pub async fn handle_update(s: AppState, u: &Value) {
             }
         } else {
             println!(
-                "[telegram] message in group {chat_id} ('{}') without TELEGRAM_FORUM_CHAT_ID",
-                msg["chat"]["title"].as_str().unwrap_or("")
+                "[telegram] message in group '{}' without TELEGRAM_FORUM_CHAT_ID (see the setup note posted there)",
+                log_safe(msg["chat"]["title"].as_str().unwrap_or(""))
             );
             if !s.nagged.lock().await.insert(chat_id) {
                 return;
@@ -120,5 +130,17 @@ pub async fn handle_update(s: AppState, u: &Value) {
             );
             s.tg.send_msg(chat_id, th, &note, None).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_log_safe_strips_newlines() {
+        assert_eq!(log_safe("plain"), "plain");
+        assert_eq!(log_safe("a\nb\rc"), "a b c");
+        assert_eq!(log_safe("[x]\nFAKE LOG"), "[x] FAKE LOG");
     }
 }

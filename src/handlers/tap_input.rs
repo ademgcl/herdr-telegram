@@ -11,6 +11,9 @@ use std::time::Duration;
 /// A typed answer that lost its race: the agent resumed between the
 /// snapshot and the send, so the text must become a prompt instead of
 /// input injected into live work.
+/// Kept as a domain enum (not `Res`) on purpose: callers MATCH on
+/// `Resumed` vs `Failed` to route (prompt vs error card) — boxing it
+/// would erase the routing signal.
 #[derive(Debug, PartialEq)]
 pub enum TypeError {
     Resumed,

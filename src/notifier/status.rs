@@ -1,3 +1,7 @@
+//! Per-pane status observer: topic ensure, typing/cards on genuine
+//! transitions, stall-episode bookkeeping. Silent mode ensures without
+//! buzzing (boot seed); event-driven ensures pause during reset (the
+//! reset lock gates topic writes, memory updates continue).
 use crate::{
     handlers::dialog::{refresh_blocked_card, send_blocked_card},
     herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},

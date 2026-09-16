@@ -60,7 +60,8 @@ pub fn cfg_from_env() -> Res<Cfg> {
                 // ids are always positive) — fail loudly instead.
                 Ok(_) => return Err(format!("{k} must be a positive Telegram user id").into()),
                 Err(_) => {
-                    eprintln!("[config] ignoring {k}: not a numeric id ({v:?})");
+                    // Key only: values stay out of the log even when malformed.
+                    eprintln!("[config] ignoring {k}: not a numeric id");
                 }
             }
         }
@@ -102,7 +103,7 @@ pub fn cfg_from_env() -> Res<Cfg> {
                     -(1_000_000_000_000i64 + n)
                 }),
                 Err(_) => {
-                    eprintln!("[config] ignoring forum id: not numeric ({v:?}) — DM-only mode");
+                    eprintln!("[config] ignoring forum id: not numeric — DM-only mode");
                     None
                 }
             }

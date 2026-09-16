@@ -1,3 +1,6 @@
+//! Blocked-dialog option-row parser: which TUI rows are tappable
+//! answers vs key-hint chrome. Pure (no I/O) so it is unit-tested.
+//! Split from `dialog` (300-line file limit).
 use crate::{handlers::model_scan::split_columns, jobs::filter::deframe};
 
 /// Lines that can never be options: key-hint rows and chrome-ish labels.

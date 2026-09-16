@@ -1,3 +1,6 @@
+//! Durable topic identity (pane→thread/tag/title/icon/pins): JSON file
+//! with `.prev` backup, mutex-guarded in memory. Atomic clear-except
+//! covers the reset survivor path. Split into `disk` + `tests`.
 use std::{collections::HashMap, env, path::PathBuf, sync::Mutex};
 
 mod disk;
@@ -21,7 +24,10 @@ impl TopicStorage {
         let home = env::var("HOME").unwrap_or_default();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/topics.json"));
         if !path.exists() && legacy.exists() && std::fs::copy(&legacy, &path).is_ok() {
-            println!("[topics] migrated {} → topics.state", legacy.display());
+            println!(
+                "[topics] migrated {} → topics.state",
+                crate::types::collapse_home(&legacy.display().to_string(), &home)
+            );
         }
         Self::at(path)
     }

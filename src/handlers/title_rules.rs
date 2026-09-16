@@ -51,16 +51,6 @@ pub fn naming_core(tab: Option<&str>, tag: &str, multi: bool) -> Option<String> 
     })
 }
 
-/// Pick the bare core for a topic title: user-visible tab name, else
-/// the stable tag. Terminal/agent titles are NEVER used here — they live
-/// only in the pinned identity card. Multi-pane tabs disambiguate with
-/// the tag (`console` + `o27` → `console o27`), so split siblings never
-/// collide. Empty/whitespace names count as missing (herdr tab names are
-/// never blank in practice — this is just the safety net).
-pub fn pick_core(tab: Option<&str>, tag: &str, multi: bool) -> String {
-    naming_core(tab, tag, multi).unwrap_or_else(|| tag.to_string())
-}
-
 /// Verbatim-preservation predicate: a stored topic title that already
 /// equals the herdr tab name (trim-compared) means a Telegram native
 /// rename just synced both sides — the watchdog must keep it exactly,
@@ -72,9 +62,17 @@ pub fn stored_matches_label(stored: Option<&str>, label: &str) -> bool {
 /// Reset title decision (single call-site for every reset loop, so the
 /// predicate can never drift): a pre-reset stored title equal to the
 /// tab core means the user set it verbatim — re-apply raw, else format.
+/// Split cores can never stay verbatim: the watchdog always formats
+/// them, so a bare re-apply would be renamed on the next tick.
 /// Pure so it is unit-tested.
-pub fn reset_desired_title(pre: Option<&str>, space: &str, label: &str, kind: &str) -> String {
-    if stored_matches_label(pre, label) {
+pub fn reset_desired_title(
+    pre: Option<&str>,
+    space: &str,
+    label: &str,
+    kind: &str,
+    multi: bool,
+) -> String {
+    if !multi && stored_matches_label(pre, label) {
         label.trim().to_string()
     } else {
         crate::topics::names::format_title(space, label, kind)
@@ -84,21 +82,40 @@ pub fn reset_desired_title(pre: Option<&str>, space: &str, label: &str, kind: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::herdr::labels::PaneFacts;
+
+    fn facts(rows: &[(&str, &str, &str)]) -> HashMap<String, PaneFacts> {
+        rows.iter()
+            .map(|(pane, tab, ws)| {
+                (
+                    pane.to_string(),
+                    PaneFacts {
+                        label: None,
+                        ws: ws.to_string(),
+                        tab_id: tab.to_string(),
+                    },
+                )
+            })
+            .collect()
+    }
 
     #[test]
-    fn test_pick_core_prefers_tab() {
-        // User-visible tab name wins; empty/missing falls back to tag.
-        // Terminal titles never reach here (pinned card only).
-        assert_eq!(
-            pick_core(Some("agy_gelistirme"), "a14", false),
-            "agy_gelistirme"
-        );
-        assert_eq!(pick_core(Some("console"), "o27", false), "console");
-        // Split tabs disambiguate with the tag.
-        assert_eq!(pick_core(Some("console"), "o27", true), "console o27");
-        // No tab: stable tag default. Blank counts as missing.
-        assert_eq!(pick_core(None, "o1", false), "o1");
-        assert_eq!(pick_core(Some("  "), "sh1", false), "sh1");
+    fn test_tab_census_counts_split_tabs() {
+        let f = facts(&[("w1:p1", "t1", "a"), ("w1:p2", "t1", "a"), ("w1:p3", "t2", "a")]);
+        let c = tab_census(&f);
+        assert_eq!(c.get("t1"), Some(&2));
+        assert_eq!(c.get("t2"), Some(&1));
+        assert_eq!(c.get("t9"), None);
+    }
+
+    #[test]
+    fn test_tab_of_resolves_split_flag() {
+        let f = facts(&[("w1:p1", "t1", "a"), ("w1:p2", "t1", "a"), ("w1:p3", "", "a")]);
+        let tabs = HashMap::from([("t1".to_string(), "console".to_string())]);
+        let c = tab_census(&f);
+        assert_eq!(tab_of(&f, &tabs, &c, "w1:p1"), (Some("console"), true));
+        assert_eq!(tab_of(&f, &tabs, &c, "w1:p9"), (None, false));
+        assert_eq!(tab_of(&f, &tabs, &c, "w1:p3"), (None, false));
     }
 
     #[test]
@@ -114,26 +131,31 @@ mod tests {
 
     #[test]
     fn test_reset_desired_title_verbatim_or_formatted() {
-        // Verbatim when pre-reset stored equals the tab core.
+        // Verbatim when pre-reset stored equals the tab core (single only).
         assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "My Title", "opencode"),
+            reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false),
             "My Title"
         );
         assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode"),
+            reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false),
             "My Title"
+        );
+        // Split cores always format (watchdog parity — never verbatim).
+        assert_eq!(
+            reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true),
+            "[tg] console o27 · opencode"
         );
         // Formatted otherwise (new/changed cores, case-only changes).
         assert_eq!(
-            reset_desired_title(Some("[tg] api · opencode"), "tg", "backend", "opencode"),
+            reset_desired_title(Some("[tg] api · opencode"), "tg", "backend", "opencode", false),
             "[tg] backend · opencode"
         );
         assert_eq!(
-            reset_desired_title(None, "tg", "backend", "opencode"),
+            reset_desired_title(None, "tg", "backend", "opencode", false),
             "[tg] backend · opencode"
         );
         assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "my title", "opencode"),
+            reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false),
             "[tg] my title · opencode"
         );
     }

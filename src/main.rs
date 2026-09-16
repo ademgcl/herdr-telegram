@@ -1,5 +1,7 @@
 mod config;
 mod ctl;
+mod ctl_auth;
+mod ctl_cmd;
 mod handlers;
 mod herdr;
 mod jobs;
@@ -21,6 +23,15 @@ use crate::{
 };
 use std::time::Duration;
 
+/// Render a path for logs with $HOME collapsed to `~` (no username leak).
+/// Crate-wide log helper (pure core: [`crate::types::collapse_home`]).
+fn home_masked(p: &std::path::Path) -> String {
+    crate::types::collapse_home(
+        &p.display().to_string(),
+        &std::env::var("HOME").unwrap_or_default(),
+    )
+}
+
 #[tokio::main]
 async fn main() -> Res<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -28,7 +39,7 @@ async fn main() -> Res<()> {
         Ok(v) => v
             .trim()
             .parse()
-            .map_err(|_| format!("HERDR_TG_PORT invalid: {v:?}"))?,
+            .map_err(|_| "HERDR_TG_PORT invalid (must be a port number)".to_string())?,
         Err(_) => SINGLE_INSTANCE_PORT,
     };
 
@@ -47,7 +58,9 @@ async fn main() -> Res<()> {
     };
 
     let cfg = cfg_from_env()?;
-    println!("[main] state dir: {}", state::state_dir().display());
+    // Never print the home dir (username) or numeric chat IDs: bot.log is
+    // a local diagnostic file, not a place for identifiers.
+    println!("[main] state dir: {}", home_masked(&state::state_dir()));
     let s = State::new(cfg)?;
     tokio::spawn(ctl::run_control_server(s.clone(), listener));
 
@@ -83,8 +96,8 @@ async fn main() -> Res<()> {
         eprintln!("[herdr] WARNING: unexpected protocol version — commands may fail");
     }
 
-    if let Some(forum_id) = s.cfg.forum {
-        println!("[telegram] forum supergroup enabled: chat_id = {forum_id}");
+    if s.cfg.forum.is_some() {
+        println!("[telegram] forum supergroup mode enabled (chat id masked)");
     } else {
         println!("[telegram] operating in direct message mode");
     }
@@ -99,7 +112,9 @@ async fn main() -> Res<()> {
                 break;
             }
             Err(e) => {
-                menu_err = e.to_string();
+                // Redact like the poll loop: error text can carry the
+                // token in URL form.
+                menu_err = s.tg.redact(&e.to_string());
                 eprintln!("[telegram] setMyCommands failed (attempt {attempt}/3): {menu_err}");
                 if attempt < 3 {
                     tokio::time::sleep(Duration::from_secs(5)).await;
@@ -126,7 +141,7 @@ async fn main() -> Res<()> {
         match s.tg.check_forum_permissions(forum_id).await {
             Ok(perms) => {
                 if !perms.is_admin {
-                    eprintln!("[telegram] WARNING: bot is NOT an admin in forum {forum_id}!");
+                    eprintln!("[telegram] WARNING: bot is NOT an admin in the forum!");
                 } else {
                     println!(
                         "[telegram] bot permissions: manage_topics={}, pin_messages={}, delete_messages={}",

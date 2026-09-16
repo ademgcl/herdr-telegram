@@ -39,12 +39,23 @@ pub fn is_resetting() -> bool {
     RESET_IN_PROGRESS.load(Ordering::SeqCst)
 }
 
-struct ResetGuard;
+/// RAII reset lock: dropping it releases. See [`try_begin_reset`].
+pub struct ResetGuard;
 
 impl Drop for ResetGuard {
     fn drop(&mut self) {
         RESET_IN_PROGRESS.store(false, Ordering::SeqCst);
     }
+}
+
+/// Claim the reset lock (paced and single-topic resets share it, so a
+/// single reset can neither run inside a paced reset nor let the
+/// watchdog rename topics mid-mint). None = already held.
+pub fn try_begin_reset() -> Option<ResetGuard> {
+    RESET_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .ok()
+        .map(|_| ResetGuard)
 }
 
 pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
@@ -80,10 +91,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     }
 
-    if RESET_IN_PROGRESS
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    let Some(_guard) = try_begin_reset() else {
         s.tg.send_msg(
             chat,
             thread_id,
@@ -92,11 +100,13 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         )
         .await;
         return;
-    }
-    let _guard = ResetGuard;
+    };
 
     // Step 0: read Herdr BEFORE any delete — an outage aborts with
     // mappings untouched, never wiping topics we cannot rebuild.
+    // Fail-closed on EVERY read (not just agents): a degraded fetch
+    // mints tag-default titles (facts/tabs) or deletes live shell
+    // topics Step 3 then reads as dead (panes) or mis-spaces them.
     let agents = match list_agents(&s.cfg.socket).await {
         Ok(a) => a,
         Err(_) => {
@@ -111,13 +121,24 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     };
 
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
-    let shell_panes = list_panes(&s.cfg.socket).await.unwrap_or_default();
+    let (Some(spaces), Some(facts), Some(shell_panes), Some(tabs)) = (
+        list_workspaces(&s.cfg.socket).await.ok(),
+        pane_facts(&s.cfg.socket).await.ok(),
+        list_panes(&s.cfg.socket).await.ok(),
+        tab_labels(&s.cfg.socket).await.ok(),
+    ) else {
+        s.tg.send_msg(
+            chat,
+            thread_id,
+            "⚠️ reset aborted: herdr read failed, mappings untouched",
+            None,
+        )
+        .await;
+        return;
+    };
     // Tab-name source (read-only, like the other fetches): reset names
     // topics from the same tab core as the watchdog (`naming_core`), so
     // a verbatim the watchdog keeps survives the migration.
-    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
     let census = tab_census(&facts);
 
     let mappings = s.topics.all_mappings();
@@ -166,6 +187,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         let names = ResetNames {
             card: raw_title,
             core: core.as_deref(),
+            multi,
         };
         match s
             .topics
@@ -199,6 +221,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             let names = ResetNames {
                 card: raw_title,
                 core: core.as_deref(),
+                multi,
             };
             match s
                 .topics

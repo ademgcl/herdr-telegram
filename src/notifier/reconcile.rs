@@ -1,3 +1,7 @@
+//! Watchdog reconcile tick: agent/shell transitions, stall scan,
+//! dead-pane hygiene, and 1:1 tab↔topic titles. All herdr reads are
+//! fail-closed — a degraded fetch skips its block, never reformats or
+//! closes from defaults (mass-revert / mass-close on outage).
 use crate::{
     handlers::reset::is_resetting,
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
@@ -215,11 +219,17 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // 1:1 tab↔topic titles (herdr tab names win; native TG renames
     // flow back via forum_topic_edited). Reuses this tick's rows plus
     // one spaces/facts/tabs fetch — no extra list_agents per tick.
+    // Fail-closed: any degraded fetch skips the tick (never tag/? mass
+    // reformats); an Ok-but-empty facts map is still safe (unknown panes
+    // skip per-pane inside).
     if s.cfg.forum.is_some() {
-        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-        if let Ok(facts) = pane_facts(&s.cfg.socket).await {
-            let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
-            sync_titles_with(s, &rows, &spaces, &facts, &tabs).await;
-        }
+        let (Some(spaces), Some(facts), Some(tabs)) = (
+            list_workspaces(&s.cfg.socket).await.ok(),
+            pane_facts(&s.cfg.socket).await.ok(),
+            tab_labels(&s.cfg.socket).await.ok(),
+        ) else {
+            return;
+        };
+        sync_titles_with(s, &rows, &spaces, &facts, &tabs).await;
     }
 }

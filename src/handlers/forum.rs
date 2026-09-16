@@ -46,9 +46,11 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
         if let Some(mid) = msg["message_id"].as_i64() {
             s.topics.record_msg(&pane, mid);
         }
+        // Bodies stay out of the log (prompts can carry pasted
+        // secrets); pane + length suffice for traffic forensics.
         println!(
-            "[forum] topic msg for {pane}: {}",
-            text.chars().take(40).collect::<String>()
+            "[forum] topic msg for {pane} ({} chars)",
+            text.chars().count()
         );
         super::forum_topic::handle_topic_agent_message(s, chat, th, &pane, text).await;
         return;

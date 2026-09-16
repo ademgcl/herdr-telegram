@@ -31,9 +31,9 @@ impl TelegramClient {
             Ok(v) => v,
             Err(e) => {
                 let msg = e.to_string();
-                if body.get("icon_color").is_some()
-                    && (msg.contains("color") || msg.contains("COLOR"))
-                {
+                // Case-insensitive: Telegram sends `COLOR_INVALID`,
+                // `Icon_color_invalid`, etc. depending on the endpoint.
+                if body.get("icon_color").is_some() && msg.to_lowercase().contains("color") {
                     body.as_object_mut().unwrap().remove("icon_color");
                     self.call_retrying("createForumTopic", body, Duration::from_secs(15))
                         .await?

@@ -58,7 +58,7 @@ pub(crate) async fn handle_model_tap(
             .await;
         }
         Err(e) => {
-            if e.starts_with("no model matches") {
+            if e.to_string().starts_with("no model matches") {
                 // Button predates the picker-grounded rename (e.g. the old
                 // "Contributor" filter): swap the dead card for a fresh one
                 // so the next tap can't miss.

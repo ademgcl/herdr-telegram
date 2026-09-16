@@ -53,3 +53,25 @@ pub struct PromptRequest {
     pub message_thread_id: Option<i64>,
     pub text: String,
 }
+
+/// Collapse $HOME to `~` in a display path (log hygiene: no username
+/// leak). Pure so it is unit-tested; empty home leaves the path alone.
+pub fn collapse_home(path: &str, home: &str) -> String {
+    if home.is_empty() {
+        path.to_string()
+    } else {
+        path.replacen(home, "~", 1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collapse_home() {
+        assert_eq!(collapse_home("/Users/x/.config/a", "/Users/x"), "~/.config/a");
+        assert_eq!(collapse_home("/other/path", "/Users/x"), "/other/path");
+        assert_eq!(collapse_home("/Users/x/a", ""), "/Users/x/a");
+    }
+}

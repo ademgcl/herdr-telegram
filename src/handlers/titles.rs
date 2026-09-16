@@ -65,12 +65,20 @@ pub async fn sync_titles(s: &AppState) {
     if s.cfg.forum.is_none() || s.topics.all_mappings().is_empty() {
         return;
     }
+    // Fail-closed inputs: a degraded fetch must skip the tick, never
+    // reformat every topic from tag/? defaults (mass-revert on outage).
     let Ok(facts) = pane_facts(&s.cfg.socket).await else {
         return;
     };
-    let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+    let Ok(agents) = list_agents(&s.cfg.socket).await else {
+        return;
+    };
+    let Ok(spaces) = list_workspaces(&s.cfg.socket).await else {
+        return;
+    };
+    let Ok(tabs) = tab_labels(&s.cfg.socket).await else {
+        return;
+    };
     sync_titles_with(s, &agents, &spaces, &facts, &tabs).await;
 }
 
@@ -87,6 +95,16 @@ pub async fn sync_titles_with(
         return;
     }
     if s.cfg.forum.is_none() || s.topics.all_mappings().is_empty() {
+        return;
+    }
+    // Hollow-list guard: an Ok-but-empty tabs/spaces map while panes
+    // claim tabs (or agents carry workspaces) is a degraded read, not a
+    // real empty — skipping beats mass-reverting to tag/? defaults.
+    // (Err already skips at both call sites.)
+    if tabs.is_empty() && facts.values().any(|f| !f.tab_id.is_empty()) {
+        return;
+    }
+    if spaces.is_empty() && agents.iter().any(|a| !a.ws.is_empty()) {
         return;
     }
     let kind_of: HashMap<&str, &str> = agents

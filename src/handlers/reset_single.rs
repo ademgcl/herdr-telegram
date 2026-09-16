@@ -12,6 +12,13 @@ use crate::{
     ui::ws_label,
 };
 
+/// Split a reset target: `#627`/`627` → thread id, anything else → pane
+/// name. Pure so the (destructive) reset path's parsing is unit-tested.
+pub fn split_reset_target(target: &str) -> Result<i64, String> {
+    let clean = target.trim().strip_prefix('#').unwrap_or(target.trim());
+    clean.parse::<i64>().map_err(|_| clean.to_string())
+}
+
 pub async fn run_single_topic_reset(
     s: &AppState,
     chat: i64,
@@ -34,19 +41,38 @@ pub async fn run_single_topic_reset(
         return Err(msg.into());
     }
 
-    let clean_target = target.trim().strip_prefix('#').unwrap_or(target.trim());
-    let pane = if let Ok(th) = clean_target.parse::<i64>() {
-        s.topics
-            .storage
-            .get_pane(th)
-            .ok_or_else(|| format!("no pane found for topic #{th}"))?
-    } else {
-        clean_target.to_string()
+    // Share the paced-reset lock: without it the watchdog renames the
+    // topic mid-mint and a concurrent paced reset double-migrates it.
+    let Some(_guard) = super::reset::try_begin_reset() else {
+        let msg = "⚠️ reset already in progress, try again shortly";
+        if chat != 0 {
+            s.tg.send_msg(chat, thread_id, msg, None).await;
+        }
+        return Err(msg.into());
     };
 
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
-    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+    let pane = match split_reset_target(target) {
+        Ok(th) => s
+            .topics
+            .storage
+            .get_pane(th)
+            .ok_or_else(|| format!("no pane found for topic #{th}"))?,
+        Err(p) => p,
+    };
+
+    // Fail-closed like the paced reset: degraded reads must abort, never
+    // mint tag-default titles for a pane whose facts are unknown.
+    let (Some(spaces), Some(facts), Some(tabs)) = (
+        list_workspaces(&s.cfg.socket).await.ok(),
+        pane_facts(&s.cfg.socket).await.ok(),
+        tab_labels(&s.cfg.socket).await.ok(),
+    ) else {
+        let msg = "⚠️ reset aborted: herdr read failed, topic untouched";
+        if chat != 0 {
+            s.tg.send_msg(chat, thread_id, msg, None).await;
+        }
+        return Err(msg.into());
+    };
     let census = tab_census(&facts);
 
     s.cancel_jobs_for(&pane).await;
@@ -87,6 +113,7 @@ pub async fn run_single_topic_reset(
     let names = ResetNames {
         card: raw_title.as_deref(),
         core: core.as_deref(),
+        multi,
     };
 
     let old_thread = s.topics.storage.get_thread(&pane);
@@ -112,5 +139,19 @@ pub async fn run_single_topic_reset(
             }
             Err(msg.into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_reset_target_thread_vs_pane() {
+        assert_eq!(split_reset_target("#627"), Ok(627));
+        assert_eq!(split_reset_target("627"), Ok(627));
+        assert_eq!(split_reset_target("  #627  "), Ok(627));
+        assert_eq!(split_reset_target("w1:p2"), Err("w1:p2".to_string()));
+        assert_eq!(split_reset_target(""), Err("".to_string()));
     }
 }

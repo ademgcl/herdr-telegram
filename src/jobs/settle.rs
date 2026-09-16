@@ -26,18 +26,36 @@ pub enum SettleStep {
     Break,
 }
 
+/// Pure recheck rule: the armed sample's persistence claim holds only
+/// while the status still reads the SAME settled kind. (The timer below
+/// tracks the arming kind, so this documents the rule where the 750ms
+/// recheck applies it.)
+fn confirm_still_valid(sampled: &str, rechecked: &str) -> bool {
+    rechecked == sampled
+}
+
+/// Armed settle timer: when the first settled sample landed + which
+/// kind armed it. Persistence must be same-kind: a settled-kind flip
+/// (done→blocked→idle) re-arms on the new kind instead of committing
+/// the flap as persistence.
+pub type SettledArm = Option<(Instant, String)>;
+
 /// Pure report-commit decision for the settle timer: the first settled
-/// sample arms it, only persistence past [`SETTLED_CONFIRM_SECS`]
-/// commits. Unit-tested — the async wrapper only feeds it samples.
-fn confirm_due(settled_since: &mut Option<Instant>, now: Instant) -> bool {
-    match settled_since {
-        Some(t) if now.duration_since(*t) >= Duration::from_secs(SETTLED_CONFIRM_SECS) => {
-            *settled_since = None;
-            true
+/// sample arms it (recording its kind); only same-kind persistence past
+/// [`SETTLED_CONFIRM_SECS`] commits. A settled-kind flip re-arms on the
+/// new kind. Unit-tested — the async wrapper only feeds it samples.
+fn confirm_due(armed: &mut SettledArm, status: &str, now: Instant) -> bool {
+    match armed {
+        Some((t, kind)) if kind == status => {
+            if now.duration_since(*t) >= Duration::from_secs(SETTLED_CONFIRM_SECS) {
+                *armed = None;
+                true
+            } else {
+                false
+            }
         }
-        Some(_) => false,
-        None => {
-            *settled_since = Some(now);
+        _ => {
+            *armed = Some((now, status.to_string()));
             false
         }
     }
@@ -45,9 +63,10 @@ fn confirm_due(settled_since: &mut Option<Instant>, now: Instant) -> bool {
 
 /// One settle check for a settled-sampled status: flap-collapse, time
 /// confirmation, then `finalize` (with cancellable outage backoff).
-/// `settled_since` arms on the first confirmed sample; the working
-/// recheck below clears it, and the caller clears it on working
-/// samples, herdr errors, and epoch changes.
+/// `settled_since` arms on the first confirmed sample (recording its
+/// kind); the working recheck below clears it, kind flips re-arm it,
+/// and the caller clears it on working samples, herdr errors, and
+/// epoch changes.
 #[allow(clippy::too_many_arguments)]
 pub async fn settle_step(
     s: &AppState,
@@ -58,15 +77,21 @@ pub async fn settle_step(
     live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
     retry_wait: &mut u64,
-    settled_since: &mut Option<Instant>,
+    settled_since: &mut SettledArm,
 ) -> SettleStep {
     // Collapse done↔idle flapping before committing to a report. A
     // failed recheck is unknown, not settled: clear the timer (the
     // caller's herdr-error arm does the same) so a post-outage sample
-    // never counts as persistence spanning the blackout.
+    // never counts as persistence spanning the blackout. A settled-kind
+    // flip (done→blocked→idle) also clears: persistence of one kind is
+    // not persistence of another.
     tokio::time::sleep(Duration::from_millis(750)).await;
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if a.status == "working" => {
+            *settled_since = None;
+            return SettleStep::Continue;
+        }
+        Ok(a) if !confirm_still_valid(status, &a.status) => {
             *settled_since = None;
             return SettleStep::Continue;
         }
@@ -77,10 +102,11 @@ pub async fn settle_step(
         }
         _ => {}
     }
-    // Time-based confirmation: the first settled sample arms the timer,
-    // only persistence commits. Sample counting alone retires on two
-    // sub-second event wakes inside one transient gap.
-    if !confirm_due(settled_since, Instant::now()) {
+    // Time-based confirmation: the first settled sample arms the timer
+    // (recording its kind), only same-kind persistence commits. Sample
+    // counting alone retires on two sub-second event wakes inside one
+    // transient gap.
+    if !confirm_due(settled_since, status, Instant::now()) {
         return SettleStep::Continue;
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
@@ -142,26 +168,56 @@ mod tests {
     #[test]
     fn test_confirm_arms_then_fires_on_persistence() {
         let t0 = Instant::now();
-        let mut since = None;
-        // First settled sample only arms.
-        assert!(!confirm_due(&mut since, t0));
-        assert!(since.is_some());
+        let mut since: SettledArm = None;
+        // First settled sample only arms (recording its kind).
+        assert!(!confirm_due(&mut since, "done", t0));
+        assert_eq!(since.as_ref().map(|(_, k)| k.as_str()), Some("done"));
         // Sub-second event wakes inside one transient never commit.
-        assert!(!confirm_due(&mut since, t0 + Duration::from_millis(800)));
-        assert!(!confirm_due(&mut since, t0 + Duration::from_secs(4)));
-        // Persistence past the gate commits and disarms.
-        assert!(confirm_due(&mut since, t0 + Duration::from_secs(5)));
+        assert!(!confirm_due(&mut since, "done", t0 + Duration::from_millis(800)));
+        assert!(!confirm_due(&mut since, "done", t0 + Duration::from_secs(4)));
+        // Same-kind persistence past the gate commits and disarms.
+        assert!(confirm_due(&mut since, "done", t0 + Duration::from_secs(5)));
         assert!(since.is_none());
     }
 
     #[test]
+    fn test_confirm_rearms_on_kind_flip() {
+        let t0 = Instant::now();
+        let mut since: SettledArm = None;
+        assert!(!confirm_due(&mut since, "done", t0));
+        // done→blocked→idle flips re-arm instead of committing.
+        assert!(!confirm_due(&mut since, "blocked", t0 + Duration::from_secs(4)));
+        assert_eq!(since.as_ref().map(|(_, k)| k.as_str()), Some("blocked"));
+        assert!(!confirm_due(&mut since, "idle", t0 + Duration::from_secs(8)));
+        assert_eq!(since.as_ref().map(|(_, k)| k.as_str()), Some("idle"));
+        // Only 5s of the SAME kind commits.
+        assert!(!confirm_due(&mut since, "idle", t0 + Duration::from_secs(12)));
+        assert!(confirm_due(&mut since, "idle", t0 + Duration::from_secs(13)));
+        assert!(since.is_none());
+    }
+
+    #[test]
+    fn test_recheck_clears_timer_on_kind_flip() {
+        // Same settled kind: persistence claim holds.
+        assert!(confirm_still_valid("done", "done"));
+        assert!(confirm_still_valid("idle", "idle"));
+        assert!(confirm_still_valid("blocked", "blocked"));
+        // Settled-kind flips void it (done→blocked→idle must not commit
+        // as one persistence); working always clears.
+        assert!(!confirm_still_valid("done", "blocked"));
+        assert!(!confirm_still_valid("blocked", "idle"));
+        assert!(!confirm_still_valid("done", "idle"));
+        assert!(!confirm_still_valid("idle", "done"));
+        assert!(!confirm_still_valid("done", "working"));
+    }
+    #[test]
     fn test_confirm_is_event_rate_independent() {
         // Ten rapid wakes inside a 2s transient: still no commit.
         let t0 = Instant::now();
-        let mut since = None;
+        let mut since: SettledArm = None;
         for ms in (0..2000).step_by(200) {
             assert!(
-                !confirm_due(&mut since, t0 + Duration::from_millis(ms)),
+                !confirm_due(&mut since, "idle", t0 + Duration::from_millis(ms)),
                 "must not fire at {ms}ms"
             );
         }

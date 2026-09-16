@@ -14,7 +14,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-mod cancel;
+pub(crate) mod cancel;
 mod jobs;
 
 pub struct State {
@@ -186,7 +186,7 @@ impl State {
                         secs
                     ));
                     let _ = std::fs::copy(Self::offset_file(), &bak);
-                    eprintln!("[main] corrupt offset.state backed up to {}", bak.display());
+                    eprintln!("[main] corrupt offset.state backed up to {}", crate::home_masked(&bak));
                     0
                 }
             },

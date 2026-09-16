@@ -1,3 +1,7 @@
+//! Forum-topic ownership: TopicManager owns Telegram forum-topic CRUD
+//! for mapped threads (create/delete/close/reopen/icon/pins/identity
+//! card); notifier owns alert CARDS (when/what to buzz), ui owns card
+//! TEXT. Mapping state lives in storage; herdr names flow in, never out.
 use crate::{
     telegram::TelegramClient,
     topics::{names, storage::TopicStorage},

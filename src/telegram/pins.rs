@@ -1,3 +1,6 @@
+//! Forum pin primitives: pin-a-message + unpin-all-in-topic. Split
+//! from `client` (300-line file limit). Errors that mean "nothing to
+//! do" (topic gone, not modified, no rights) return Ok.
 use super::client::TelegramClient;
 use crate::types::Res;
 use serde_json::json;
@@ -43,21 +46,6 @@ impl TelegramClient {
                 }
                 Err(e)
             }
-        }
-    }
-
-    /// Unpin a message (one-time cleanup helper).
-    #[allow(dead_code)]
-    pub async fn unpin_msg(&self, chat_id: i64, message_id: i64) {
-        if let Err(e) = self
-            .call(
-                "unpinChatMessage",
-                json!({"chat_id": chat_id, "message_id": message_id}),
-                Duration::from_secs(15),
-            )
-            .await
-        {
-            eprintln!("unpinChatMessage failed: {}", self.redact(&e.to_string()));
         }
     }
 }

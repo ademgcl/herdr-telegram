@@ -1,8 +1,12 @@
 .env
+.env.*
+!.env.example
 target/
 *.state
 *.prev
 *.bak
+*.log
+ctl.token
 bot.log
 bot.pid
 herdr-telegram.log

@@ -58,6 +58,10 @@ pub fn parse_branch_from_head(content: &str) -> Option<String> {
 /// 1. Direct field in herdr response (`branch` or `git_branch`).
 /// 2. Fast filesystem check on `.git/HEAD` or git worktree file.
 /// 3. Subprocess fallback with timeout: `git -C <cwd> branch --show-current`.
+///
+/// Local inspection lives here (not via socket RPC) because herdr
+/// exposes no branch API — it is read-only, 500ms-bounded, and never
+/// mutates anything.
 pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
     if let Some(b) = a["branch"].as_str().or_else(|| a["git_branch"].as_str()) {
         let b = b.trim();

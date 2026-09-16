@@ -109,3 +109,42 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
         None => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{jobs::job::Job, state::cancel::isolated_state};
+
+    #[tokio::test]
+    async fn test_reap_keeps_live_clears_dead() {
+        // Injected pane list: no herdr RPC — dead panes retire, live
+        // panes (jobs, intent, maps) survive untouched.
+        let (s, _dir) = isolated_state();
+        let dead_job = Job::new(vec![], 1, None);
+        let live_job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("dead:p1".into(), dead_job.clone());
+        s.jobs.lock().await.insert("live:p1".into(), live_job.clone());
+        s.status.lock().await.insert("dead:p1".into(), "working".into());
+        s.status.lock().await.insert("live:p1".into(), "working".into());
+        let mut cache = Some(HashSet::from(["live:p1".to_string()]));
+        reap_orphans(&s, &mut cache).await;
+        assert!(!s.jobs.lock().await.contains_key("dead:p1"));
+        assert!(dead_job.is_stopped());
+        assert!(s.jobs.lock().await.contains_key("live:p1"));
+        assert!(!live_job.is_stopped());
+        assert!(!s.status.lock().await.contains_key("dead:p1"));
+        assert!(s.status.lock().await.contains_key("live:p1"));
+    }
+
+    #[tokio::test]
+    async fn test_reap_empty_list_is_fail_open() {
+        // Transient Ok([]) must read as "unknown", never "all dead".
+        let (s, _dir) = isolated_state();
+        let job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("w1:p1".into(), job.clone());
+        let mut cache = Some(HashSet::new());
+        reap_orphans(&s, &mut cache).await;
+        assert!(s.jobs.lock().await.contains_key("w1:p1"));
+        assert!(!job.is_stopped());
+    }
+}

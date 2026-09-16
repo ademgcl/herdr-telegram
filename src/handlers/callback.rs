@@ -15,7 +15,8 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         return;
     };
     if !s.cfg.owners.contains(&from) {
-        println!("[callback] ignoring non-owner tap from {from}");
+        // Intrusion attempts log the event, never the sender id.
+        println!("[callback] ignoring non-owner tap");
         return;
     }
     let chat = cbq["message"]["chat"]["id"].as_i64();

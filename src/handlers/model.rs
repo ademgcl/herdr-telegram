@@ -17,6 +17,7 @@ use super::model_scan::picker_hit;
 use crate::{
     herdr::client::{get_agent, read_screen_visible, send_agent_keys, type_pane_text},
     state::AppState,
+    types::Res,
 };
 
 /// `/model <search>` filter: prefer Zen (free) unless the query already
@@ -134,7 +135,7 @@ pub async fn switch_by_filter(
 }
 
 /// Open the picker; Err (after esc) when it didn't open.
-async fn open_picker(s: &AppState, pane: &str) -> Result<Vec<String>, String> {
+async fn open_picker(s: &AppState, pane: &str) -> Res<Vec<String>> {
     // Close anything already open first (esc on plain input is harmless).
     send_agent_keys(&s.cfg.socket, pane, &["esc"])
         .await
@@ -152,7 +153,7 @@ async fn open_picker(s: &AppState, pane: &str) -> Result<Vec<String>, String> {
         Ok(screen)
     } else {
         let _ = send_agent_keys(&s.cfg.socket, pane, &["esc"]).await;
-        Err("model picker did not open (agent busy?)".to_string())
+        Err("model picker did not open (agent busy?)".into())
     }
 }
 
@@ -167,7 +168,7 @@ pub async fn switch_model(
     pane: &str,
     filter: &str,
     marker: &str,
-) -> Result<String, String> {
+) -> Res<String> {
     // RAII claim: cancellation mid-switch must not wedge the pane.
     let _op = crate::state::OpGuard::claim(&s.modelop, pane)
         .await
@@ -180,7 +181,7 @@ async fn switch_inner(
     pane: &str,
     filter: &str,
     marker: &str,
-) -> Result<String, String> {
+) -> Res<String> {
     let agent = get_agent(&s.cfg.socket, pane)
         .await
         .map_err(|e| e.to_string())?;
@@ -188,10 +189,11 @@ async fn switch_inner(
         return Err(format!(
             "model switching is for opencode agents (this is {})",
             agent.kind
-        ));
+        )
+        .into());
     }
     if !matches!(agent.status.as_str(), "idle" | "done") {
-        return Err(format!("agent is {} — try when idle", agent.status));
+        return Err(format!("agent is {} — try when idle", agent.status).into());
     }
     open_picker(s, pane).await?;
     // Narrow, then confirm the target is actually listed.
@@ -206,7 +208,8 @@ async fn switch_inner(
         close_picker(s, pane).await;
         return Err(format!(
             "no model matches '{filter}' — stale card? run /model again for a fresh list"
-        ));
+        )
+        .into());
     }
     // Re-check idleness: typing must never leak into a working session.
     let busy = get_agent(&s.cfg.socket, pane)
@@ -215,7 +218,7 @@ async fn switch_inner(
         .unwrap_or(true);
     if busy {
         close_picker(s, pane).await;
-        return Err("agent got busy — try when idle".to_string());
+        return Err("agent got busy — try when idle".into());
     }
     send_agent_keys(&s.cfg.socket, pane, &["enter"])
         .await
@@ -234,7 +237,7 @@ async fn switch_inner(
         }
     }
     close_picker(s, pane).await;
-    Err(format!("switch unverified (footer shows '{footer}')"))
+    Err(format!("switch unverified (footer shows '{footer}')").into())
 }
 
 /// Current model label, or None when unreadable. Tries a deeper viewport
