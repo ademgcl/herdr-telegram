@@ -52,6 +52,12 @@ pub(crate) async fn handle_keys(
 }
 
 async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
+    // Never interleave with an owned key sequence (mirrors topic /keys).
+    if s.blockop.lock().await.contains(pane) || s.modelop.lock().await.contains(pane) {
+        s.tg.send_msg(chat, None, "tap/model op in flight — wait a beat", None)
+            .await;
+        return;
+    }
     let key_list: Vec<&str> = keys.split_whitespace().collect();
     match send_agent_keys(&s.cfg.socket, pane, &key_list).await {
         Ok(_) => {
@@ -72,10 +78,28 @@ pub(crate) async fn handle_read(
 ) {
     // Target order matches /status: explicit arg, else replied-to card,
     // else live focus, else the sole agent. An explicit but unknown arg
-    // errors — it must never answer for a different agent.
-    let mut row = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
+    // errors — it must never answer for a different agent. A trailing
+    // (or sole) integer is a line count (`/read w8:p1 50`, `/read 50`),
+    // like topics; pane ids/kinds are never bare numbers, so a numeric
+    // word that resolves as a target stays a target. Wide parse (i64)
+    // so huge counts clamp to 400 instead of erroring on u32 overflow.
+    let (target_arg, lines) = match arg.rsplit_once(char::is_whitespace) {
+        Some((head, tail)) => match tail.parse::<i64>() {
+            Ok(n) if resolve_target(rows, Some(arg)).is_none() => {
+                let head = head.trim();
+                let count = n.clamp(1, 400) as u32;
+                (if head.is_empty() { None } else { Some(head) }, count)
+            }
+            _ => (Some(arg), 80),
+        },
+        None => match arg.parse::<i64>() {
+            Ok(n) if resolve_target(rows, Some(arg)).is_none() => (None, n.clamp(1, 400) as u32),
+            _ => (if arg.is_empty() { None } else { Some(arg) }, 80),
+        },
+    };
+    let mut row = match resolve_target(rows, target_arg) {
         Some(r) => Some(r),
-        None if !arg.is_empty() => {
+        None if target_arg.is_some() => {
             s.tg.send_msg(chat, None, "unknown target — see /agents", None)
                 .await;
             return;
@@ -100,7 +124,7 @@ pub(crate) async fn handle_read(
             .await;
         return;
     };
-    match read_agent_output(&s.cfg.socket, &row.pane, 80).await {
+    match read_agent_output(&s.cfg.socket, &row.pane, lines).await {
         Ok(out) => {
             let body = if out.is_empty() {
                 "(no output)".into()

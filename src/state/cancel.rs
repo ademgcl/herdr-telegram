@@ -106,7 +106,7 @@ impl State {
             return false;
         }
         self.debounce.lock().await.remove(pane);
-        self.stop_typing_unless_owned(pane).await;
+        self.stop_shell_typing(pane).await;
         job.mark_stopped();
         job.epoch.fetch_add(1, Ordering::Relaxed);
         true

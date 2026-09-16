@@ -172,6 +172,19 @@ pub(crate) async fn handle_topic_agent_message(
             return;
         }
         let keys: Vec<&str> = arg.split_whitespace().collect();
+        // Never interleave with an owned key sequence: a tap answer
+        // (blockop) or model switch (modelop) in flight owns the pane's
+        // input until it lands.
+        if s.blockop.lock().await.contains(pane) || s.modelop.lock().await.contains(pane) {
+            s.tg.send_msg(
+                chat,
+                Some(thread_id),
+                "tap/model op in flight — wait a beat",
+                None,
+            )
+            .await;
+            return;
+        }
         match send_agent_keys(&s.cfg.socket, pane, &keys).await {
             Ok(_) => {
                 s.tg.send_msg(chat, Some(thread_id), "⌨️ keys sent", None)
@@ -228,6 +241,11 @@ pub(crate) async fn handle_topic_agent_message(
                     None,
                 )
                 .await;
+            }
+            Err(super::tap::TypeError::Resumed) => {
+                // Resumed between snapshot and send: the text becomes a
+                // regular prompt instead of stray input (mirrors DM).
+                enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
             }
             Err(_) => {
                 super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await;

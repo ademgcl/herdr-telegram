@@ -165,7 +165,7 @@ pub async fn settle_step(
 
 /// Sleep up to `dur`, returning early when the job's epoch moves
 /// (a superseding prompt took over mid-backoff).
-async fn sleep_or_superseded(job: &Arc<Job>, epoch: u64, dur: Duration) {
+pub(crate) async fn sleep_or_superseded(job: &Arc<Job>, epoch: u64, dur: Duration) {
     let end = Instant::now() + dur;
     while job.epoch.load(Ordering::Relaxed) == epoch {
         let left = end.saturating_duration_since(Instant::now());

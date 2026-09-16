@@ -50,6 +50,15 @@ pub const LIVE_TAIL_LINES: u32 = 40;
 /// up to 3 RPCs per scan (500 + 200 fail, 40 lands) — accepted: limit
 /// scans run at most every 5s per prompt pane, 60s per idle pane.
 pub async fn read_screen_for_limits(socket: &str, pane: &str) -> Vec<String> {
+    // Total budget: a sick herdr must not stall the 5s watcher / 60s
+    // watchdog per pane (30s per-RPC timeouts × 3 fallbacks ≈ 90s).
+    // Timeout reads as outage (empty): state preserved, next tick retries.
+    tokio::time::timeout(std::time::Duration::from_secs(45), read_wide(socket, pane))
+        .await
+        .unwrap_or_default()
+}
+
+async fn read_wide(socket: &str, pane: &str) -> Vec<String> {
     if let Ok(text) = read_agent_output(socket, pane, 500).await
         && !text.trim().is_empty()
     {

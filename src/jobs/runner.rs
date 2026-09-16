@@ -9,7 +9,7 @@ use crate::{
     jobs::finalize::{edit_live, fold_live},
     jobs::job::Job,
     jobs::segment::final_block,
-    jobs::settle::{SettleStep, SettledArm, settle_step},
+    jobs::settle::{SettleStep, SettledArm, settle_step, sleep_or_superseded},
     jobs::stream::{EvStream, WatchEvent, delta},
     state::AppState,
     types::LIVE_EDIT_COOLDOWN_SECS,
@@ -172,9 +172,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     println!(
                         "[watcher] {pane} unreachable 12x in a row ({e}) — backing off 60s, intent kept"
                     );
-                    // Cancellable backoff: /cancel must not wait behind it.
+                    // Cancellable backoff: /cancel must not wait behind it,
+                    // and a supersede (epoch bump, never notifies) must not
+                    // stall the handoff for the full minute either.
                     // Same ownership rule as the cancel branch: a replaced
                     // watcher's clear must not eat the new job's intent.
+                    let backoff_epoch = job.epoch.load(Ordering::Relaxed);
                     tokio::select! {
                         _ = job.cancel.notified() => {
                             job.mark_stopped();
@@ -185,7 +188,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                             edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                             break;
                         }
-                        _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+                        _ = sleep_or_superseded(&job, backoff_epoch, Duration::from_secs(60)) => {}
                     }
                     fails = 0;
                 }

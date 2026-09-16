@@ -82,6 +82,20 @@ impl TelegramClient {
                         continue;
                     }
                     attempts += 1;
+                    // `call` turns HTTP-200 `ok:false` bodies into plain
+                    // string errors, so the reqwest downcast below never
+                    // matches them: Telegram 5xx arrives exactly that way
+                    // ("Internal Server Error") and must retry, while the
+                    // fatal shapes above already returned early.
+                    let low = msg.to_lowercase();
+                    let server_markers = [
+                        "internal server error",
+                        "bad gateway",
+                        "service unavailable",
+                        "gateway timeout",
+                        "timed out",
+                        "connection reset",
+                    ];
                     let retryable = e
                         .downcast_ref::<reqwest::Error>()
                         .map(|re| {
@@ -89,7 +103,8 @@ impl TelegramClient {
                                 || re.is_timeout()
                                 || re.status().map(|s| s.is_server_error()).unwrap_or(false)
                         })
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        || server_markers.iter().any(|m| low.contains(m));
                     if !retryable || attempts >= 3 {
                         return Err(e);
                     }

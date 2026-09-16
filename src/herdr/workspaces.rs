@@ -99,6 +99,17 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
         return Err(e);
     }
 
-    let detail = get_agent(socket, &pane).await?;
+    // The verify read can fail on a herdr hiccup AFTER the start
+    // succeeded: don't leak the minted tab+agent (retry would mint
+    // another). A reused root is NOT ours: leave it as a shell.
+    let detail = match get_agent(socket, &pane).await {
+        Ok(d) => d,
+        Err(e) => {
+            if ours {
+                let _ = super::panes::close_pane(socket, &pane).await;
+            }
+            return Err(e);
+        }
+    };
     Ok(detail.into())
 }

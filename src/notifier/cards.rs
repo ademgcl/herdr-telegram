@@ -88,6 +88,12 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     {
         return;
     }
+    // Outage/unknown (Err collapsed above): never anchor an empty
+    // screen — it would wipe a good baseline and repost full scrollback
+    // as fresh on the next settle.
+    if screen.is_empty() {
+        return;
+    }
     let base = s.seen.lock().await.get(&pane).cloned().unwrap_or_default();
     let source: Vec<String> = if base.is_empty() {
         screen.clone()
@@ -98,6 +104,11 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // Baseline anchors on delivery; stray/empty also anchors (same-screen
     // strays must not re-RPC every settle). Drops (topic race, outage)
     // leave the delta for the next tick — see post_spontaneous_card.
+    // Reset started mid-debounce: threads are dying — never sync/post
+    // into the migration (the re-check at wake is 15s+ of RPCs old).
+    if crate::handlers::reset::is_resetting() {
+        return;
+    }
     let info = get_agent(&s.cfg.socket, &pane).await.ok();
     let (kind, ws_id) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone()),
