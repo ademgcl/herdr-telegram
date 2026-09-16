@@ -26,6 +26,23 @@ pub enum SettleStep {
     Break,
 }
 
+/// Pure report-commit decision for the settle timer: the first settled
+/// sample arms it, only persistence past [`SETTLED_CONFIRM_SECS`]
+/// commits. Unit-tested — the async wrapper only feeds it samples.
+fn confirm_due(settled_since: &mut Option<Instant>, now: Instant) -> bool {
+    match settled_since {
+        Some(t) if now.duration_since(*t) >= Duration::from_secs(SETTLED_CONFIRM_SECS) => {
+            *settled_since = None;
+            true
+        }
+        Some(_) => false,
+        None => {
+            *settled_since = Some(now);
+            false
+        }
+    }
+}
+
 /// One settle check for a settled-sampled status: flap-collapse, time
 /// confirmation, then `finalize` (with cancellable outage backoff).
 /// `settled_since` arms on the first confirmed sample; the working
@@ -43,27 +60,28 @@ pub async fn settle_step(
     retry_wait: &mut u64,
     settled_since: &mut Option<Instant>,
 ) -> SettleStep {
-    // Collapse done↔idle flapping before committing to a report.
+    // Collapse done↔idle flapping before committing to a report. A
+    // failed recheck is unknown, not settled: clear the timer (the
+    // caller's herdr-error arm does the same) so a post-outage sample
+    // never counts as persistence spanning the blackout.
     tokio::time::sleep(Duration::from_millis(750)).await;
-    if let Ok(a) = get_agent(&s.cfg.socket, pane).await
-        && a.status == "working"
-    {
-        *settled_since = None;
-        return SettleStep::Continue;
+    match get_agent(&s.cfg.socket, pane).await {
+        Ok(a) if a.status == "working" => {
+            *settled_since = None;
+            return SettleStep::Continue;
+        }
+        Err(e) => {
+            eprintln!("[watcher] {pane} confirming read failed: {e}");
+            *settled_since = None;
+            return SettleStep::Continue;
+        }
+        _ => {}
     }
     // Time-based confirmation: the first settled sample arms the timer,
     // only persistence commits. Sample counting alone retires on two
     // sub-second event wakes inside one transient gap.
-    let now = Instant::now();
-    match settled_since {
-        Some(t) if now.duration_since(*t) >= Duration::from_secs(SETTLED_CONFIRM_SECS) => {
-            *settled_since = None;
-        }
-        Some(_) => return SettleStep::Continue,
-        None => {
-            *settled_since = Some(now);
-            return SettleStep::Continue;
-        }
+    if !confirm_due(settled_since, Instant::now()) {
+        return SettleStep::Continue;
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
     let retry = finalize(s, pane, job, status, live_mid, acc).await;
@@ -79,6 +97,10 @@ pub async fn settle_step(
         // Delivery/read outage: back off (capped) instead of
         // retiring — the intent stays until /cancel or pane death.
         // Cancellable like the unreachable backoff in the runner.
+        // Supersede signals via epoch bump only (never notify), so the
+        // backoff watches it too — else a new prompt landing mid-backoff
+        // stalls its handoff for up to a minute.
+        let epoch_now = job.epoch.load(Ordering::Relaxed);
         tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
@@ -92,10 +114,56 @@ pub async fn settle_step(
                 edit_live(s, chat, th, pane, live_mid, "✋ cancelled").await;
                 return SettleStep::Break;
             }
-            _ = tokio::time::sleep(Duration::from_secs(*retry_wait)) => {}
+            _ = sleep_or_superseded(job, epoch_now, Duration::from_secs(*retry_wait)) => {}
         }
         *retry_wait = (*retry_wait * 2).min(60);
         return SettleStep::Continue;
     }
     SettleStep::Break
+}
+
+/// Sleep up to `dur`, returning early when the job's epoch moves
+/// (a superseding prompt took over mid-backoff).
+async fn sleep_or_superseded(job: &Arc<Job>, epoch: u64, dur: Duration) {
+    let end = Instant::now() + dur;
+    while job.epoch.load(Ordering::Relaxed) == epoch {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        tokio::time::sleep(left.min(Duration::from_millis(250))).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_confirm_arms_then_fires_on_persistence() {
+        let t0 = Instant::now();
+        let mut since = None;
+        // First settled sample only arms.
+        assert!(!confirm_due(&mut since, t0));
+        assert!(since.is_some());
+        // Sub-second event wakes inside one transient never commit.
+        assert!(!confirm_due(&mut since, t0 + Duration::from_millis(800)));
+        assert!(!confirm_due(&mut since, t0 + Duration::from_secs(4)));
+        // Persistence past the gate commits and disarms.
+        assert!(confirm_due(&mut since, t0 + Duration::from_secs(5)));
+        assert!(since.is_none());
+    }
+
+    #[test]
+    fn test_confirm_is_event_rate_independent() {
+        // Ten rapid wakes inside a 2s transient: still no commit.
+        let t0 = Instant::now();
+        let mut since = None;
+        for ms in (0..2000).step_by(200) {
+            assert!(
+                !confirm_due(&mut since, t0 + Duration::from_millis(ms)),
+                "must not fire at {ms}ms"
+            );
+        }
+    }
 }

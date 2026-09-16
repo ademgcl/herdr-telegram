@@ -138,7 +138,14 @@ pub(crate) fn best_hit(
 ) -> Option<(usize, &'static str)> {
     let mut best: Option<(u8, usize, &'static str)> = None;
     for (i, l) in lower.iter().enumerate() {
-        if let Some(kind) = table.iter().find(|(p, _)| l.contains(p)).map(|(_, k)| *k) {
+        // Every pattern on the line competes: first-table-order must not
+        // let a gated match shadow an immediate one on the same line.
+        let line_best = table
+            .iter()
+            .filter(|(p, _)| l.contains(*p))
+            .map(|(_, k)| *k)
+            .min_by_key(|k| kind_priority(k, strong));
+        if let Some(kind) = line_best {
             let better = match best {
                 None => true,
                 // Lower priority wins; ties break bottommost (freshest).
@@ -156,8 +163,9 @@ pub(crate) fn best_hit(
 
 /// Immediate quota/STRONG-auth stalls page at once; WEAK `auth` and
 /// transient-prone banners (`provider`/`error`) are stuck-gated by the
-/// caller instead.
-fn kind_priority(kind: &str, strong: bool) -> u8 {
+/// caller instead. Shared with `detect`'s cross-table pick so both
+/// tables rank by one rule.
+pub(crate) fn kind_priority(kind: &str, strong: bool) -> u8 {
     match (kind, strong) {
         ("rate-limit", _) | ("auth", true) => 0,
         _ => 1,

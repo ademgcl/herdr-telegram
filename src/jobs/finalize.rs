@@ -76,6 +76,13 @@ pub async fn finalize(
         if matches!(settled, "dead" | "closed" | "exited") {
             println!("[prompt] finalize {pane}: pane gone with no output, retiring");
             s.seen.lock().await.insert(pane.to_string(), snapshot);
+            // A submit racing the settle read retargets everything: the
+            // epoch handoff below owns the live slot then, so fold only
+            // for the prompt that is still current.
+            if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+                acc.clear();
+                return false;
+            }
             // Fold the live slot: retiring with it set would orphan a
             // frozen "working…" card (the caller only drops the address
             // when the slot is already consumed).
@@ -243,25 +250,7 @@ pub async fn finalize(
     false
 }
 
-async fn report_done(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    msg: &str,
-) -> bool {
-    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
-    if let Some(m) = mid {
-        let _ = s.tg.set_reaction(chat_id, m, Some("✅")).await;
-        s.remember(chat_id, mid, pane).await;
-        true
-    } else {
-        eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
-        false
-    }
-}
-
-pub use super::report::{edit_live, fold_live, report};
+pub use super::report::{edit_live, fold_live, report, report_done};
 
 /// Cover the prompts owed at entry. A new submit mid-finalize bumps the
 /// epoch: leave its pending count, persisted intent and map entry so the

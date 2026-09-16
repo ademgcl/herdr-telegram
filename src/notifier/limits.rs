@@ -23,9 +23,10 @@ const LIMIT_CLEAR_MISSES: u32 = 2;
 /// Once-per-episode survives noise: empty/outage reads preserve all
 /// state (unknown ≠ clean), a banner must be absent for
 /// [`LIMIT_CLEAR_MISSES`] consecutive clean reads to clear the episode,
-/// gated (`provider`/`error`) banners must persist [`LIMIT_STUCK_SECS`]
-/// before buzzing, and a recent alert suppresses re-pages regardless of
-/// kind (scroll-order flips never spam; the 30-min remind still fires).
+/// gated (`provider`/`error`/WEAK-`auth`) banners must persist
+/// [`LIMIT_STUCK_SECS`] before buzzing, and a recent alert suppresses
+/// re-pages regardless of kind (scroll-order flips never spam; the
+/// 30-min remind still fires).
 pub(crate) async fn scan_limits(s: &AppState) {
     // No nested locks (never hold status across jobs): snapshot working
     // panes, drop, then filter job-owned.

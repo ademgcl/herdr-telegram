@@ -131,9 +131,9 @@ impl State {
             let forum = s.cfg.forum;
             // General-origin jobs never have a thread; topic jobs use
             // theirs. 1:1 working↔typing: while unmapped (mid-job delete
-            // healing), type into General EVERY tick — throttling here
-            // to once-per-3-ticks guarantees an 8s+ visible gap (typing
-            // expires ~5s) mid-job, exactly the reported dropout.
+            // healing), type into General EVERY 4s tick — a ~5s-expiry
+            // indicator must never see a gap (an earlier once-per-3-ticks
+            // throttle left exactly such a dropout mid-job).
             while let Some(chat_id) = forum {
                 let thread = s.topics.all_mappings().get(&pane_str).copied();
                 if let Some(th) = thread {

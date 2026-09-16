@@ -25,13 +25,46 @@ pub async fn report(
     pane: &str,
     msg: &str,
 ) -> bool {
+    send_remembered(s, chat_id, thread_id, pane, msg)
+        .await
+        .is_some()
+}
+
+/// Final-card part delivery with ✅ reaction: shared by `finalize`'s
+/// multi-part post (moved here from `finalize` under the file limit).
+pub async fn report_done(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    msg: &str,
+) -> bool {
+    match send_remembered(s, chat_id, thread_id, pane, msg).await {
+        Some(m) => {
+            let _ = s.tg.set_reaction(chat_id, m, Some("✅")).await;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Send + delivery-track, without any reaction: `report` (plain cards)
+/// and `report_done` (✅ finals) share it so failure logging and intent
+/// tracking can never drift between the two.
+async fn send_remembered(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    msg: &str,
+) -> Option<i64> {
     let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
     if mid.is_none() {
         eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
-        return false;
+        return None;
     }
     s.remember(chat_id, mid, pane).await;
-    true
+    mid
 }
 
 /// Best-effort fold of a live card with NO fallback post: quiet retire

@@ -3,34 +3,42 @@ use super::patterns::{CONTEXT, FATAL_PROVIDER_MARKERS, STRONG, WEAK, best_hit};
 use super::types::LimitHit;
 
 /// Scan a raw pane screen for limit/quota/provider stalls. Strong hits
-/// win immediately; weak hits need screen-wide error context. Multiple
+/// stand alone; weak hits need screen-wide error context. Multiple
 /// banners can co-exist as the TUI scrolls (a stale transient retry line
-/// above a fresh quota banner): immediate kinds (`rate-limit`/STRONG-
-/// `auth`) outrank stuck-gated ones, ties break bottommost (freshest) —
-/// so the card quotes what the user saw last, never a scrolled-off
-/// transient. WEAK `auth` ranks gated: agent prose must never outrank a
-/// fresher provider banner.
+/// above a fresh quota banner): ranking is by (priority, freshness) —
+/// immediate kinds (`rate-limit`/STRONG-`auth`) outrank stuck-gated ones
+/// across BOTH tables, ties break bottommost (freshest) — so the card
+/// quotes what the user saw last, never a scrolled-off transient.
 pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
     let lower: Vec<String> = lines.iter().map(|l| l.to_lowercase()).collect();
-    if let Some((i, kind)) = best_hit(&lower, STRONG, true) {
-        return Some(LimitHit {
-            kind,
-            excerpt: clip(&lines[i]),
-            strong: true,
-        });
-    }
+    let strong_hit = best_hit(&lower, STRONG, true);
     let context = lower.iter().any(|l| CONTEXT.iter().any(|c| l.contains(c)));
-    if !context {
-        return None;
+    let weak_hit = if context {
+        best_hit(&lower, WEAK, false)
+    } else {
+        None
+    };
+    // Cross-table pick: lowest priority wins, ties break bottommost.
+    // (A stale STRONG transient must not shadow a fresh WEAK quota, and
+    // vice versa — priority first, recency second, table never.)
+    let mut best: Option<(u8, usize, &'static str, bool)> = None;
+    for (hit, strong) in [strong_hit, weak_hit].into_iter().zip([true, false]) {
+        if let Some((i, kind)) = hit {
+            let p = super::patterns::kind_priority(kind, strong);
+            let better = match best {
+                None => true,
+                Some((bp, bi, _, _)) => p < bp || (p == bp && i > bi),
+            };
+            if better {
+                best = Some((p, i, kind, strong));
+            }
+        }
     }
-    if let Some((i, kind)) = best_hit(&lower, WEAK, false) {
-        return Some(LimitHit {
-            kind,
-            excerpt: clip(&lines[i]),
-            strong: false,
-        });
-    }
-    None
+    best.map(|(_, i, kind, strong)| LimitHit {
+        kind,
+        excerpt: clip(&lines[i]),
+        strong,
+    })
 }
 
 /// A single screen line carrying a fatal provider request failure
@@ -253,11 +261,30 @@ mod tests {
     #[test]
     fn test_weak_rate_limit_stays_immediate() {
         // Gating is auth-specific: a WEAK quota signal still pages at
-        // once (quota stalls never self-heal).
-        let hit =
-            detect_limit(&v(&["error: upstream replied (429) trouble"])).expect("must detect");
+        // once (quota stalls never self-heal) — and priority beats
+        // recency across lines (quota first, fresher provider second).
+        let hit = detect_limit(&v(&[
+            "error: upstream replied (429) trouble",
+            "upstream error on attempt 9",
+        ]))
+        .expect("must detect");
         assert_eq!(hit.kind, "rate-limit");
         assert!(!hit.strong);
         assert!(!super::super::types::needs_stuck_gate(&hit));
+        assert!(hit.excerpt.contains("429"));
+    }
+
+    #[test]
+    fn test_stale_strong_transient_loses_to_fresh_weak_quota() {
+        // Cross-table pick: a stale STRONG transient must not shadow a
+        // fresh WEAK quota — priority first, recency second, table never.
+        let hit = detect_limit(&v(&[
+            "⬝⬝⬝ Provider response headers timed out after 300000ms [retrying attempt #1]  esc interrupt",
+            "error: upstream replied (429) trouble",
+        ]))
+        .expect("must detect");
+        assert_eq!(hit.kind, "rate-limit");
+        assert!(!hit.strong);
+        assert!(hit.excerpt.contains("429"));
     }
 }
