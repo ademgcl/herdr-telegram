@@ -32,6 +32,7 @@ pub mod tap_classify;
 pub mod tap_input;
 pub mod tap_keys;
 pub mod target;
+pub mod title_rules;
 pub mod titles;
 
 pub use callback::handle_callback;

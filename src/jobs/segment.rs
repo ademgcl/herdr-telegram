@@ -39,6 +39,7 @@ pub fn is_boundary(line: &str) -> bool {
     }
     if t.starts_with("Thought")
         || t.starts_with("+ Thought")
+        || t.starts_with("▸ Thought")
         || t.starts_with("Thinking")
         || t.starts_with("Working…")
         || t.starts_with("Working...")
@@ -256,6 +257,7 @@ mod tests {
     fn test_final_block_drops_agy_tool_noise() {
         let lines = v(&[
             "> build the project",
+            "▸ Thought for 11s, 1.5k tokens",
             "● Edit(src/main.rs)",
             "○ Bash(cargo test)",
             "⡿ Running command...",
@@ -271,6 +273,7 @@ mod tests {
 
         let lines_with_answer = v(&[
             "> build the project",
+            "▸ Thought for 11s, 1.5k tokens",
             "● Edit(src/main.rs)",
             "○ Bash(cargo test)",
             "     Build succeeded with 0 errors.",
@@ -280,6 +283,12 @@ mod tests {
         assert_eq!(
             final_block(&lines_with_answer, "build the project"),
             v(&["     Build succeeded with 0 errors."])
+        );
+
+        let lines_thinking = v(&["> build the project", "▸ Thought for 11s, 1.5k tokens"]);
+        assert_eq!(
+            final_block(&lines_thinking, "build the project"),
+            Vec::<String>::new()
         );
     }
 }

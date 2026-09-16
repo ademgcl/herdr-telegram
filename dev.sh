@@ -229,7 +229,8 @@ cmd_dev() {
 show_cli_help() {
   echo -e "${BOLD}Kullanım:${NC} ./dev.sh [KOMUT] [ARGÜMANLAR...]
 ${BOLD}Geliştirme & Kontrol:${NC}
-  ${CYAN}dev${NC} (veya boş)          : İnteraktif izleme modu (watcher + kısayollar)
+  ${CYAN}dev${NC}                      : İnteraktif izleme modu (watcher + kısayollar)
+  ${CYAN}help${NC} (varsayılan, boş)   : Bu yardım
   ${CYAN}topics${NC}                  : Aktif tab'ler ve topic senkronizasyon tablosu
   ${CYAN}reset${NC} <pane|#topic>     : Tek bir pane/topic'i silip yeniden oluştur
   ${CYAN}trigger${NC} <pane> <status> : Mock durum olayı fırlat (blocked, working, done)
@@ -241,7 +242,7 @@ ${BOLD}Geliştirme & Kontrol:${NC}
   ${CYAN}build${NC} | ${CYAN}check${NC}          : Cargo derleme / kontrol komutları"
 }
 
-case "${1:-dev}" in
+case "${1:-help}" in
   dev|watch|run) cmd_dev ;;
   topics) shift; cmd_ctl topics "$@" ;;
   reset) shift; cmd_ctl reset "$@" ;;
@@ -255,6 +256,6 @@ case "${1:-dev}" in
   restart) cmd_cleanup; start_bot ;;
   build) cargo build ;;
   check) cargo check ;;
-  help|-h|--help) show_cli_help ;;
+  help|-h|--help|"") show_cli_help ;;
   *) echo -e "${RED}Bilinmeyen komut: $1${NC}"; show_cli_help; exit 1 ;;
 esac

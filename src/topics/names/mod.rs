@@ -6,7 +6,7 @@
 
 mod format;
 
-pub use format::{format_title, title};
+pub use format::format_title;
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown

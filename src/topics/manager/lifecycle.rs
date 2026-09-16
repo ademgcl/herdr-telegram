@@ -213,7 +213,7 @@ impl TopicManager {
         let pre = self.storage.get_title(pane);
         let name = match raw_title {
             Some(label) => {
-                crate::handlers::titles::reset_desired_title(pre.as_deref(), space, label, kind)
+                crate::handlers::title_rules::reset_desired_title(pre.as_deref(), space, label, kind)
             }
             None => names::format_title(space, &tag, kind),
         };

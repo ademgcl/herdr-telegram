@@ -1,13 +1,14 @@
 //! Local control server & CLI client on the single-instance guard port (47319).
 //! Enables zero-split-brain inspection, single-topic reset, and event mocking.
 use crate::{
-    handlers::reset::run_single_topic_reset,
+    handlers::{reset::run_single_topic_reset, title_rules::pick_core},
     herdr::{
         client::{get_agent, list_panes, list_workspaces},
-        labels::pane_facts,
+        labels::{pane_facts, tab_labels},
     },
     notifier::status::observe_status,
     state::AppState,
+    topics::names::format_title,
     types::Res,
     ui::ws_label,
 };
@@ -86,13 +87,14 @@ async fn report_topics(s: &AppState) -> String {
     let live_set: HashSet<String> = live_panes.iter().cloned().collect();
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
+    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
 
     let mut out = String::new();
     out.push_str(&format!(
-        "{:<10} {:<10} {:<10} {:<32}\n",
-        "PANE", "THREAD", "STATE", "TITLE / WS"
+        "{:<10} {:<10} {:<10} {:<16} {:<32}\n",
+        "PANE", "THREAD", "STATE", "TAB", "TITLE"
     ));
-    out.push_str(&format!("{}\n", "-".repeat(66)));
+    out.push_str(&format!("{}\n", "-".repeat(82)));
 
     // Active & Zombie topics
     for (pane, th) in &mappings {
@@ -104,9 +106,14 @@ async fn report_topics(s: &AppState) -> String {
             .get_title(pane)
             .or_else(|| facts.get(pane).and_then(|f| f.label.clone()))
             .unwrap_or_else(|| "-".into());
+        let tab = facts
+            .get(pane)
+            .and_then(|f| tabs.get(&f.tab_id))
+            .cloned()
+            .unwrap_or_else(|| "-".into());
         out.push_str(&format!(
-            "{:<10} #{:<9} {:<10} {:<32}\n",
-            pane, th, state_str, title
+            "{:<10} #{:<9} {:<10} {:<16} {:<32}\n",
+            pane, th, state_str, tab, title
         ));
     }
 
@@ -127,6 +134,8 @@ async fn report_topics(s: &AppState) -> String {
 
 async fn inspect_pane(s: &AppState, pane: &str) -> String {
     let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
+    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let pf = facts.get(pane);
     let th = s.topics.storage.get_thread(pane);
     let title = s.topics.storage.get_title(pane);
@@ -134,14 +143,53 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
     let recent = s.topics.get_recent_msgs(pane);
     let agent = get_agent(&s.cfg.socket, pane).await.ok();
 
+    let tab_id = pf.map(|f| f.tab_id.as_str()).unwrap_or("-");
+    let tab_label = pf
+        .and_then(|f| tabs.get(&f.tab_id))
+        .map(|t| t.as_str())
+        .unwrap_or("-");
+    let ws_id = pf.map(|f| f.ws.as_str()).unwrap_or("-");
+    let ws_name = spaces
+        .iter()
+        .find(|w| w.id == ws_id)
+        .map(|w| format!("#{} {} ({})", w.number, w.label, w.id))
+        .unwrap_or_else(|| ws_id.to_string());
+    let term_title = agent
+        .as_ref()
+        .map(|a| a.title.as_str())
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or("-");
+    // Desired topic title under current rules (tab else tag; terminal never).
+    let kind = agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("shell");
+    let space = pf
+        .map(|f| ws_label(&spaces, &f.ws))
+        .unwrap_or("?");
+    let multi = !tab_id.is_empty()
+        && tab_id != "-"
+        && facts.values().filter(|f| f.tab_id == tab_id).count() > 1;
+    let core = pick_core(
+        if tab_label == "-" { None } else { Some(tab_label) },
+        tag.as_deref().unwrap_or("?"),
+        multi,
+    );
+    let desired = format_title(space, &core, kind);
+    let suffix = if kind == "shell" {
+        "none".to_string()
+    } else {
+        format!("·{}", kind.to_lowercase())
+    };
+
     format!(
         "=== PANE INSPECTION: {pane} ===\n\
          Thread ID:   {}\n\
-         Topic Title: {}\n\
+         Topic Title: {} (stored)\n\
+         Desired:     {desired} (tab wins, terminal→pin only)\n\
          Tag:         {}\n\
-         Herdr Label: {}\n\
-         Herdr Space: {}\n\
-         Agent Kind:  {}\n\
+         Tab:         {tab_label} ({tab_id})\n\
+         Pane Label:  {}\n\
+         Workspace:   {ws_name}\n\
+         Agent Kind:  {} (suffix {}; shell=none)\n\
+         Term Title:  {term_title} (pinned card only)\n\
          Status:      {}\n\
          Recent Msgs: {:?}\n\
          ==============================\n",
@@ -149,8 +197,8 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
         title.as_deref().unwrap_or("-"),
         tag.as_deref().unwrap_or("-"),
         pf.and_then(|f| f.label.as_deref()).unwrap_or("-"),
-        pf.map(|f| f.ws.as_str()).unwrap_or("-"),
-        agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("shell"),
+        kind,
+        suffix,
         agent.as_ref().map(|a| a.status.as_str()).unwrap_or("ready"),
         recent
     )

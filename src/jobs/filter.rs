@@ -67,6 +67,7 @@ const CHROME_PREFIXES: &[&str] = &[
     "›",
     "Thought",
     "+ Thought",
+    "▸ Thought",
     "Thinking",
     "Working…",
     "Working...",
@@ -229,6 +230,8 @@ mod tests {
         assert!(is_chrome("○ Bash(cargo test)"));
         assert!(is_chrome("⡿ Running command..."));
         assert!(is_chrome("└ Tip: Run with --nocapture"));
+        assert!(is_chrome("▸ Thought for 11s, 1.5k tokens"));
+        assert!(is_chrome("  ▸ Thought for 4s"));
         // …but quoted/diff/table content and ASCII rules survive.
         assert!(!is_chrome("> quoted text"));
         assert!(!is_chrome("> added line"));
