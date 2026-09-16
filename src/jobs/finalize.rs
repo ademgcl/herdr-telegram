@@ -145,6 +145,7 @@ pub async fn finalize(
             let (chat, _) = *job.dest.lock().await;
             s.tg.edit_msg(chat, mid, "✅ settled — no fresh output", None)
                 .await;
+            let _ = s.tg.set_reaction(chat, mid, Some("✅")).await;
         }
         s.seen.lock().await.insert(pane.to_string(), snapshot);
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
@@ -174,14 +175,15 @@ pub async fn finalize(
     for (i, part) in parts.iter().enumerate() {
         match (i, *live_mid) {
             (0, Some(mid)) => {
-                if s.tg.try_edit_msg(chat, mid, part, None).await.is_ok()
-                    || report(s, chat, th, pane, part).await
-                {
+                if s.tg.try_edit_msg(chat, mid, part, None).await.is_ok() {
+                    let _ = s.tg.set_reaction(chat, mid, Some("✅")).await;
+                    delivered = true;
+                } else if report_done(s, chat, th, pane, part).await {
                     delivered = true;
                 }
             }
             _ => {
-                if report(s, chat, th, pane, part).await {
+                if report_done(s, chat, th, pane, part).await {
                     delivered = true;
                 }
             }
@@ -222,6 +224,26 @@ pub async fn finalize(
     false
 }
 
+async fn report_done(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    msg: &str,
+) -> bool {
+    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
+    if let Some(m) = mid {
+        let _ = s.tg.set_reaction(chat_id, m, Some("✅")).await;
+        s.remember(chat_id, mid, pane).await;
+        true
+    } else {
+        eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
+        false
+    }
+}
+
+pub use super::report::{edit_live, report};
+
 /// Cover the prompts owed at entry. A new submit mid-finalize bumps the
 /// epoch: leave its pending count, persisted intent and map entry so the
 /// watcher loop keeps serving it.
@@ -252,37 +274,4 @@ async fn settle_books(
         map.remove(pane);
         println!("[prompt] watcher retired: {pane}");
     }
-}
-
-pub async fn edit_live(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    live_mid: &mut Option<i64>,
-    text: &str,
-) {
-    if let Some(mid) = live_mid.take() {
-        if s.tg.try_edit_msg(chat_id, mid, text, None).await.is_err() {
-            report(s, chat_id, thread_id, pane, text).await;
-        }
-    } else {
-        report(s, chat_id, thread_id, pane, text).await;
-    }
-}
-
-pub async fn report(
-    s: &AppState,
-    chat_id: i64,
-    thread_id: Option<i64>,
-    pane: &str,
-    msg: &str,
-) -> bool {
-    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
-    if mid.is_none() {
-        eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
-        return false;
-    }
-    s.remember(chat_id, mid, pane).await;
-    true
 }

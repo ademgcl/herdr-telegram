@@ -3,7 +3,6 @@ use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
-    notifier::cards::post_spontaneous_card,
     state::AppState,
     ui::ws_label,
 };

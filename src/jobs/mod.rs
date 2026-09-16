@@ -8,6 +8,7 @@ pub mod job;
 pub mod notices;
 pub mod persist;
 pub mod recover;
+pub mod report;
 pub mod runner;
 pub mod segment;
 pub mod stall;

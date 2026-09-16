@@ -183,8 +183,11 @@ pub(crate) async fn post_spontaneous_card(
             }
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
-                if mid.is_some() {
+                if let Some(m) = mid {
                     delivered = true;
+                    if settled == "done" {
+                        let _ = s.tg.set_reaction(forum, m, Some("✅")).await;
+                    }
                 }
                 s.remember(forum, mid, pane).await;
             }
@@ -203,8 +206,11 @@ pub(crate) async fn post_spontaneous_card(
         for id in &s.cfg.owners {
             for part in &parts {
                 let mid = s.tg.send_msg(*id, None, part, None).await;
-                if mid.is_some() {
+                if let Some(m) = mid {
                     delivered = true;
+                    if settled == "done" {
+                        let _ = s.tg.set_reaction(*id, m, Some("✅")).await;
+                    }
                 }
                 s.remember(*id, mid, pane).await;
             }

@@ -89,7 +89,11 @@ pub(crate) async fn push_dm_alert(
                 Some(json!([[btn("show output", &format!("o:{pane}"))]])),
             )
             .await;
-        if mid.is_none() {
+        if let Some(m) = mid {
+            if new_status == "done" {
+                let _ = s.tg.set_reaction(*id, m, Some("✅")).await;
+            }
+        } else {
             delivered = false;
         }
         s.remember(*id, mid, pane).await;

@@ -104,9 +104,21 @@ pub async fn answer_tap(
                         .await
                         .is_ok()
                     {
+                        let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
                         s.blocked_sig.lock().await.insert(pane.to_string(), q);
                         s.remember(chat, Some(msg_id), pane).await;
-                    } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
+                    } else if let Some(mid) = s
+                        .tg
+                        .send_msg_with_effect(
+                            chat,
+                            thread,
+                            &text,
+                            kb,
+                            Some(crate::telegram::EFFECT_FIRE),
+                        )
+                        .await
+                    {
+                        let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
                         s.blocked_sig.lock().await.insert(pane.to_string(), q);
                         s.remember(chat, Some(mid), pane).await;
                     }
@@ -120,6 +132,7 @@ pub async fn answer_tap(
                         no_kb,
                     )
                     .await;
+                    let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
                     // The status layer can lag up to a cycle behind: clear
                     // the dialog signature now or the next same-`blocked`
                     // observation reposts a ghost card for a live agent.

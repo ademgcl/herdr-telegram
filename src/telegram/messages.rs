@@ -3,6 +3,31 @@ use crate::{types::Res, ui::fit_msg};
 use serde_json::{Value, json};
 use std::time::Duration;
 
+/// Telegram animated message effect ID for fire/flame (urgent alerts: blocked, limit stall).
+pub const EFFECT_FIRE: &str = "5104841245755180586";
+
+
+pub fn build_send_msg_params(
+    chat_id: i64,
+    thread_id: Option<i64>,
+    text: &str,
+    keyboard: Option<Value>,
+    effect_id: Option<&str>,
+) -> Value {
+    let body = fit_msg(text);
+    let mut params = json!({"chat_id": chat_id, "text": body});
+    if let Some(th) = thread_id {
+        params["message_thread_id"] = json!(th);
+    }
+    if let Some(kb) = keyboard {
+        params["reply_markup"] = json!({"inline_keyboard": kb});
+    }
+    if let Some(eff) = effect_id {
+        params["message_effect_id"] = json!(eff);
+    }
+    params
+}
+
 impl TelegramClient {
     pub async fn send_msg(
         &self,
@@ -11,18 +36,21 @@ impl TelegramClient {
         text: &str,
         keyboard: Option<Value>,
     ) -> Option<i64> {
-        let body = fit_msg(text);
-        let mut params = json!({"chat_id": chat_id, "text": body});
-        if let Some(th) = thread_id {
-            params["message_thread_id"] = json!(th);
-        }
-        if let Some(kb) = keyboard {
-            params["reply_markup"] = json!({"inline_keyboard": kb});
-        }
+        self.send_msg_with_effect(chat_id, thread_id, text, keyboard, None)
+            .await
+    }
 
-        // Flood-waits have their own budget: honoring a wait must not
-        // consume one of the 3 sends (that would drop long-waited
-        // messages, possibly final cards).
+    /// F8: Send message with optional message effect ID (e.g. fire/flame for urgent alerts).
+    /// If Telegram rejects the effect (e.g. in unsupported chats), retries without effect.
+    pub async fn send_msg_with_effect(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        text: &str,
+        keyboard: Option<Value>,
+        effect_id: Option<&str>,
+    ) -> Option<i64> {
+        let mut params = build_send_msg_params(chat_id, thread_id, text, keyboard, effect_id);
         let mut sends = 0;
         let mut waits = 0;
         loop {
@@ -34,10 +62,15 @@ impl TelegramClient {
                 Err(e) => {
                     let msg = e.to_string();
                     eprintln!("sendMessage failed: {}", self.redact(&msg));
-                    // Flood-waits are honored as-is under their own budget:
-                    // capping or mistreating them drops messages (possibly
-                    // final cards) or risks a ban. Long waits stall this
-                    // task, but the watcher's epoch checks abort after.
+                    // If effect is rejected, strip message_effect_id and retry immediately
+                    if params.get("message_effect_id").is_some()
+                        && (msg.contains("EFFECT")
+                            || msg.contains("effect")
+                            || msg.contains("not allowed"))
+                    {
+                        params.as_object_mut().unwrap().remove("message_effect_id");
+                        continue;
+                    }
                     if let Some(wait) = Self::retry_after(&msg) {
                         waits += 1;
                         if waits > 3 {
@@ -106,9 +139,6 @@ impl TelegramClient {
                     if msg.contains("message is not modified") {
                         return Ok(());
                     }
-                    // Known-fatal: retrying a deleted/uneditable message
-                    // just amplifies outage load. Dead topics fail fast via
-                    // the shared predicate instead of 3x per tick.
                     if super::errors::topic_missing(&msg)
                         || msg.contains("message to edit not found")
                         || msg.contains("message can't be edited")
@@ -158,48 +188,6 @@ impl TelegramClient {
             .await;
     }
 
-    /// F2: Pin a message in a chat/topic without notification.
-    pub async fn pin_msg(&self, chat_id: i64, message_id: i64) -> Res<()> {
-        self.call_retrying(
-            "pinChatMessage",
-            json!({
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "disable_notification": true
-            }),
-            Duration::from_secs(15),
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// F3: Unpin all messages in a forum topic in a single call.
-    pub async fn unpin_all_forum_topic_messages(&self, chat_id: i64, thread_id: i64) -> Res<()> {
-        match self
-            .call_retrying(
-                "unpinAllForumTopicMessages",
-                json!({
-                    "chat_id": chat_id,
-                    "message_thread_id": thread_id,
-                }),
-                Duration::from_secs(15),
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                if super::errors::topic_missing(&msg)
-                    || msg.contains("not modified")
-                    || msg.contains("not enough rights")
-                {
-                    return Ok(());
-                }
-                Err(e)
-            }
-        }
-    }
-
     /// F6: Copy a message to another topic thread without forward headers.
     pub async fn copy_msg(
         &self,
@@ -222,24 +210,30 @@ impl TelegramClient {
         {
             Ok(v) => v["message_id"].as_i64(),
             Err(e) => {
-                eprintln!("copyMessage {message_id} failed: {}", self.redact(&e.to_string()));
+                eprintln!(
+                    "copyMessage {message_id} failed: {}",
+                    self.redact(&e.to_string())
+                );
                 None
             }
         }
     }
+}
 
-    /// Unpin a message (one-time cleanup helper).
-    #[allow(dead_code)]
-    pub async fn unpin_msg(&self, chat_id: i64, message_id: i64) {
-        if let Err(e) = self
-            .call(
-                "unpinChatMessage",
-                json!({"chat_id": chat_id, "message_id": message_id}),
-                Duration::from_secs(15),
-            )
-            .await
-        {
-            eprintln!("unpinChatMessage failed: {}", self.redact(&e.to_string()));
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_send_msg_params_effect() {
+        let p1 = build_send_msg_params(123, Some(456), "hello", None, Some(EFFECT_FIRE));
+        assert_eq!(p1["chat_id"], 123);
+        assert_eq!(p1["message_thread_id"], 456);
+        assert_eq!(p1["message_effect_id"], EFFECT_FIRE);
+
+        let p2 = build_send_msg_params(123, None, "hello", None, None);
+        assert_eq!(p2["chat_id"], 123);
+        assert!(p2.get("message_thread_id").is_none());
+        assert!(p2.get("message_effect_id").is_none());
     }
 }

@@ -105,22 +105,38 @@ pub(crate) async fn scan_limits(s: &AppState) {
             map.insert(pane.clone(), (hit.kind.to_string(), Instant::now()));
         }
         let text = limit_card_text(&pane, &hit);
-        if let Some(forum) = s.cfg.forum {
-            match s.topics.all_mappings().get(&pane).copied() {
-                Some(thread) => {
-                    let mid = s.tg.send_msg(forum, Some(thread), &text, None).await;
-                    s.remember(forum, mid, &pane).await;
-                }
-                None => {
-                    for id in &s.cfg.owners {
-                        let mid = s.tg.send_msg(*id, None, &text, None).await;
-                        s.remember(*id, mid, &pane).await;
-                    }
-                }
+        if let Some(forum) = s.cfg.forum
+            && let Some(thread) = s.topics.all_mappings().get(&pane).copied()
+        {
+            let mid = s
+                .tg
+                .send_msg_with_effect(
+                    forum,
+                    Some(thread),
+                    &text,
+                    None,
+                    Some(crate::telegram::EFFECT_FIRE),
+                )
+                .await;
+            if let Some(m) = mid {
+                let _ = s.tg.set_reaction(forum, m, Some("❗")).await;
             }
+            s.remember(forum, mid, &pane).await;
         } else {
             for id in &s.cfg.owners {
-                let mid = s.tg.send_msg(*id, None, &text, None).await;
+                let mid = s
+                    .tg
+                    .send_msg_with_effect(
+                        *id,
+                        None,
+                        &text,
+                        None,
+                        Some(crate::telegram::EFFECT_FIRE),
+                    )
+                    .await;
+                if let Some(m) = mid {
+                    let _ = s.tg.set_reaction(*id, m, Some("❗")).await;
+                }
                 s.remember(*id, mid, &pane).await;
             }
         }

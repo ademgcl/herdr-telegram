@@ -6,7 +6,6 @@
 use crate::{
     herdr::client::read_screen_adaptive,
     jobs::episode::BuzzEpisode,
-    jobs::finalize::report,
     jobs::job::Job,
     jobs::notices::{detect_limit, limit_card_text},
     notifier::LIMIT_REMIND_SECS,
@@ -58,7 +57,20 @@ pub(crate) async fn watch_stall(
         if !dup {
             let (chat, th) = *job.dest.lock().await;
             let text = limit_card_text(pane, hit);
-            report(s, chat, th, pane, &text).await;
+            let mid = s
+                .tg
+                .send_msg_with_effect(
+                    chat,
+                    th,
+                    &text,
+                    None,
+                    Some(crate::telegram::EFFECT_FIRE),
+                )
+                .await;
+            if let Some(m) = mid {
+                let _ = s.tg.set_reaction(chat, m, Some("❗")).await;
+            }
+            s.remember(chat, mid, pane).await;
             println!("[prompt] limit alert {pane}: {}", hit.kind);
         }
     }
