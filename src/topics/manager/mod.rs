@@ -10,6 +10,7 @@ use std::{
 
 pub struct TopicManager {
     pub(crate) forum_id: Option<i64>,
+    pub(crate) socket: Option<String>,
     pub(crate) storage: TopicStorage,
     pub(crate) tg: TelegramClient,
     pub(crate) last_title_write: Mutex<HashMap<String, Instant>>,
@@ -38,9 +39,10 @@ mod lifecycle;
 mod titles;
 
 impl TopicManager {
-    pub fn new(forum_id: Option<i64>, tg: TelegramClient) -> Self {
+    pub fn new(forum_id: Option<i64>, tg: TelegramClient, socket: Option<String>) -> Self {
         Self {
             forum_id,
+            socket,
             storage: TopicStorage::new(),
             tg,
             last_title_write: Mutex::new(HashMap::new()),
@@ -84,6 +86,14 @@ impl TopicManager {
             .unwrap_or_else(|e| e.into_inner())
             .remove(pane);
         true
+    }
+
+    pub fn get_pin(&self, pane: &str) -> Option<i64> {
+        self.storage.get_pin(pane)
+    }
+
+    pub fn set_pin(&self, pane: &str, mid: i64) {
+        self.storage.set_pin(pane, mid);
     }
 
     /// Ensure the pane's topic exists and return its thread. New topics
@@ -158,7 +168,21 @@ impl TopicManager {
         // Tag inside the guard: a cancel before the guard must not leak
         // a persisted tag gap.
         let tag = self.storage.assign_tag(pane, kind);
-        let name = names::title(&tag, space, kind);
+
+        let agent = if let Some(sock) = &self.socket {
+            crate::herdr::client::get_agent(sock, pane).await.ok()
+        } else {
+            None
+        };
+        let raw_title = agent
+            .as_ref()
+            .map(|a| a.title.as_str())
+            .filter(|t| !t.trim().is_empty());
+        let branch = agent.as_ref().and_then(|a| a.branch.as_deref());
+        let status = agent.as_ref().map(|a| a.status.as_str()).unwrap_or("ready");
+
+        let title_or_tag = raw_title.unwrap_or(&tag);
+        let name = names::format_title(space, title_or_tag, kind);
         let out = match self.tg.create_forum_topic(forum, &name).await {
             Ok(thread) => {
                 println!("[topics] created topic #{thread} for {pane} ({name})");
@@ -181,12 +205,13 @@ impl TopicManager {
                     Err(_) => {}
                 }
 
-                // F2: Identity card posted in the topic header, deliberately
-                // UNPINNED (pins annoy — the /space|/shell reply carries a
-                // one-tap open-topic button instead).
+                // F2 + D7: Identity card posted and pinned in topic header
                 let card =
-                    format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`\nStatus: 💬 ready");
-                let _ = self.tg.send_msg(forum, Some(thread), &card, None).await;
+                    crate::ui::build_pinned_card_text(kind, pane, space, status, raw_title, branch);
+                if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await {
+                    let _ = self.tg.pin_msg(forum, mid).await;
+                    self.storage.set_pin(pane, mid);
+                }
 
                 Some(thread)
             }

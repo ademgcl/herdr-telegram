@@ -48,10 +48,10 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     if let Some(th) = thread_id
         && let Some(pane) = s.topics.pane_of_thread(th)
     {
-        println!(
-            "[forum] topic msg for {pane}: {}",
-            text.chars().take(40).collect::<String>()
-        );
+        if let Some(mid) = msg["message_id"].as_i64() {
+            s.topics.record_msg(&pane, mid);
+        }
+        println!("[forum] topic msg for {pane}: {}", text.chars().take(40).collect::<String>());
         handle_topic_agent_message(s, chat, th, &pane, text).await;
         return;
     }

@@ -1,4 +1,5 @@
 use crate::{
+    handlers::reset::is_resetting,
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
     handlers::titles::sync_titles_with,
     herdr::client::{list_agents, list_workspaces, read_shell_output},
@@ -12,6 +13,13 @@ use crate::{
 use std::collections::HashSet;
 
 pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
+    // Reset koşarken topic lifecycle reset'e aittir: watchdog tick'i
+    // topic açıp kart basarsa silme/oluşturma ile yarışıp 429 fırtınası
+    // çıkar. Reset bitinceki ilk tick her şeyi zaten yakalar.
+    if is_resetting() {
+        println!("[reconcile] skipped ({src}): paced reset in progress");
+        return;
+    }
     let Ok(rows) = list_agents(&s.cfg.socket).await else {
         return;
     };

@@ -1,4 +1,5 @@
 pub mod cards;
+pub mod dm;
 pub mod hygiene;
 pub mod limits;
 pub mod reconcile;

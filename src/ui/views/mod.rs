@@ -159,6 +159,29 @@ pub fn build_agent_card_text(a: &AgentDetail) -> String {
     )
 }
 
+/// Pinned identity card for forum topics (F2 + D7): shows pane, workspace,
+/// title (terminal/task), branch (if any), and live status.
+pub fn build_pinned_card_text(
+    kind: &str,
+    pane: &str,
+    space: &str,
+    status: &str,
+    title: Option<&str>,
+    branch: Option<&str>,
+) -> String {
+    let mut card = format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`");
+    if let Some(t) = title.filter(|t| !t.trim().is_empty()) {
+        card.push_str(&format!("\nTitle: {}", t.trim()));
+    }
+    if let Some(b) = branch.filter(|b| !b.trim().is_empty()) {
+        card.push_str(&format!("\nBranch: 🌿 {}", b.trim()));
+    }
+    let st_emoji = emoji(status);
+    let display_status = if status == "idle" { "ready" } else { status };
+    card.push_str(&format!("\nStatus: {st_emoji} {display_status}"));
+    card
+}
+
 /// Last lines that fit within `max_units` — live progress tails read bottom-up.
 pub fn tail_fit(lines: &[String], max_units: usize) -> String {
     let mut picked: Vec<&str> = Vec::new();

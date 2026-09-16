@@ -79,3 +79,27 @@ fn test_build_agent_card_text_with_and_without_branch() {
     let card_without = build_agent_card_text(&without_branch);
     assert!(!card_without.contains("branch:"));
 }
+
+#[test]
+fn test_build_pinned_card_text() {
+    let full = build_pinned_card_text(
+        "claude",
+        "w1:p2",
+        "shop",
+        "working",
+        Some("auth-service"),
+        Some("feature/login"),
+    );
+    assert!(full.contains("📌 **claude** · `w1:p2`"));
+    assert!(full.contains("Workspace: `shop`"));
+    assert!(full.contains("Title: auth-service"));
+    assert!(full.contains("Branch: 🌿 feature/login"));
+    assert!(full.contains("Status: 🔄 working"));
+
+    let minimal = build_pinned_card_text("shell", "w1:p3", "infra", "idle", None, None);
+    assert!(minimal.contains("📌 **shell** · `w1:p3`"));
+    assert!(minimal.contains("Workspace: `infra`"));
+    assert!(!minimal.contains("Title:"));
+    assert!(!minimal.contains("Branch:"));
+    assert!(minimal.contains("Status: 🟢 ready"));
+}

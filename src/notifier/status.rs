@@ -5,9 +5,8 @@ use crate::{
     jobs::stream::{delta, join_trimmed},
     notifier::cards::post_spontaneous_card,
     state::AppState,
-    ui::{btn, emoji, ws_label},
+    ui::ws_label,
 };
-use serde_json::json;
 use std::time::{Duration, Instant};
 
 /// How long after a prompt's final card an idle/done alert is redundant.
@@ -78,15 +77,47 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         .unwrap_or_else(|| ws_id.clone());
 
     // The pane's topic exists (ensured silently — never notifies).
-    s.topics.sync_topic(pane, &kind, raw_space).await;
+    // Reset sırasında atlanır: event-driven ensure, reset'in sildiği
+    // topic'i anında yeniden açıp sil/oluştur ile yarışmasın. Hafıza
+    // (status/last_change yukarıda) güncellenmeye devam eder.
+    if !crate::handlers::reset::is_resetting() {
+        s.topics.sync_topic(pane, &kind, raw_space).await;
+
+        if let Some(forum) = s.cfg.forum {
+            let branch = info.as_ref().and_then(|a| a.branch.as_deref());
+            let title_opt = if title.trim().is_empty() {
+                None
+            } else {
+                Some(title.as_str())
+            };
+            let card = crate::ui::build_pinned_card_text(
+                &kind, pane, raw_space, new_status, title_opt, branch,
+            );
+            let mut mid_opt = s.topics.get_pin(pane);
+            if let Some(mid) = mid_opt {
+                if s.tg.try_edit_msg(forum, mid, &card, None).await.is_err() {
+                    mid_opt = None;
+                }
+            }
+            if mid_opt.is_none()
+                && let Some(thread) = s.topics.all_mappings().get(pane).copied()
+                && let Some(new_mid) = s.tg.send_msg(forum, Some(thread), &card, None).await
+            {
+                let _ = s.tg.pin_msg(forum, new_mid).await;
+                s.topics.set_pin(pane, new_mid);
+            }
+        }
+    }
 
     // F11: writing/typing indicator & F1: reopen topic when working.
     // A job-owned pane keeps its task across settled samples (the
     // watcher stops it at retire): stopping here would kill mid-job
     // typing on every idle sample between turns.
     if new_status == "working" {
-        s.topics.reopen_topic(pane).await;
-        s.start_typing(pane).await;
+        if !crate::handlers::reset::is_resetting() {
+            s.topics.reopen_topic(pane).await;
+            s.start_typing(pane).await;
+        }
     } else {
         s.stop_typing_unless_owned(pane).await;
     }
@@ -197,88 +228,20 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     println!("[alert] {src}: {pane} {old:?}→{new_status}");
 
-    // DM mode has no topics — legacy immediate pushes. The baseline is
-    // consumed only on delivery so an outage replays the delta instead
-    // of eating it. Fresh work recomputes the delta vs CURRENT seen just
-    // before post (a final retiring during the screen RPC anchors seen —
-    // the pre-RPC body would else re-post the final's duplicate).
+    // DM mode has no topics — legacy immediate pushes.
     if s.cfg.forum.is_none() {
-        // Fresh re-check + re-base (no extra RPC, just the lock).
-        if s.jobs.lock().await.contains_key(pane) {
-            return;
-        }
-        let fresh_base = s.seen.lock().await.get(pane).cloned().unwrap_or_default();
-        let fresh_source: Vec<String> = if fresh_base.is_empty() {
-            screen.clone()
-        } else {
-            delta(&screen, &fresh_base).to_vec()
-        };
-        let fresh_body = join_trimmed(&final_block(&fresh_source, ""));
-        if !fresh_body.is_empty() {
-            // Some(observed_at): a final retiring during the screen RPC
-            // stamps last_done after observed_at → inside-post suppresses
-            // the stale duplicate. Next tick's observed_at is after the
-            // final, so genuinely new work still posts.
-            if post_spontaneous_card(
-                s,
-                pane,
-                &kind,
-                raw_space,
-                new_status,
-                &fresh_body,
-                Some(observed_at),
-            )
-            .await
-            {
-                s.seen.lock().await.insert(pane.to_string(), screen);
-            }
-            return;
-        }
-        // Empty (duplicate of a just-posted final, or genuinely empty):
-        // recent final → consume + quiet; else fall through to the hint.
-        if let Some(t) = s.last_done.lock().await.get(pane)
-            && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
-        {
-            s.seen.lock().await.insert(pane.to_string(), screen);
-            return;
-        }
-        let hint = "";
-        let verb = if new_status == "idle" {
-            "ready"
-        } else {
-            new_status
-        };
-        let mut text = format!("{} {}: {kind} @ {space_label}", emoji(new_status), verb);
-        if !title.is_empty() {
-            let short: String = title.chars().take(60).collect();
-            text.push_str(&format!("\n{short}"));
-        }
-        text.push_str(hint);
-        let mut delivered = true;
-        for id in &s.cfg.owners {
-            let mid =
-                s.tg.send_msg(
-                    *id,
-                    None,
-                    &text,
-                    Some(json!([[btn("show output", &format!("o:{pane}"))]])),
-                )
-                .await;
-            if mid.is_none() {
-                delivered = false;
-            }
-            s.remember(*id, mid, pane).await;
-        }
-        // Baseline advances only on delivery: an outage replays the
-        // delta instead of eating it. Stamp last_done like a posted
-        // card so the next settle in the quiet window stays silent.
-        if delivered {
-            s.seen.lock().await.insert(pane.to_string(), screen);
-            s.last_done
-                .lock()
-                .await
-                .insert(pane.to_string(), Instant::now());
-        }
+        crate::notifier::dm::push_dm_alert(
+            s,
+            pane,
+            &kind,
+            raw_space,
+            &space_label,
+            &title,
+            new_status,
+            &screen,
+            observed_at,
+        )
+        .await;
         return;
     }
 

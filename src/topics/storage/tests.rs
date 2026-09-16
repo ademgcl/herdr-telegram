@@ -74,16 +74,35 @@ fn test_clear_all() {
     st.insert("w1:p1".into(), 42);
     st.set_title("w1:p1", "api");
     st.set_icon("w1:p1", "5350554349074391003");
+    st.set_pin("w1:p1", 999);
     assert_eq!(st.get_thread("w1:p1"), Some(42));
     assert_eq!(st.get_title("w1:p1"), Some("api".to_string()));
     assert_eq!(
         st.get_icon("w1:p1"),
         Some("5350554349074391003".to_string())
     );
+    assert_eq!(st.get_pin("w1:p1"), Some(999));
     st.clear_all();
     assert_eq!(st.get_thread("w1:p1"), None);
     assert_eq!(st.get_title("w1:p1"), None);
     assert_eq!(st.get_icon("w1:p1"), None);
+    assert_eq!(st.get_pin("w1:p1"), None);
+    let _ = std::fs::remove_file(&st.file_path);
+}
+
+#[test]
+fn test_pins_roundtrip() {
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-pins-{}.json", std::process::id())),
+    );
+    assert_eq!(st.get_pin("w1:p1"), None);
+    st.set_pin("w1:p1", 1234);
+    st.set_pin("w1:p1", 1234); // idempotent
+    assert_eq!(st.get_pin("w1:p1"), Some(1234));
+    let re = TopicStorage::at(st.file_path.clone());
+    assert_eq!(re.get_pin("w1:p1"), Some(1234));
+    re.remove("w1:p1");
+    assert_eq!(re.get_pin("w1:p1"), None);
     let _ = std::fs::remove_file(&st.file_path);
 }
 
@@ -116,4 +135,29 @@ fn test_corrupt_state_falls_back_to_prev() {
             let _ = std::fs::remove_file(&bak);
         }
     }
+}
+
+#[test]
+fn test_recent_msgs_roundtrip_and_bounding() {
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-msgs-{}.json", std::process::id())),
+    );
+    assert_eq!(st.get_recent_msgs("w1:p1"), Vec::<i64>::new());
+    st.record_msg("w1:p1", 101);
+    st.record_msg("w1:p1", 101); // deduplicate consecutive
+    assert_eq!(st.get_recent_msgs("w1:p1"), vec![101]);
+    st.record_msg("w1:p1", 102);
+    st.record_msg("w1:p1", 103);
+    assert_eq!(st.get_recent_msgs("w1:p1"), vec![101, 102, 103]);
+    // Bounded to 3
+    st.record_msg("w1:p1", 104);
+    assert_eq!(st.get_recent_msgs("w1:p1"), vec![102, 103, 104]);
+
+    // Persistence across reopen
+    let re = TopicStorage::at(st.file_path.clone());
+    assert_eq!(re.get_recent_msgs("w1:p1"), vec![102, 103, 104]);
+
+    re.remove("w1:p1");
+    assert_eq!(re.get_recent_msgs("w1:p1"), Vec::<i64>::new());
+    let _ = std::fs::remove_file(&st.file_path);
 }

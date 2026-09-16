@@ -116,11 +116,47 @@ async fn main() -> Res<()> {
     // an empty in-memory status would misclassify live shells as fresh
     // flips (ghost quit card). Recovered watchers racing the seed lose
     // deterministically to its last-writer-wins retires.
+    if let Some(forum_id) = s.cfg.forum {
+        // F9: probe bot permissions in forum supergroup
+        match s.tg.check_forum_permissions(forum_id).await {
+            Ok(perms) => {
+                if !perms.is_admin {
+                    eprintln!("[telegram] WARNING: bot is NOT an admin in forum {forum_id}!");
+                } else {
+                    println!(
+                        "[telegram] bot permissions: manage_topics={}, pin_messages={}, delete_messages={}",
+                        perms.can_manage_topics, perms.can_pin_messages, perms.can_delete_messages
+                    );
+                    if !perms.can_manage_topics {
+                        eprintln!("[telegram] WARNING: bot lacks 'can_manage_topics' admin right!");
+                    }
+                    if !perms.can_pin_messages {
+                        eprintln!("[telegram] WARNING: bot lacks 'can_pin_messages' admin right!");
+                    }
+                }
+            }
+            Err(e) => eprintln!("[telegram] permission probe failed: {e}"),
+        }
+
+        // F4: verify custom emoji topic icon stickers
+        match s.tg.get_forum_topic_icon_stickers().await {
+            Ok(stickers) => {
+                let missing = topics::names::check_context_icons(&stickers);
+                if missing.is_empty() {
+                    println!(
+                        "[telegram] forum icon stickers verified ({} available; context 💻/💬 valid)",
+                        stickers.len()
+                    );
+                } else {
+                    eprintln!("[telegram] WARNING: context icon stickers missing in set: {missing:?}");
+                }
+            }
+            Err(e) => eprintln!("[telegram] forum icon stickers probe failed: {e}"),
+        }
+    }
     recover_pending(&s).await;
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
-    // One-time cleanup of the retired pinned-status era (no-op when clean)
-    s.topics.retire_pins().await;
     println!("[main] seed done, entering loop");
 
     // NOTE: no backlog discard — messages sent while the bot was down are

@@ -154,7 +154,7 @@ impl State {
 
     pub fn new(cfg: Cfg) -> Res<AppState> {
         let tg = TelegramClient::new(cfg.token.clone())?;
-        let topics = TopicManager::new(cfg.forum, tg.clone());
+        let topics = TopicManager::new(cfg.forum, tg.clone(), Some(cfg.socket.clone()));
         // Survive restarts: routing target must not vanish on redeploy
         let file = Self::focus_file();
         let home = std::env::var("HOME").unwrap_or_default();
@@ -222,6 +222,7 @@ impl State {
 
     pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
         let Some(msg_id) = msg_id else { return };
+        self.topics.record_msg(pane, msg_id);
         // Lock order (never inverted anywhere): torder → targets.
         let mut ord = self.torder.lock().await;
         let mut map = self.targets.lock().await;

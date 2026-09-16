@@ -37,6 +37,11 @@ impl TelegramClient {
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     }
 
+    pub async fn get_me(&self) -> Res<Value> {
+        self.call_retrying("getMe", json!({}), Duration::from_secs(15))
+            .await
+    }
+
     /// Telegram flood-wait: "Too Many Requests: retry after N" — honor it
     /// instead of silently dropping the message.
     pub(crate) fn retry_after(e: &str) -> Option<Duration> {

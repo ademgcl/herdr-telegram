@@ -73,6 +73,22 @@ pub fn context_icon_emoji_id(kind: &str) -> &'static str {
     }
 }
 
+/// F4: Verify that hardcoded context icon custom emoji IDs exist
+/// in the sticker set returned by Telegram's `getForumTopicIconStickers`.
+/// Returns any missing emoji IDs (empty if all valid).
+pub fn check_context_icons(valid_stickers: &[String]) -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    let shell_icon = context_icon_emoji_id("shell");
+    let agent_icon = context_icon_emoji_id("agent");
+    if !valid_stickers.iter().any(|s| s == shell_icon) {
+        missing.push(shell_icon);
+    }
+    if !valid_stickers.iter().any(|s| s == agent_icon) {
+        missing.push(agent_icon);
+    }
+    missing
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +135,27 @@ mod tests {
         assert_eq!(context_icon_emoji_id("shell"), "5417915203100613993");
         assert_eq!(context_icon_emoji_id("?"), "5417915203100613993");
         assert_eq!(context_icon_emoji_id("opencode"), "5350554349074391003");
+    }
+
+    #[test]
+    fn test_check_context_icons() {
+        let valid = vec![
+            "5417915203100613993".to_string(),
+            "5350554349074391003".to_string(),
+            "1234567890".to_string(),
+        ];
+        assert!(check_context_icons(&valid).is_empty());
+
+        let missing_agent = vec!["5417915203100613993".to_string()];
+        assert_eq!(
+            check_context_icons(&missing_agent),
+            vec!["5350554349074391003"]
+        );
+
+        let none_valid: Vec<String> = vec![];
+        assert_eq!(
+            check_context_icons(&none_valid),
+            vec!["5417915203100613993", "5350554349074391003"]
+        );
     }
 }

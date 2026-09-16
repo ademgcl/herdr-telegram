@@ -13,7 +13,6 @@ use crate::{
         labels::pane_facts,
     },
     state::AppState,
-    topics::names,
     ui::ws_label,
 };
 use std::{
@@ -29,6 +28,9 @@ static RESET_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 /// True while a paced reset runs: topic creators must not mint (only
 /// reuse) until it ends, or `clear_all` wipes in-flight mappings into
 /// orphans + later doubles. Set before any snapshot; auto-cleared.
+/// Watchdog/notifier also consult it: reconcile, spontaneous cards and
+/// event-driven topic writes pause while it holds (no 429 storm), while
+/// read-only memory updates continue.
 pub fn is_resetting() -> bool {
     RESET_IN_PROGRESS.load(Ordering::SeqCst)
 }
@@ -42,15 +44,36 @@ impl Drop for ResetGuard {
 }
 
 pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
-    if s.cfg.forum.is_none() {
-        s.tg.send_msg(
-            chat,
-            thread_id,
-            "⚠️ Reset is only available in forum supergroup mode",
-            None,
-        )
-        .await;
-        return;
+    let forum = match s.cfg.forum {
+        Some(f) => f,
+        None => {
+            s.tg.send_msg(
+                chat,
+                thread_id,
+                "⚠️ Reset is only available in forum supergroup mode",
+                None,
+            )
+            .await;
+            return;
+        }
+    };
+
+    // F9: permission guard — ensure bot can manage topics before reset deletes/recreates
+    match s.tg.check_forum_permissions(forum).await {
+        Ok(perms) if !perms.can_manage_topics => {
+            s.tg.send_msg(
+                chat,
+                thread_id,
+                "⚠️ reset aborted: bot lacks 'can_manage_topics' admin permission",
+                None,
+            )
+            .await;
+            return;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("[reset] permission check warning (proceeding): {e}");
+        }
     }
 
     if RESET_IN_PROGRESS
@@ -84,150 +107,114 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     };
 
-    // Drain in-flight creates before the snapshot: an ensure that
-    // passed the reset gate just before we set it would else mint
-    // during deletes → wiped orphan → later double.
-    for _ in 0..400 {
-        if s.topics.creating_len() == 0 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+    let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
+    let shell_panes = list_panes(&s.cfg.socket).await.unwrap_or_default();
 
     let mappings = s.topics.all_mappings();
-    let to_delete_count = mappings.len();
+    let to_reset_count = mappings.len();
     s.tg.send_msg(
         chat,
         thread_id,
         &format!(
-            "🔄 Starting paced reset: deleting {to_delete_count} topic(s) and resyncing from Herdr (read-only)…"
+            "🔄 Starting paced reset: migrating {to_reset_count} topic(s) and resyncing from Herdr (read-only)…"
         ),
         None,
     )
     .await;
 
-    // Step 1: Paced deletion (~1.5s delay, 429 retry-safe)
-    let mut deleted = 0;
-    let mut deleted_panes = Vec::new();
-    let mut failed = Vec::new();
-    for (pane, thread) in mappings {
-        println!("[reset] deleting topic #{thread} for {pane}");
-        if s.topics.delete_topic(&pane).await {
-            deleted += 1;
-            deleted_panes.push(pane);
-        } else {
-            failed.push((pane, thread));
-        }
-        tokio::time::sleep(RESET_STEP_DELAY).await;
-    }
-
-    // Step 2: Clear stored titles and tags. Topics whose deletion
-    // failed still exist on Telegram: their full identity (tag, title,
-    // icon) survives so the re-sync reuses them instead of minting
-    // renamed duplicates or clobbering user-custom icons.
-    // Drain again before the wipe: same orphan race as Step 0, now at
-    // its tightest window.
+    // Drain in-flight creates before the reset
     for _ in 0..400 {
         if s.topics.creating_len() == 0 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    let mut kept = Vec::new();
-    for (pane, thread) in &failed {
-        kept.push((pane.clone(), *thread, s.topics.snapshot_identity(pane)));
-    }
-    // Atomic clear+restore: one lock, one save — a kill in between can
-    // never leave an empty main with last-good already clobbered.
-    let kept_flat: Vec<crate::topics::storage::KeptIdentity> = kept
-        .into_iter()
-        .map(|(pane, thread, (tag, title, icon))| (pane, thread, tag, title, icon))
-        .collect();
-    s.topics.storage_clear_except(kept_flat);
 
-    // Retire jobs for deleted topics: watchers and typing loops point
-    // at dead threads (delivery would fail-retry forever, typing would
-    // spam General). Survivors keep theirs.
-    for pane in &deleted_panes {
-        s.cancel_jobs_for(pane).await;
-        s.clear_pane(pane).await;
-    }
-
-    // Step 3: Pure read from Herdr (AUDIT: zero mutation on Herdr).
-    // Agents were read up front (step 0 aborts on outage); spaces and
-    // facts only shape labels, so they stay fail-open.
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
-    let failed_set: HashSet<String> = failed.iter().map(|(p, _)| p.clone()).collect();
     let mut live_panes = HashSet::new();
-    let mut created = 0;
-    let mut reused = 0;
+    let mut migrated = 0;
+    let mut failed = Vec::new();
 
-    // Step 4: Re-sync topics paced (~1.5s delay). Reset-owned mint:
-    // bypasses the reuse-only gate (else `created` stays 0 and topics
-    // stay deleted until the watchdog rebuilds them).
+    // Step 1: Migrate agent topics (F6 copy recent msgs + F3 sweep pins + F2 pin identity card)
     for r in &agents {
         live_panes.insert(r.pane.clone());
         let space = ws_label(&spaces, &r.ws);
-        if s.topics
-            .sync_topic_for_reset(&r.pane, &r.kind, space)
+        let raw_title = facts
+            .get(&r.pane)
+            .and_then(|f| f.label.as_deref())
+            .filter(|l| !l.trim().is_empty())
+            .or_else(|| {
+                if r.title.trim().is_empty() {
+                    None
+                } else {
+                    Some(r.title.as_str())
+                }
+            });
+        s.cancel_jobs_for(&r.pane).await;
+        match s
+            .topics
+            .reset_topic(&r.pane, &r.kind, space, &r.status, raw_title, None)
             .await
-            .is_some()
         {
-            if failed_set.contains(&r.pane) {
-                reused += 1;
-            } else {
-                created += 1;
+            Some(_) => {
+                migrated += 1;
             }
-            if let Some(f) = facts.get(&r.pane)
-                && let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty())
-            {
-                let formatted = names::format_title(space, label, &r.kind);
-                s.topics.sync_title(&r.pane, &formatted).await;
+            None => {
+                failed.push(r.pane.clone());
             }
         }
         tokio::time::sleep(RESET_STEP_DELAY).await;
     }
 
-    // Also re-sync any agentless live shell panes
-    if let Ok(panes) = list_panes(&s.cfg.socket).await {
-        for pane in panes {
-            if !live_panes.contains(&pane) {
-                let ws = facts.get(&pane).map(|f| f.ws.as_str()).unwrap_or("");
-                let space = ws_label(&spaces, ws);
-                if s.topics
-                    .sync_topic_for_reset(&pane, "shell", space)
-                    .await
-                    .is_some()
-                {
-                    if failed_set.contains(&pane) {
-                        reused += 1;
-                    } else {
-                        created += 1;
-                    }
-                    if let Some(f) = facts.get(&pane)
-                        && let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty())
-                    {
-                        let formatted = names::format_title(space, label, "shell");
-                        s.topics.sync_title(&pane, &formatted).await;
-                    }
+    // Step 2: Migrate live agentless shell panes
+    for pane in shell_panes {
+        if !live_panes.contains(&pane) {
+            live_panes.insert(pane.clone());
+            let ws = facts.get(&pane).map(|f| f.ws.as_str()).unwrap_or("");
+            let space = ws_label(&spaces, ws);
+            let raw_title = facts
+                .get(&pane)
+                .and_then(|f| f.label.as_deref())
+                .filter(|l| !l.trim().is_empty());
+            s.cancel_jobs_for(&pane).await;
+            match s
+                .topics
+                .reset_topic(&pane, "shell", space, "ready", raw_title, None)
+                .await
+            {
+                Some(_) => {
+                    migrated += 1;
                 }
-                tokio::time::sleep(RESET_STEP_DELAY).await;
+                None => {
+                    failed.push(pane.clone());
+                }
             }
+            tokio::time::sleep(RESET_STEP_DELAY).await;
+        }
+    }
+
+    // Step 3: Clean up dead topics (panes mapped previously that no longer exist in Herdr)
+    let mut dead_deleted = 0;
+    for (pane, thread) in mappings {
+        if !live_panes.contains(&pane) {
+            println!("[reset] deleting dead topic #{thread} for {pane}");
+            if s.topics.delete_topic(&pane).await {
+                dead_deleted += 1;
+            }
+            s.cancel_jobs_for(&pane).await;
+            s.clear_pane(&pane).await;
+            tokio::time::sleep(RESET_STEP_DELAY).await;
         }
     }
 
     let mut summary = format!(
-        "✅ Paced reset complete: deleted {deleted} topic(s), recreated {created} topic(s)."
+        "✅ Paced reset complete: migrated {migrated} topic(s) (queue carried over), cleaned {dead_deleted} dead topic(s)."
     );
     if !failed.is_empty() {
         summary.push_str(&format!(
-            " {} failed (kept, retried by next /reset).",
+            " {} failed (retried by next /reset).",
             failed.len()
         ));
-    }
-    if reused > 0 {
-        summary.push_str(&format!(" {reused} reused."));
     }
     s.tg.send_msg(chat, thread_id, &summary, None).await;
 }
@@ -239,5 +226,10 @@ mod tests {
     #[test]
     fn test_reset_delay_constant() {
         assert_eq!(RESET_STEP_DELAY, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn test_is_resetting_flag() {
+        assert!(!is_resetting());
     }
 }

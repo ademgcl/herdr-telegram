@@ -83,7 +83,8 @@ impl TopicStorage {
         let b = s.titles.remove(pane);
         let c = s.pins.remove(pane);
         let d = s.icons.remove(pane);
-        if prev.is_some() || a.is_some() || b.is_some() || c.is_some() || d.is_some() {
+        let e = s.last_msgs.remove(pane);
+        if prev.is_some() || a.is_some() || b.is_some() || c.is_some() || d.is_some() || e.is_some() {
             self.save(&s);
         }
         prev
@@ -103,6 +104,7 @@ impl TopicStorage {
         s.titles.remove(pane);
         s.pins.remove(pane);
         s.icons.remove(pane);
+        s.last_msgs.remove(pane);
         self.save(&s);
         true
     }
@@ -184,13 +186,35 @@ impl TopicStorage {
         tag
     }
 
-    pub fn take_pins(&self) -> HashMap<String, i64> {
+    pub fn get_pin(&self, pane: &str) -> Option<i64> {
+        self.lock().pins.get(pane).copied()
+    }
+
+    pub fn set_pin(&self, pane: &str, mid: i64) {
         let mut s = self.lock();
-        let pins = std::mem::take(&mut s.pins);
-        if !pins.is_empty() {
+        if s.pins.get(pane).copied() == Some(mid) {
+            return;
+        }
+        s.pins.insert(pane.to_string(), mid);
+        self.save(&s);
+    }
+
+    /// F6: Record last seen message ID for a pane (bounded to 3 recent msgs).
+    pub fn record_msg(&self, pane: &str, mid: i64) {
+        let mut s = self.lock();
+        let list = s.last_msgs.entry(pane.to_string()).or_default();
+        if list.last().copied() != Some(mid) {
+            list.push(mid);
+            if list.len() > 3 {
+                list.remove(0);
+            }
             self.save(&s);
         }
-        pins
+    }
+
+    /// F6: Get up to 3 recent message IDs for this pane.
+    pub fn get_recent_msgs(&self, pane: &str) -> Vec<i64> {
+        self.lock().last_msgs.get(pane).cloned().unwrap_or_default()
     }
 
     pub fn all_mappings(&self) -> HashMap<String, i64> {
@@ -205,6 +229,7 @@ impl TopicStorage {
         s.titles.clear();
         s.pins.clear();
         s.icons.clear();
+        s.last_msgs.clear();
         // No backup: empty intermediate must not clobber last-good.
         self.save_no_backup(&s);
     }
@@ -218,6 +243,9 @@ impl TopicStorage {
         s.titles.clear();
         s.pins.clear();
         s.icons.clear();
+        let kept_panes: std::collections::HashSet<&str> =
+            kept.iter().map(|(p, ..)| p.as_str()).collect();
+        s.last_msgs.retain(|p, _| kept_panes.contains(p.as_str()));
         for (pane, thread, tag, title, icon) in &kept {
             s.topics.insert(pane.clone(), *thread);
             if let Some(t) = tag {

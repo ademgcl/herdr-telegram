@@ -34,16 +34,6 @@ impl TopicManager {
         self.sync_topic(pane, "shell", "?").await;
     }
 
-    /// One-time cleanup of the retired pinned-status era: unpin leftovers.
-    /// No-op once storage is clean.
-    pub async fn retire_pins(&self) {
-        let Some(forum) = self.forum_id else { return };
-        for (pane, mid) in self.storage.take_pins() {
-            println!("[topics] unpinning retired status pin #{mid} ({pane})");
-            self.tg.unpin_msg(forum, mid).await;
-        }
-    }
-
     pub async fn close_topic(&self, pane: &str) -> bool {
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
             return true;
@@ -170,5 +160,88 @@ impl TopicManager {
             .unwrap_or_else(|e| e.into_inner())
             .clear();
         self.storage.clear_except(kept);
+    }
+
+    /// F3: Unpin all messages in a topic thread.
+    pub async fn unpin_all(&self, pane: &str) -> bool {
+        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+            return true;
+        };
+        self.tg.unpin_all_forum_topic_messages(forum, thread).await.is_ok()
+    }
+
+    /// F6: Record recent message ID for this pane.
+    pub fn record_msg(&self, pane: &str, mid: i64) {
+        self.storage.record_msg(pane, mid);
+    }
+
+    /// F6: Get recent message IDs for this pane.
+    pub fn get_recent_msgs(&self, pane: &str) -> Vec<i64> {
+        self.storage.get_recent_msgs(pane)
+    }
+
+    /// F6 + F3: Paced reset for a single pane:
+    /// 1. Look up existing thread and recent messages before deletion.
+    /// 2. Mint new topic on Telegram.
+    /// 3. Set context icon (or preserve user icon).
+    /// 4. Copy recent messages from the old topic to the new topic (F6).
+    /// 5. Sweep any pins and pin fresh identity card (F3 + F2).
+    /// 6. Delete old topic on Telegram (if one existed).
+    /// 7. Update storage mappings to the new thread.
+    pub async fn reset_topic(
+        &self,
+        pane: &str,
+        kind: &str,
+        space: &str,
+        status: &str,
+        raw_title: Option<&str>,
+        branch: Option<&str>,
+    ) -> Option<i64> {
+        let forum = self.forum_id?;
+        let old_thread = self.storage.get_thread(pane);
+        let tag = self.storage.assign_tag(pane, kind);
+        let title_or_tag = raw_title.unwrap_or(&tag);
+        let name = names::format_title(space, title_or_tag, kind);
+
+        // Mint new topic
+        let new_thread = match self.tg.create_forum_topic(forum, &name).await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[reset] create topic failed for {pane}: {e}");
+                return None;
+            }
+        };
+
+        // Icon: preserve user-customized icon if one was set, else context icon
+        let icon = self
+            .storage
+            .get_icon(pane)
+            .unwrap_or_else(|| names::context_icon_emoji_id(kind).to_string());
+        let _ = self.tg.set_topic_icon(forum, new_thread, &icon).await;
+
+        // F6: copy recent messages to the new topic before old topic is deleted
+        let mids = self.storage.get_recent_msgs(pane);
+        for mid in mids {
+            let _ = self.tg.copy_msg(forum, forum, mid, Some(new_thread)).await;
+        }
+
+        // F3 + F2: sweep pins and pin fresh identity card
+        let _ = self.tg.unpin_all_forum_topic_messages(forum, new_thread).await;
+        let card = crate::ui::build_pinned_card_text(kind, pane, space, status, raw_title, branch);
+        if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await {
+            let _ = self.tg.pin_msg(forum, mid).await;
+            self.storage.set_pin(pane, mid);
+        }
+
+        // Delete old topic now that messages are copied
+        if let Some(old) = old_thread {
+            let _ = self.tg.delete_forum_topic(forum, old).await;
+        }
+
+        // Update storage with new thread mapping and title
+        self.storage.insert_with_title(pane.to_string(), new_thread, &name);
+        self.storage.set_icon(pane, &icon);
+        println!("[reset] migrated topic for {pane}: #{:?} → #{new_thread}", old_thread);
+        Some(new_thread)
     }
 }

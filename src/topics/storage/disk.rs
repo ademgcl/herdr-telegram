@@ -22,6 +22,8 @@ pub(crate) struct Store {
     pub pins: HashMap<String, i64>,
     #[serde(default)]
     pub icons: HashMap<String, String>,
+    #[serde(default)]
+    pub last_msgs: HashMap<String, Vec<i64>>,
 }
 
 pub(crate) fn prev_path(path: &Path) -> PathBuf {

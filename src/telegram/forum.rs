@@ -109,4 +109,58 @@ impl TelegramClient {
         }
         Ok(())
     }
+
+    /// F4: Fetch valid custom-emoji sticker IDs for forum topic icons.
+    pub async fn get_forum_topic_icon_stickers(&self) -> Res<Vec<String>> {
+        let res = self
+            .call_retrying(
+                "getForumTopicIconStickers",
+                json!({}),
+                Duration::from_secs(15),
+            )
+            .await?;
+        let stickers = res
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| s["custom_emoji_id"].as_str().map(|id| id.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(stickers)
+    }
+
+    /// F9: Probe bot admin rights in the forum supergroup (`can_manage_topics`, `can_pin_messages`).
+    pub async fn check_forum_permissions(&self, chat_id: i64) -> Res<BotPermissions> {
+        let me = self.get_me().await?;
+        let bot_id = me["id"]
+            .as_i64()
+            .ok_or_else(|| "missing bot id in getMe response")?;
+        let member = self
+            .call_retrying(
+                "getChatMember",
+                json!({"chat_id": chat_id, "user_id": bot_id}),
+                Duration::from_secs(15),
+            )
+            .await?;
+        let status = member["status"].as_str().unwrap_or("");
+        let is_admin = status == "administrator" || status == "creator";
+        let can_manage_topics = member["can_manage_topics"].as_bool().unwrap_or(false);
+        let can_pin_messages = member["can_pin_messages"].as_bool().unwrap_or(false);
+        let can_delete_messages = member["can_delete_messages"].as_bool().unwrap_or(false);
+        Ok(BotPermissions {
+            is_admin,
+            can_manage_topics,
+            can_pin_messages,
+            can_delete_messages,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotPermissions {
+    pub is_admin: bool,
+    pub can_manage_topics: bool,
+    pub can_pin_messages: bool,
+    pub can_delete_messages: bool,
 }

@@ -158,10 +158,7 @@ impl TelegramClient {
             .await;
     }
 
-    /// Pin a message in a chat/topic without notification.
-    /// Currently unused (identity cards are unpinned by design) —
-    /// kept for manual pin flows.
-    #[allow(dead_code)]
+    /// F2: Pin a message in a chat/topic without notification.
     pub async fn pin_msg(&self, chat_id: i64, message_id: i64) -> Res<()> {
         self.call_retrying(
             "pinChatMessage",
@@ -176,7 +173,63 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// F3: Unpin all messages in a forum topic in a single call.
+    pub async fn unpin_all_forum_topic_messages(&self, chat_id: i64, thread_id: i64) -> Res<()> {
+        match self
+            .call_retrying(
+                "unpinAllForumTopicMessages",
+                json!({
+                    "chat_id": chat_id,
+                    "message_thread_id": thread_id,
+                }),
+                Duration::from_secs(15),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if super::errors::topic_missing(&msg)
+                    || msg.contains("not modified")
+                    || msg.contains("not enough rights")
+                {
+                    return Ok(());
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// F6: Copy a message to another topic thread without forward headers.
+    pub async fn copy_msg(
+        &self,
+        chat_id: i64,
+        from_chat_id: i64,
+        message_id: i64,
+        thread_id: Option<i64>,
+    ) -> Option<i64> {
+        let mut params = json!({
+            "chat_id": chat_id,
+            "from_chat_id": from_chat_id,
+            "message_id": message_id,
+        });
+        if let Some(th) = thread_id {
+            params["message_thread_id"] = json!(th);
+        }
+        match self
+            .call_retrying("copyMessage", params, Duration::from_secs(15))
+            .await
+        {
+            Ok(v) => v["message_id"].as_i64(),
+            Err(e) => {
+                eprintln!("copyMessage {message_id} failed: {}", self.redact(&e.to_string()));
+                None
+            }
+        }
+    }
+
     /// Unpin a message (one-time cleanup helper).
+    #[allow(dead_code)]
     pub async fn unpin_msg(&self, chat_id: i64, message_id: i64) {
         if let Err(e) = self
             .call(

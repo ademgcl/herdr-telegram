@@ -88,6 +88,10 @@ pub async fn sync_titles_with(
         .iter()
         .map(|a| (a.pane.as_str(), a.kind.as_str()))
         .collect();
+    let agent_title_of: HashMap<&str, &str> = agents
+        .iter()
+        .map(|a| (a.pane.as_str(), a.title.as_str()))
+        .collect();
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
         let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
@@ -95,6 +99,15 @@ pub async fn sync_titles_with(
         if let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty()) {
             // Herdr name wins (formatted with workspace prefix and agent tag).
             let formatted = names::format_title(space, label, kind);
+            s.topics.sync_title(pane, &formatted).await;
+            continue;
+        }
+        if let Some(t) = agent_title_of
+            .get(pane.as_str())
+            .copied()
+            .filter(|t| !t.trim().is_empty())
+        {
+            let formatted = names::format_title(space, t, kind);
             s.topics.sync_title(pane, &formatted).await;
             continue;
         }
