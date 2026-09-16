@@ -1,4 +1,5 @@
 mod config;
+mod ctl;
 mod handlers;
 mod herdr;
 mod jobs;
@@ -22,10 +23,7 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Res<()> {
-    // Single-instance guard: prevent duplicate instances from doubling notifications.
-    // Single-host only (a TCP port can't see a second host polling the
-    // same bot — that split-brains prompts). HERDR_TG_PORT overrides the
-    // default so prod and dev can run side by side on one machine.
+    let args: Vec<String> = std::env::args().collect();
     let port: u16 = match std::env::var("HERDR_TG_PORT") {
         Ok(v) => v
             .trim()
@@ -33,8 +31,14 @@ async fn main() -> Res<()> {
             .map_err(|_| format!("HERDR_TG_PORT invalid: {v:?}"))?,
         Err(_) => SINGLE_INSTANCE_PORT,
     };
+
+    // CLI control client mode: bypass daemon bind and talk to running bot
+    if args.len() > 1 && args[1] == "ctl" {
+        return ctl::run_ctl_client(port, &args[2..]).await;
+    }
+
     let lock_addr = format!("127.0.0.1:{port}");
-    let _guard = match tokio::net::TcpListener::bind(&lock_addr).await {
+    let listener = match tokio::net::TcpListener::bind(&lock_addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             return Err("another herdr-telegram instance is already running".into());
@@ -45,6 +49,7 @@ async fn main() -> Res<()> {
     let cfg = cfg_from_env()?;
     println!("[main] state dir: {}", state::state_dir().display());
     let s = State::new(cfg)?;
+    tokio::spawn(ctl::run_control_server(s.clone(), listener));
 
     // Verify Herdr connectivity and protocol
     let mut pong = None;
