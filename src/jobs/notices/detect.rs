@@ -1,16 +1,18 @@
 //! Screen scanning for limit/quota/provider stalls. Pure std-only.
-use super::patterns::{CONTEXT, FATAL_PROVIDER_MARKERS, STRONG, WEAK};
+use super::patterns::{CONTEXT, FATAL_PROVIDER_MARKERS, STRONG, WEAK, best_hit};
 use super::types::LimitHit;
 
 /// Scan a raw pane screen for limit/quota/provider stalls. Strong hits
 /// win immediately; weak hits need screen-wide error context. Multiple
 /// banners can co-exist as the TUI scrolls (a stale transient retry line
-/// above a fresh quota banner): immediate kinds (`rate-limit`/`auth`)
-/// outrank stuck-gated ones, ties break bottommost (freshest) — so the
-/// card quotes what the user saw last, never a scrolled-off transient.
+/// above a fresh quota banner): immediate kinds (`rate-limit`/STRONG-
+/// `auth`) outrank stuck-gated ones, ties break bottommost (freshest) —
+/// so the card quotes what the user saw last, never a scrolled-off
+/// transient. WEAK `auth` ranks gated: agent prose must never outrank a
+/// fresher provider banner.
 pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
     let lower: Vec<String> = lines.iter().map(|l| l.to_lowercase()).collect();
-    if let Some((i, kind)) = best_hit(&lower, STRONG) {
+    if let Some((i, kind)) = best_hit(&lower, STRONG, true) {
         return Some(LimitHit {
             kind,
             excerpt: clip(&lines[i]),
@@ -21,7 +23,7 @@ pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
     if !context {
         return None;
     }
-    if let Some((i, kind)) = best_hit(&lower, WEAK) {
+    if let Some((i, kind)) = best_hit(&lower, WEAK, false) {
         return Some(LimitHit {
             kind,
             excerpt: clip(&lines[i]),
@@ -29,37 +31,6 @@ pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
         });
     }
     None
-}
-
-/// Best (line index, kind) in a table: lowest kind priority wins, ties
-/// break to the bottommost (freshest) line.
-fn best_hit(
-    lower: &[String],
-    table: &'static [(&'static str, &'static str)],
-) -> Option<(usize, &'static str)> {
-    let mut best: Option<(u8, usize, &'static str)> = None;
-    for (i, l) in lower.iter().enumerate() {
-        if let Some(kind) = table.iter().find(|(p, _)| l.contains(p)).map(|(_, k)| *k) {
-            let better = match best {
-                None => true,
-                // Lower priority wins; ties break bottommost (freshest).
-                Some((p, j, _)) => kind_priority(kind) < p || (kind_priority(kind) == p && i > j),
-            };
-            if better {
-                best = Some((kind_priority(kind), i, kind));
-            }
-        }
-    }
-    best.map(|(_, i, kind)| (i, kind))
-}
-
-/// Immediate quota/auth stalls page at once; transient-prone banners
-/// (`provider`/`error`) are stuck-gated by the caller instead.
-fn kind_priority(kind: &str) -> u8 {
-    match kind {
-        "rate-limit" | "auth" => 0,
-        _ => 1,
-    }
 }
 
 /// A single screen line carrying a fatal provider request failure
@@ -237,6 +208,19 @@ mod tests {
     }
 
     #[test]
+    fn test_stale_weak_auth_never_outranks_fresh_provider() {
+        // WEAK `auth` ranks gated now: a stale auth-prose line above a
+        // fresh provider banner loses to the freshest line.
+        let hit = detect_limit(&v(&[
+            "warning: session expired, see error log",
+            "upstream error on attempt 9",
+        ]))
+        .expect("must detect");
+        assert_eq!(hit.kind, "provider");
+        assert!(hit.excerpt.contains("attempt 9"));
+    }
+
+    #[test]
     fn test_agent_auth_prose_with_ambient_error_stays_silent() {
         // Live agy false positive: the agent DISCUSSING authentication
         // in working prose while unrelated tool output carries error
@@ -264,5 +248,16 @@ mod tests {
         assert_eq!(hit.kind, "auth");
         assert!(!hit.strong);
         assert!(super::super::types::needs_stuck_gate(&hit));
+    }
+
+    #[test]
+    fn test_weak_rate_limit_stays_immediate() {
+        // Gating is auth-specific: a WEAK quota signal still pages at
+        // once (quota stalls never self-heal).
+        let hit =
+            detect_limit(&v(&["error: upstream replied (429) trouble"])).expect("must detect");
+        assert_eq!(hit.kind, "rate-limit");
+        assert!(!hit.strong);
+        assert!(!super::super::types::needs_stuck_gate(&hit));
     }
 }

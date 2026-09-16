@@ -1,4 +1,4 @@
-//! Match tables for limit/stall detection. Pure data, std-only.
+//! Match tables + ranking for limit/stall detection. Pure, std-only.
 use super::types::ERROR_KIND;
 
 /// Strong patterns: specific enough to alert on their own. All
@@ -125,3 +125,41 @@ pub(crate) const CONTEXT: &[&str] = &[
     "❗",
     "🚫",
 ];
+
+/// Best (line index, kind) in a table: lowest kind priority wins, ties
+/// break to the bottommost (freshest) line. Provenance-aware: WEAK `auth`
+/// is stuck-gated (see `needs_stuck_gate`), so it ranks with the gated
+/// kinds — a stale auth-prose line must not outrank a fresh provider
+/// banner just because they share the `auth` name.
+pub(crate) fn best_hit(
+    lower: &[String],
+    table: &'static [(&'static str, &'static str)],
+    strong: bool,
+) -> Option<(usize, &'static str)> {
+    let mut best: Option<(u8, usize, &'static str)> = None;
+    for (i, l) in lower.iter().enumerate() {
+        if let Some(kind) = table.iter().find(|(p, _)| l.contains(p)).map(|(_, k)| *k) {
+            let better = match best {
+                None => true,
+                // Lower priority wins; ties break bottommost (freshest).
+                Some((p, j, _)) => {
+                    kind_priority(kind, strong) < p || (kind_priority(kind, strong) == p && i > j)
+                }
+            };
+            if better {
+                best = Some((kind_priority(kind, strong), i, kind));
+            }
+        }
+    }
+    best.map(|(_, i, kind)| (i, kind))
+}
+
+/// Immediate quota/STRONG-auth stalls page at once; WEAK `auth` and
+/// transient-prone banners (`provider`/`error`) are stuck-gated by the
+/// caller instead.
+fn kind_priority(kind: &str, strong: bool) -> u8 {
+    match (kind, strong) {
+        ("rate-limit", _) | ("auth", true) => 0,
+        _ => 1,
+    }
+}

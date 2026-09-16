@@ -11,6 +11,7 @@ pub mod recover;
 pub mod report;
 pub mod runner;
 pub mod segment;
+pub mod settle;
 pub mod stall;
 pub mod stream;
 
