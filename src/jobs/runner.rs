@@ -216,6 +216,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // internally with no settle and no buzz — one NEW card per
         // episode, straight from the raw screen.
         let screen = watch_stall(&s, &pane, &job, &mut episode).await;
+        // Streaming keeps the historic ~200-line window: the stall watch
+        // reads wide (500) for quota detection; baselines and deltas stay
+        // tail-shaped so live cards behave exactly as before.
+        let screen = if screen.len() > 200 {
+            screen[screen.len() - 200..].to_vec()
+        } else {
+            screen
+        };
 
         // Stream whatever is new into the live message
         if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {

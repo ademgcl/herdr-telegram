@@ -51,21 +51,23 @@ pub struct State {
     pub debounce: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Panes with a model switch in flight — second taps wait.
     pub modelop: Mutex<HashSet<String>>,
-    /// Last rate-limit episode alerted per pane: (kind, alerted_at).
-    /// Watchdog-owned (prompt watchers dedupe locally): entries are
-    /// cleared after consecutive confirmed-clean reads so the next episode
-    /// re-alerts, and re-reminded after a long stall. Empty/outage reads
-    /// preserve the entry (unknown ≠ clean) so flaps never re-alert.
+    /// Last rate-limit episode alert per pane: (kind, at). Shared by
+    /// watchdog + watchers (atomic claim ⇒ handoffs page once); cleared
+    /// after confirmed-clean reads, re-reminded while stalls persist.
+    /// Empty reads preserve it, failed sends remove it (see limits.rs).
     pub limit_alert: Mutex<HashMap<String, (String, std::time::Instant)>>,
-    /// First sight of the current gated (`provider`/`error`) banner per
-    /// pane: (kind, first_seen). Drives the stuck gate on the 60s watchdog
-    /// cadence (transient blips stay silent, persistent stalls buzz once).
-    /// Cleared with the episode (confirmed-clean or pane clear).
+    /// First sight of the current banner per pane: (kind, first_seen).
+    /// Drives the stuck gate (gated kinds) and flip damping (immediate
+    /// kinds) on the 60s watchdog cadence; accumulates across settled
+    /// samples too, so a return to working fires promptly. Cleared with
+    /// the episode (confirmed-clean or pane clear).
     pub limit_seen: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Consecutive confirmed-clean (non-empty, banner-free) watchdog reads
-    /// per pane. The episode clears after 2 — a single scroll/RPC flap
+    /// per pane. The episode clears after 3 — a single scroll/RPC flap
     /// never re-arms the alert.
     pub limit_miss: Mutex<HashMap<String, u32>>,
+    /// Last failed limit-alert send per pane (shared send-failure backoff).
+    pub limit_send_cool: Mutex<HashMap<String, std::time::Instant>>,
     /// Last displayed blocked-dialog signature per pane (question +
     /// options). Consecutive dialogs often arrive with NO status change
     /// (blocked→blocked), so content — not just transitions — decides
@@ -214,6 +216,7 @@ impl State {
             limit_alert: Mutex::new(HashMap::new()),
             limit_seen: Mutex::new(HashMap::new()),
             limit_miss: Mutex::new(HashMap::new()),
+            limit_send_cool: Mutex::new(HashMap::new()),
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashSet::new()),
             typing_tasks: Mutex::new(HashMap::new()),

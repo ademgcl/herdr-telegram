@@ -75,6 +75,7 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             s.limit_alert.lock().await.retain(|p, _| live.contains(p));
             s.limit_seen.lock().await.retain(|p, _| live.contains(p));
             s.limit_miss.lock().await.retain(|p, _| live.contains(p));
+            s.limit_send_cool.lock().await.retain(|p, _| live.contains(p));
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
             s.modelop.lock().await.retain(|p| live.contains(p));

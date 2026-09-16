@@ -126,6 +126,23 @@ pub(crate) const CONTEXT: &[&str] = &[
     "🚫",
 ];
 
+/// Quota-plausible markers: the typo fix applies only on lines carrying
+/// one of these, so bare typo prose elsewhere stays byte-identical and
+/// can never newly satisfy WEAK-context matching.
+const TYPO_CONTEXT: &[&str] = &[
+    "usage", "quota", "limit", "ratelimit", "credit", "billing", "429", "subscribe",
+];
+
+/// Normalize a lowercased screen line before matching: collapse the
+/// common single-e misspelling (`exceded`/`excede` for `exceeded`/`exceed`)
+/// on quota-plausible lines only, so drifted quota banners still match
+/// the tables above. Longer misspelling first (`exceded` contains `excede`).
+pub(crate) fn normalize_line(l: &str) -> String {
+    if !TYPO_CONTEXT.iter().any(|c| l.contains(c)) {
+        return l.to_string();
+    }
+    l.replace("exceded", "exceeded").replace("excede", "exceed")
+}
 /// Best (line index, kind) in a table: lowest kind priority wins, ties
 /// break to the bottommost (freshest) line. Provenance-aware: WEAK `auth`
 /// is stuck-gated (see `needs_stuck_gate`), so it ranks with the gated
@@ -169,5 +186,28 @@ pub(crate) fn kind_priority(kind: &str, strong: bool) -> u8 {
     match (kind, strong) {
         ("rate-limit", _) | ("auth", true) => 0,
         _ => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_fixes_exceded_typo() {
+        assert_eq!(normalize_line("free usage exceded"), "free usage exceeded");
+        assert_eq!(normalize_line("quota excede limit"), "quota exceed limit");
+        assert_eq!(normalize_line("free usage exceeded"), "free usage exceeded");
+        // Bare typo prose without quota markers stays byte-identical.
+        assert_eq!(normalize_line("we exceded expectations"), "we exceded expectations");
+    }
+
+    #[test]
+    fn test_typo_banner_still_matches_strong() {
+        // A drifted/mistyped quota banner must still hit after normalize.
+        let raw = ["rfree usage exceded, subscribe to go".to_string()];
+        let lower: Vec<String> = raw.iter().map(|l| normalize_line(&l.to_lowercase())).collect();
+        let hit = best_hit(&lower, STRONG, true).expect("typo quota must match");
+        assert_eq!(hit.1, "rate-limit");
     }
 }

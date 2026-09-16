@@ -61,6 +61,19 @@ impl BuzzEpisode {
     /// call this (a no-op) instead.
     pub fn note_empty(&mut self) {}
 
+    /// Delivery failed (Telegram send dropped): unmark the alert but keep
+    /// kind + stuck timer, so the next tick retries the card immediately
+    /// instead of arming a 30-min suppress with nothing delivered.
+    pub fn unfire(&mut self) {
+        self.alerted = false;
+    }
+
+    /// No open episode (fresh watcher or confirmed-clear): the next banner
+    /// starts a new episode and pages per its kind rules.
+    pub fn is_fresh(&self) -> bool {
+        self.kind.is_none()
+    }
+
     /// Current detection (or None for a clean non-empty read) → the hit
     /// to report this tick, if any. New (stable) kinds report at once
     /// except gated ones; repeats stay silent; a missing banner must
