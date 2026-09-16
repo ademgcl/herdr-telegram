@@ -6,7 +6,6 @@ use std::time::Duration;
 /// Telegram animated message effect ID for fire/flame (urgent alerts: blocked, limit stall).
 pub const EFFECT_FIRE: &str = "5104841245755180586";
 
-
 pub fn build_send_msg_params(
     chat_id: i64,
     thread_id: Option<i64>,
@@ -168,13 +167,15 @@ impl TelegramClient {
     }
 
     /// "typing…" indicator — lasts ~5s, repeat to sustain. Zero clutter.
+    /// 5s timeout (not 10s): the sustain loop ticks every 4s, so a slow
+    /// send must not stretch the period past expiry and flicker.
     pub async fn typing(&self, chat_id: i64, thread_id: Option<i64>) {
         let mut params = json!({"chat_id": chat_id, "action": "typing"});
         if let Some(th) = thread_id {
             params["message_thread_id"] = json!(th);
         }
         let _ = self
-            .call("sendChatAction", params, Duration::from_secs(10))
+            .call("sendChatAction", params, Duration::from_secs(5))
             .await;
     }
 

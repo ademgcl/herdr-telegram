@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "Drive Herdr coding agents (opencode, shells, any agent) from Telegram — prompts, answer cards, and stall alerts via DMs or forum topics"
 license = "MIT"
-repository = "https://github.com/ademgcl/herdr-telegram"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

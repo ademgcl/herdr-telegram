@@ -153,7 +153,9 @@ async fn main() -> Res<()> {
                         stickers.len()
                     );
                 } else {
-                    eprintln!("[telegram] WARNING: context icon stickers missing in set: {missing:?}");
+                    eprintln!(
+                        "[telegram] WARNING: context icon stickers missing in set: {missing:?}"
+                    );
                 }
             }
             Err(e) => eprintln!("[telegram] forum icon stickers probe failed: {e}"),

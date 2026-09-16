@@ -165,7 +165,7 @@ impl TelegramClient {
         let me = self.get_me().await?;
         let bot_id = me["id"]
             .as_i64()
-            .ok_or_else(|| "missing bot id in getMe response")?;
+            .ok_or("missing bot id in getMe response")?;
         let member = self
             .call_retrying(
                 "getChatMember",

@@ -10,6 +10,7 @@ pub mod dm_model;
 pub mod dm_prompt;
 pub mod escape;
 pub mod forum;
+pub mod forum_topic;
 pub mod general;
 pub mod interactive;
 pub mod kill;

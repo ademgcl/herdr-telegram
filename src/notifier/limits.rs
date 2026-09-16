@@ -108,9 +108,8 @@ pub(crate) async fn scan_limits(s: &AppState) {
         if let Some(forum) = s.cfg.forum
             && let Some(thread) = s.topics.all_mappings().get(&pane).copied()
         {
-            let mid = s
-                .tg
-                .send_msg_with_effect(
+            let mid =
+                s.tg.send_msg_with_effect(
                     forum,
                     Some(thread),
                     &text,
@@ -124,9 +123,8 @@ pub(crate) async fn scan_limits(s: &AppState) {
             s.remember(forum, mid, &pane).await;
         } else {
             for id in &s.cfg.owners {
-                let mid = s
-                    .tg
-                    .send_msg_with_effect(
+                let mid =
+                    s.tg.send_msg_with_effect(
                         *id,
                         None,
                         &text,

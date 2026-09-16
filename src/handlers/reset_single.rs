@@ -22,14 +22,14 @@ pub async fn run_single_topic_reset(
         .ok_or("Reset is only available in forum supergroup mode")?;
 
     // F9: permission guard
-    if let Ok(perms) = s.tg.check_forum_permissions(forum).await {
-        if !perms.can_manage_topics {
-            let msg = "⚠️ reset aborted: bot lacks 'can_manage_topics' admin permission";
-            if chat != 0 {
-                s.tg.send_msg(chat, thread_id, msg, None).await;
-            }
-            return Err(msg.into());
+    if let Ok(perms) = s.tg.check_forum_permissions(forum).await
+        && !perms.can_manage_topics
+    {
+        let msg = "⚠️ reset aborted: bot lacks 'can_manage_topics' admin permission";
+        if chat != 0 {
+            s.tg.send_msg(chat, thread_id, msg, None).await;
         }
+        return Err(msg.into());
     }
 
     let clean_target = target.trim().strip_prefix('#').unwrap_or(target.trim());
@@ -65,7 +65,11 @@ pub async fn run_single_topic_reset(
             .get(&pane)
             .and_then(|f| f.label.as_deref())
             .filter(|l| !l.trim().is_empty());
-        ("shell".to_string(), "ready".to_string(), title.map(|t| t.to_string()))
+        (
+            "shell".to_string(),
+            "ready".to_string(),
+            title.map(|t| t.to_string()),
+        )
     };
 
     let ws = facts.get(&pane).map(|f| f.ws.as_str()).unwrap_or("");

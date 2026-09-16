@@ -14,14 +14,19 @@ impl TopicManager {
         self.storage.get_title(pane)
     }
 
-    /// Record a title the telegram side already shows (native rename):
-    /// no API call, just the echo loop-guard.
-    pub fn note_title(&self, pane: &str, title: &str) {
-        self.storage.set_title(pane, title);
+    /// CAS record of a title the telegram side already shows (native
+    /// rename): no API call, just the echo loop-guard. Thread-checked so
+    /// a remint between resolve and store never gains a stale title.
+    /// Returns stored or not.
+    pub fn note_title_if_thread(&self, pane: &str, thread: i64, title: &str) -> bool {
+        if !self.storage.set_title_if_thread(pane, thread, title) {
+            return false;
+        }
         self.last_title_write
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(pane.to_string(), Instant::now());
+        true
     }
 
     /// herdr→telegram half: rename the topic when the pane's desired

@@ -95,8 +95,17 @@ pub async fn sync_titles_with(
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
         let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
-        let space = ws_label(&spaces, &f.ws);
+        let space = ws_label(spaces, &f.ws);
         if let Some(label) = f.label.as_deref().filter(|l| !l.trim().is_empty()) {
+            // User-set title preservation: when the herdr label already
+            // equals the stored topic title verbatim, a Telegram native
+            // rename just synced both sides — keep it exactly, never
+            // reformat (formatting would rewrite "My Title" into
+            // "[space] My Title · o" and the user's edit would appear
+            // to be reverted a few seconds later).
+            if stored_matches_label(s.topics.topic_title(pane).as_deref(), label) {
+                continue;
+            }
             // Herdr name wins (formatted with workspace prefix and agent tag).
             let formatted = names::format_title(space, label, kind);
             s.topics.sync_title(pane, &formatted).await;
@@ -126,21 +135,60 @@ pub async fn sync_titles_with(
     s.topics.probe_deleted().await;
 }
 
+/// Verbatim-preservation predicate: a stored topic title that already
+/// equals the herdr label (trim-compared) means a Telegram native rename
+/// just synced both sides — the watchdog must keep it exactly, never
+/// reformat. Pure so it is unit-tested, not just eyeballed.
+pub fn stored_matches_label(stored: Option<&str>, label: &str) -> bool {
+    stored.map(str::trim) == Some(label.trim())
+}
+
+/// Reset Step-4 title decision (single call-site for both agent + shell
+/// loops, so the predicate can never drift): a pre-reset stored title
+/// equal to the herdr label means the user set it verbatim — re-apply
+/// raw, else format. Pure so it is unit-tested.
+pub fn reset_desired_title(pre: Option<&str>, space: &str, label: &str, kind: &str) -> String {
+    if stored_matches_label(pre, label) {
+        label.trim().to_string()
+    } else {
+        crate::topics::names::format_title(space, label, kind)
+    }
+}
+
 /// Native topic rename → herdr pane label. Unmapped threads (General)
 /// are ignored; our own sync echoes match the stored title and skip.
+/// A user-set title is kept verbatim: stored raw and written raw into
+/// the herdr label, so the watchdog's preservation check (stored ==
+/// label) converges instead of reformatting it seconds later.
 pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name: &str) {
+    // Reset owns migration: a native rename mid-reset would mutate herdr
+    // during the read-only window and fight re-sync. Dropped:
+    // reset rebuilds from herdr, re-apply post-reset.
+    if crate::handlers::reset::is_resetting() {
+        return;
+    }
     let Some(th) = thread else { return };
     let Some(pane) = s.topics.pane_of_thread(th) else {
         println!("[titles] rename to {name:?} in unmapped thread #{th} — ignored");
         return;
     };
     let name = name.trim();
-    if name.is_empty() || s.topics.topic_title(&pane).as_deref() == Some(name) {
+    if name.is_empty() || stored_matches_label(s.topics.topic_title(&pane).as_deref(), name) {
         return;
     }
     match rename_pane(&s.cfg.socket, &pane, Some(name)).await {
         Ok(()) => {
-            s.topics.note_title(&pane, name);
+            // Re-gate after the await + CAS-store: a remint (reset /
+            // probe prune) landing mid-RPC must not gain a stale title —
+            // plain note_title would poison the fresh mapping and the
+            // watchdog would then preserve the wrong title forever.
+            if crate::handlers::reset::is_resetting() {
+                return;
+            }
+            if !s.topics.note_title_if_thread(&pane, th, name) {
+                println!("[titles] stale rename dropped for {pane}");
+                return;
+            }
             println!("[titles] topic #{th} renamed → pane {pane} label {name:?}");
         }
         Err(e) => {
@@ -206,6 +254,43 @@ mod tests {
                 &json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})
             ),
             None
+        );
+    }
+
+    #[test]
+    fn test_stored_matches_label_trims() {
+        assert!(stored_matches_label(Some("My Title"), "My Title"));
+        assert!(stored_matches_label(Some("My Title"), "  My Title  "));
+        assert!(stored_matches_label(Some("  My Title  "), "My Title"));
+        assert!(!stored_matches_label(Some("My Title"), "my title"));
+        assert!(!stored_matches_label(None, "My Title"));
+        assert!(!stored_matches_label(Some("[My Title]"), "My Title"));
+        assert!(!stored_matches_label(Some("[tg] api · o"), "api"));
+    }
+
+    #[test]
+    fn test_reset_desired_title_verbatim_or_formatted() {
+        // Verbatim when pre-reset stored equals the herdr label.
+        assert_eq!(
+            reset_desired_title(Some("My Title"), "tg", "My Title", "opencode"),
+            "My Title"
+        );
+        assert_eq!(
+            reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode"),
+            "My Title"
+        );
+        // Formatted otherwise (new/changed labels, case-only changes).
+        assert_eq!(
+            reset_desired_title(Some("[tg] api · o"), "tg", "backend", "opencode"),
+            "[tg] backend · o"
+        );
+        assert_eq!(
+            reset_desired_title(None, "tg", "backend", "opencode"),
+            "[tg] backend · o"
+        );
+        assert_eq!(
+            reset_desired_title(Some("My Title"), "tg", "my title", "opencode"),
+            "[tg] my title · o"
         );
     }
 }

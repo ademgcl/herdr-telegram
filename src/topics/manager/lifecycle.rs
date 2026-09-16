@@ -170,7 +170,10 @@ impl TopicManager {
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
             return true;
         };
-        self.tg.unpin_all_forum_topic_messages(forum, thread).await.is_ok()
+        self.tg
+            .unpin_all_forum_topic_messages(forum, thread)
+            .await
+            .is_ok()
     }
 
     /// F6: Record recent message ID for this pane.
@@ -203,8 +206,17 @@ impl TopicManager {
         let forum = self.forum_id?;
         let old_thread = self.storage.get_thread(pane);
         let tag = self.storage.assign_tag(pane, kind);
-        let title_or_tag = raw_title.unwrap_or(&tag);
-        let name = names::format_title(space, title_or_tag, kind);
+        // Verbatim user titles must survive reset: a stored title equal
+        // to the herdr label means a native rename synced both sides —
+        // re-apply raw instead of reformatting ("My Title" → "[space]
+        // My Title · o" would look like the bot reverting the rename).
+        let pre = self.storage.get_title(pane);
+        let name = match raw_title {
+            Some(label) => {
+                crate::handlers::titles::reset_desired_title(pre.as_deref(), space, label, kind)
+            }
+            None => names::format_title(space, &tag, kind),
+        };
 
         // Mint new topic
         let color = names::workspace_icon_color(space);
@@ -230,7 +242,10 @@ impl TopicManager {
         }
 
         // F3 + F2: sweep pins and pin fresh identity card
-        let _ = self.tg.unpin_all_forum_topic_messages(forum, new_thread).await;
+        let _ = self
+            .tg
+            .unpin_all_forum_topic_messages(forum, new_thread)
+            .await;
         let card = crate::ui::build_pinned_card_text(kind, pane, space, status, raw_title, branch);
         if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await {
             let _ = self.tg.pin_msg(forum, mid).await;
@@ -243,9 +258,13 @@ impl TopicManager {
         }
 
         // Update storage with new thread mapping and title
-        self.storage.insert_with_title(pane.to_string(), new_thread, &name);
+        self.storage
+            .insert_with_title(pane.to_string(), new_thread, &name);
         self.storage.set_icon(pane, &icon);
-        println!("[reset] migrated topic for {pane}: #{:?} → #{new_thread}", old_thread);
+        println!(
+            "[reset] migrated topic for {pane}: #{:?} → #{new_thread}",
+            old_thread
+        );
         Some(new_thread)
     }
 }

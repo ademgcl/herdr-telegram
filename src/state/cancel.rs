@@ -117,11 +117,24 @@ impl State {
         // act — never hold typing_tasks across the jobs/pending/waiter
         // locks (a future inverse nesting would deadlock, and every
         // typing start/stop blocks for the whole global cancel).
-        let typing: Vec<tokio::task::JoinHandle<()>> =
-            std::mem::take(&mut *self.typing_tasks.lock().await)
-                .into_values()
+        // 1:1 working↔typing: abort only panes that owned cancellable
+        // work (job or intent) — a global /cancel must not darken a
+        // spontaneous working bystander with neither (its next heal is
+        // otherwise the 60s watchdog while it keeps working).
+        let job_panes: std::collections::HashSet<String> =
+            self.jobs.lock().await.keys().cloned().collect();
+        let pending_panes: std::collections::HashSet<String> =
+            self.pending.lock().await.keys().cloned().collect();
+        let doomed: Vec<tokio::task::JoinHandle<()>> = {
+            let mut tasks = self.typing_tasks.lock().await;
+            let kill: Vec<String> = tasks
+                .keys()
+                .filter(|p| job_panes.contains(*p) || pending_panes.contains(*p))
+                .cloned()
                 .collect();
-        for handle in typing {
+            kill.into_iter().filter_map(|p| tasks.remove(&p)).collect()
+        };
+        for handle in doomed {
             handle.abort();
         }
         let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);

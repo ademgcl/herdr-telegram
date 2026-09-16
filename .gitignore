@@ -1,6 +1,7 @@
 .env
 target/
 *.state
+*.prev
 *.bak
 bot.log
 bot.pid

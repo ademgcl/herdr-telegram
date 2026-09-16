@@ -130,26 +130,16 @@ impl State {
         let handle = tokio::spawn(async move {
             let forum = s.cfg.forum;
             // General-origin jobs never have a thread; topic jobs use
-            // theirs — and go quiet (not General-spammy) while a lost
-            // mapping heals instead of typing into the parent chat.
-            // Bounded quiet: after ~12s without a thread, nudge General
-            // once per 3 ticks so a mid-job delete never looks dead.
-            let mut had_thread = false;
-            let mut quiet_ticks: u32 = 0;
+            // theirs. 1:1 working↔typing: while unmapped (mid-job delete
+            // healing), type into General EVERY tick — throttling here
+            // to once-per-3-ticks guarantees an 8s+ visible gap (typing
+            // expires ~5s) mid-job, exactly the reported dropout.
             while let Some(chat_id) = forum {
                 let thread = s.topics.all_mappings().get(&pane_str).copied();
                 if let Some(th) = thread {
-                    had_thread = true;
-                    quiet_ticks = 0;
                     s.tg.typing(chat_id, Some(th)).await;
-                } else if !had_thread {
-                    s.tg.typing(chat_id, None).await;
                 } else {
-                    quiet_ticks += 1;
-                    if quiet_ticks.is_multiple_of(3) {
-                        eprintln!("[typing] {pane_str} mapping lost — nudging General");
-                        s.tg.typing(chat_id, None).await;
-                    }
+                    s.tg.typing(chat_id, None).await;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             }
@@ -164,6 +154,32 @@ impl State {
     pub async fn stop_typing(&self, pane: &str) {
         if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
             handle.abort();
+        }
+    }
+
+    /// Shell-aware stop: shells own `pending`, agents own `jobs`, and
+    /// both share one per-pane typing task. Plain `stop_typing_unless_owned`
+    /// checks only `jobs`, so a finished/superseded shell settle would
+    /// abort the task a still-running successor (or overlapping agent)
+    /// needs. Stop only when neither owns the pane; re-mint on race.
+    pub async fn stop_shell_typing(self: &Arc<Self>, pane: &str) {
+        if self.jobs.lock().await.contains_key(pane) {
+            return;
+        }
+        if self.pending.lock().await.contains_key(pane) {
+            return;
+        }
+        let aborted = if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
+            handle.abort();
+            true
+        } else {
+            false
+        };
+        if aborted
+            && (self.jobs.lock().await.contains_key(pane)
+                || self.pending.lock().await.contains_key(pane))
+        {
+            self.start_typing(pane).await;
         }
     }
 

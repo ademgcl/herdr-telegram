@@ -209,8 +209,8 @@ mod tests {
         assert_eq!(format_title("tg", "x1", "my-agent"), "[tg] x1 · my");
         assert_eq!(format_title("tg", "x1", "?"), "[tg] x1 · agent");
         assert_eq!(
-            format_title("herdr-telegram", "main · herdr-telegram imac", "opencode"),
-            "[herdr-telegram] main · herdr-telegram imac · o"
+            format_title("herdr-telegram", "main · herdr-telegram dev", "opencode"),
+            "[herdr-telegram] main · herdr-telegram dev · o"
         );
         // Minimal-dedup: the reported stutter collapses...
         assert_eq!(format_title("ip", "ip shell", "shell"), "[ip] shell");

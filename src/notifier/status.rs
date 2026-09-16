@@ -93,10 +93,10 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
                 &kind, pane, raw_space, new_status, title_opt, branch,
             );
             let mut mid_opt = s.topics.get_pin(pane);
-            if let Some(mid) = mid_opt {
-                if s.tg.try_edit_msg(forum, mid, &card, None).await.is_err() {
-                    mid_opt = None;
-                }
+            if let Some(mid) = mid_opt
+                && s.tg.try_edit_msg(forum, mid, &card, None).await.is_err()
+            {
+                mid_opt = None;
             }
             if mid_opt.is_none()
                 && let Some(thread) = s.topics.all_mappings().get(pane).copied()

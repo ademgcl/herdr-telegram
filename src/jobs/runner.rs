@@ -56,6 +56,13 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     if !job.is_stopped() {
         s.start_typing(&pane).await;
     }
+    // Dedicated typing ticker (4s < ≈5s expiry, independent of the 5s
+    // fallback + herdr RPCs): thinking pauses with no output/events go
+    // dark in DM mode without it (no typing task there), and a slow
+    // get_agent would otherwise stretch the piggyback period past
+    // expiry. Spawned, never awaited inline.
+    let mut typing_tick = tokio::time::interval(Duration::from_secs(4));
+    typing_tick.tick().await;
 
     loop {
         if job.is_stopped() {
@@ -94,7 +101,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Output activity → stream; status change → maybe finalize.
         // The fallback tick guarantees progress even without events.
-        // Events (when they fire) simply trigger an earlier wake-up
+        // Events (when they fire) simply trigger an earlier wake-up.
+        // The typing arm only touches the indicator and loops — never
+        // a herdr read — so its period stays exactly 4s.
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
@@ -107,6 +116,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 let (chat, th) = *job.dest.lock().await;
                 edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                 break;
+            }
+            _ = typing_tick.tick() => {
+                let (dchat, dth) = *job.dest.lock().await;
+                let tg = s.tg.clone();
+                tokio::spawn(async move {
+                    tg.typing(dchat, dth).await;
+                });
+                continue;
             }
             _ = tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)) => WatchEvent::Output,
             e = async {
@@ -121,7 +138,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         };
 
         // Every wake-up: check settle first (never depend on herdr events),
-        // then stream whatever output is new.
+        // then stream whatever output is new. (Dest typing lives on its
+        // own 4s ticker arm above, not piggybacked here.)
         let agent = match get_agent(&s.cfg.socket, &pane).await {
             Ok(a) => {
                 fails = 0;
