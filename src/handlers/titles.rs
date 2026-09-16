@@ -2,7 +2,8 @@
 //! watchdog; telegram→herdr fires on native `forum_topic_edited`
 //! updates. Both sides compare against the stored title first, so edits
 //! converge instead of echo-looping. Unlabeled panes get the friendly
-//! default (`[{space}] {tag} · {kind}`) written into their herdr label,
+//! default (`[{space}] {tag} · {code}`, shells bare `[{space}] {tag}`)
+//! written into their herdr label,
 //! so the default name is herdr-tracked and readable — never a bare pane id.
 use crate::{
     herdr::{
