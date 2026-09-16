@@ -1,11 +1,13 @@
 //! Single topic reset: deletes a single pane/topic on Telegram and recreates
 //! it fresh (preserving queue messages, resetting pins and updating mappings).
 use crate::{
+    handlers::title_rules::{naming_core, tab_census, tab_of},
     herdr::{
         client::{get_agent, list_workspaces},
-        labels::pane_facts,
+        labels::{pane_facts, tab_labels},
     },
     state::AppState,
+    topics::manager::ResetNames,
     types::Res,
     ui::ws_label,
 };
@@ -44,6 +46,8 @@ pub async fn run_single_topic_reset(
 
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
+    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+    let census = tab_census(&facts);
 
     s.cancel_jobs_for(&pane).await;
 
@@ -75,10 +79,20 @@ pub async fn run_single_topic_reset(
     let ws = facts.get(&pane).map(|f| f.ws.as_str()).unwrap_or("");
     let space = ws_label(&spaces, ws);
 
+    // Same tab-core source as the watchdog: a verbatim the watchdog
+    // keeps survives the single-topic migration too.
+    let (tab, multi) = tab_of(&facts, &tabs, &census, &pane);
+    let tag = s.topics.tag_for(&pane, &kind);
+    let core = naming_core(tab, &tag, multi);
+    let names = ResetNames {
+        card: raw_title.as_deref(),
+        core: core.as_deref(),
+    };
+
     let old_thread = s.topics.storage.get_thread(&pane);
     match s
         .topics
-        .reset_topic(&pane, &kind, space, &status, raw_title.as_deref(), None)
+        .reset_topic(&pane, &kind, space, &status, names, None)
         .await
     {
         Some(new_th) => {

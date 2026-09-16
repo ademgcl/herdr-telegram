@@ -70,7 +70,12 @@ pub fn parse_tab_labels(v: &Value) -> HashMap<String, String> {
 
 /// Set a tab's user-visible name (what the herdr tab bar shows).
 pub async fn rename_tab(socket: &str, tab_id: &str, label: &str) -> Res<()> {
-    rpc(socket, "tab.rename", json!({"tab_id": tab_id, "label": label})).await?;
+    rpc(
+        socket,
+        "tab.rename",
+        json!({"tab_id": tab_id, "label": label}),
+    )
+    .await?;
     Ok(())
 }
 

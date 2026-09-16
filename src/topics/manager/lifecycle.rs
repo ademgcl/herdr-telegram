@@ -4,6 +4,18 @@
 use super::TopicManager;
 use crate::topics::names;
 
+/// Naming inputs for a reset mint, split after the tab-name refactor:
+/// the pinned card keeps the pane/agent title while the topic itself is
+/// named from the tab core (watchdog parity via `naming_core` — one
+/// source, so reset can never reformat a verbatim the watchdog keeps).
+pub struct ResetNames<'a> {
+    /// Pinned identity card subtitle (pane label ‖ agent title).
+    pub card: Option<&'a str>,
+    /// Tab-derived core; None → stable tag default (never verbatim,
+    /// matching the watchdog which never preserves a bare tag).
+    pub core: Option<&'a str>,
+}
+
 impl TopicManager {
     /// F1: Reopen a closed forum topic (e.g. when agent transitions to working).
     pub async fn reopen_topic(&self, pane: &str) -> bool {
@@ -200,20 +212,21 @@ impl TopicManager {
         kind: &str,
         space: &str,
         status: &str,
-        raw_title: Option<&str>,
+        names: ResetNames<'_>,
         branch: Option<&str>,
     ) -> Option<i64> {
         let forum = self.forum_id?;
         let old_thread = self.storage.get_thread(pane);
         let tag = self.storage.assign_tag(pane, kind);
         // Verbatim user titles must survive reset: a stored title equal
-        // to the herdr label means a native rename synced both sides —
+        // to the TAB core means a native rename synced both sides —
         // re-apply raw instead of reformatting ("My Title" → "[space]
         // My Title · o" would look like the bot reverting the rename).
+        // Same `naming_core` source as the watchdog: no drift.
         let pre = self.storage.get_title(pane);
-        let name = match raw_title {
-            Some(label) => {
-                crate::handlers::title_rules::reset_desired_title(pre.as_deref(), space, label, kind)
+        let name = match names.core {
+            Some(core) => {
+                crate::handlers::title_rules::reset_desired_title(pre.as_deref(), space, core, kind)
             }
             None => names::format_title(space, &tag, kind),
         };
@@ -246,7 +259,7 @@ impl TopicManager {
             .tg
             .unpin_all_forum_topic_messages(forum, new_thread)
             .await;
-        let card = crate::ui::build_pinned_card_text(kind, pane, space, status, raw_title, branch);
+        let card = crate::ui::build_pinned_card_text(kind, pane, space, status, names.card, branch);
         if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await {
             let _ = self.tg.pin_msg(forum, mid).await;
             self.storage.set_pin(pane, mid);

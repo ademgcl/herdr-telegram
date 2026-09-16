@@ -4,15 +4,17 @@
 //!
 //! AUDIT CONSTRAINT (D1):
 //! Herdr access during reset is strictly READ-ONLY (`list_agents`,
-//! `list_workspaces`, `pane_facts`, `list_panes`). Never calls `spawn`,
+//! `list_workspaces`, `pane_facts`, `list_panes`, `tab_labels`). Never calls `spawn`,
 //! `pane.close`, `rename_pane`, or `send_keys`/`send_input`.
 
 use crate::{
+    handlers::title_rules::{naming_core, tab_census, tab_of},
     herdr::{
         client::{list_agents, list_panes, list_workspaces},
-        labels::pane_facts,
+        labels::{pane_facts, tab_labels},
     },
     state::AppState,
+    topics::manager::ResetNames,
     ui::ws_label,
 };
 use std::{
@@ -112,6 +114,11 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
     let shell_panes = list_panes(&s.cfg.socket).await.unwrap_or_default();
+    // Tab-name source (read-only, like the other fetches): reset names
+    // topics from the same tab core as the watchdog (`naming_core`), so
+    // a verbatim the watchdog keeps survives the migration.
+    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+    let census = tab_census(&facts);
 
     let mappings = s.topics.all_mappings();
     let to_reset_count = mappings.len();
@@ -153,9 +160,16 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
                 }
             });
         s.cancel_jobs_for(&r.pane).await;
+        let (tab, multi) = tab_of(&facts, &tabs, &census, &r.pane);
+        let tag = s.topics.tag_for(&r.pane, &r.kind);
+        let core = naming_core(tab, &tag, multi);
+        let names = ResetNames {
+            card: raw_title,
+            core: core.as_deref(),
+        };
         match s
             .topics
-            .reset_topic(&r.pane, &r.kind, space, &r.status, raw_title, None)
+            .reset_topic(&r.pane, &r.kind, space, &r.status, names, None)
             .await
         {
             Some(_) => {
@@ -179,9 +193,16 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
                 .and_then(|f| f.label.as_deref())
                 .filter(|l| !l.trim().is_empty());
             s.cancel_jobs_for(&pane).await;
+            let (tab, multi) = tab_of(&facts, &tabs, &census, &pane);
+            let tag = s.topics.tag_for(&pane, "shell");
+            let core = naming_core(tab, &tag, multi);
+            let names = ResetNames {
+                card: raw_title,
+                core: core.as_deref(),
+            };
             match s
                 .topics
-                .reset_topic(&pane, "shell", space, "ready", raw_title, None)
+                .reset_topic(&pane, "shell", space, "ready", names, None)
                 .await
             {
                 Some(_) => {

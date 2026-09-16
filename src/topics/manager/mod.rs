@@ -38,6 +38,8 @@ impl Drop for CreatingGuard<'_> {
 mod lifecycle;
 mod titles;
 
+pub use lifecycle::ResetNames;
+
 impl TopicManager {
     pub fn new(forum_id: Option<i64>, tg: TelegramClient, socket: Option<String>) -> Self {
         Self {

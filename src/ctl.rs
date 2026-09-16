@@ -161,14 +161,16 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
         .unwrap_or("-");
     // Desired topic title under current rules (tab else tag; terminal never).
     let kind = agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("shell");
-    let space = pf
-        .map(|f| ws_label(&spaces, &f.ws))
-        .unwrap_or("?");
+    let space = pf.map(|f| ws_label(&spaces, &f.ws)).unwrap_or("?");
     let multi = !tab_id.is_empty()
         && tab_id != "-"
         && facts.values().filter(|f| f.tab_id == tab_id).count() > 1;
     let core = pick_core(
-        if tab_label == "-" { None } else { Some(tab_label) },
+        if tab_label == "-" {
+            None
+        } else {
+            Some(tab_label)
+        },
         tag.as_deref().unwrap_or("?"),
         multi,
     );

@@ -26,14 +26,11 @@ fn test_title_format() {
     assert_eq!(format_title("space-1", "sh1", "shell"), "[space-1] sh1");
     assert_eq!(format_title("infra", "s1", "shell"), "[infra] s1");
     // Unknown kinds keep their full name; blank stays literal.
-    assert_eq!(
-        format_title("tg", "x1", "my-agent"),
-        "[tg] x1 · my-agent"
-    );
+    assert_eq!(format_title("tg", "x1", "my-agent"), "[tg] x1 · my-agent");
     assert_eq!(format_title("tg", "x1", "?"), "[tg] x1 · agent");
     assert_eq!(
-        format_title("herdr-telegram", "main · herdr-telegram imac", "opencode"),
-        "[herdr-telegram] main · herdr-telegram imac · opencode"
+        format_title("herdr-telegram", "main · herdr-telegram dev", "opencode"),
+        "[herdr-telegram] main · herdr-telegram dev · opencode"
     );
     // Minimal-dedup: the reported stutter collapses...
     assert_eq!(format_title("ip", "ip shell", "shell"), "[ip] shell");

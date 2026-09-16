@@ -8,7 +8,7 @@
 //! Nothing is ever written to pane labels: the old pane-label path is
 //! removed, so bot-generated names can't pollute herdr again.
 use crate::{
-    handlers::title_rules::{pick_core, stored_matches_label},
+    handlers::title_rules::{naming_core, stored_matches_label, tab_census, tab_of},
     herdr::{
         client::{list_agents, list_workspaces},
         labels::{pane_facts, rename_pane, rename_tab, tab_labels},
@@ -94,22 +94,12 @@ pub async fn sync_titles_with(
         .map(|a| (a.pane.as_str(), a.kind.as_str()))
         .collect();
     // Split-tab guard: siblings sharing one tab_id disambiguate with tag.
-    let mut tab_count: HashMap<&str, usize> = HashMap::new();
-    for f in facts.values() {
-        if !f.tab_id.is_empty() {
-            *tab_count.entry(f.tab_id.as_str()).or_default() += 1;
-        }
-    }
+    let census = tab_census(facts);
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
         let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
-        let space = ws_label(&spaces, &f.ws);
-        let tab = if f.tab_id.is_empty() {
-            None
-        } else {
-            tabs.get(f.tab_id.as_str()).map(|t| t.as_str())
-        };
-        let multi = !f.tab_id.is_empty() && tab_count.get(f.tab_id.as_str()).copied().unwrap_or(0) > 1;
+        let space = ws_label(spaces, &f.ws);
+        let (tab, multi) = tab_of(facts, tabs, &census, pane);
         // Verbatim preservation (merged upstream): a stored title equal to
         // the tab name means a Telegram native rename just synced both
         // sides — keep it exactly, never reformat (single-pane only;
@@ -121,8 +111,11 @@ pub async fn sync_titles_with(
             continue;
         }
         let tag = s.topics.tag_for(pane, kind);
-        let core = pick_core(tab, &tag, multi);
-        let formatted = names::format_title(space, &core, kind);
+        // One naming source for watchdog and reset (`naming_core`): the
+        // two can never drift again. None → tag default, which the
+        // watchdog never preserves verbatim.
+        let core = naming_core(tab, &tag, multi);
+        let formatted = names::format_title(space, core.as_deref().unwrap_or(&tag), kind);
         s.topics.sync_title(pane, &formatted).await;
     }
     // One liveness probe per tick: human-deleted topics never fire a
