@@ -2,7 +2,7 @@ use crate::jobs::episode::BuzzEpisode;
 use crate::jobs::stall::watch_stall;
 use crate::{
     herdr::client::get_agent,
-    jobs::finalize::{edit_live, finalize},
+    jobs::finalize::{edit_live, finalize, fold_live},
     jobs::job::Job,
     jobs::segment::final_block,
     jobs::stream::{EvStream, WatchEvent, delta},
@@ -74,6 +74,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
     loop {
         if job.is_stopped() {
+            // Quiet retire: no cancel card by design, but never freeze a
+            // live "working…" card — fold it in place, buzz nothing.
+            fold_live(&s, &mut live_dest, &mut live_mid, "⏹️ run ended").await;
             break;
         }
         // New prompt on a reused watcher restarts all episode timers
