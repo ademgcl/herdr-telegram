@@ -232,7 +232,9 @@ impl TopicManager {
         // If icon was never set for this topic (e.g. migration / boot), set it once.
         // Persisted only on success so a transient failure retries next sync.
         // A missing topic prunes now (not 60s later at the probe).
-        if self.storage.get_icon(pane).is_none() {
+        // Unknown kind ("?") never stamps: a guessed shell icon on an
+        // agent pane would permanently poison is_shell_tagged.
+        if kind != "?" && self.storage.get_icon(pane).is_none() {
             let icon = names::context_icon_emoji_id(kind);
             match self.tg.set_topic_icon(forum, thread, icon).await {
                 Ok(()) => {

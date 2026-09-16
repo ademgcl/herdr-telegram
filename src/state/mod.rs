@@ -14,6 +14,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+mod cancel;
 mod jobs;
 
 pub struct State {

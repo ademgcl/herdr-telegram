@@ -1,8 +1,10 @@
 use crate::{
+    handlers::shell_common::{ShellReuse, classify_shell_reuse},
     handlers::titles::sync_titles_with,
-    herdr::client::{list_agents, list_panes, list_workspaces, read_shell_output},
+    herdr::client::{list_agents, list_workspaces, read_shell_output},
     herdr::labels::pane_facts,
     jobs::finalize::report,
+    notifier::hygiene::{panes_once, reap_orphans},
     notifier::limits::scan_limits,
     notifier::status::observe_status,
     state::AppState,
@@ -36,28 +38,9 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // Shells keep their topic with the shell badge and zero alerts;
     // only truly gone panes get closed. Fail-open: a herdr hiccup must
     // never read as "everything is dead" (wiped topics + intents).
-    // Single `list_panes` per tick (shared with the DM hygiene block
+    // Single `list_panes` per tick (shared with the hygiene block
     // below): 1 RPC, not 2.
     let mut pane_list: Option<HashSet<String>> = None;
-    async fn panes_once(
-        s: &AppState,
-        cache: &mut Option<HashSet<String>>,
-    ) -> Option<HashSet<String>> {
-        if let Some(p) = cache {
-            return Some(p.clone());
-        }
-        match list_panes(&s.cfg.socket).await {
-            Ok(l) => {
-                let set: HashSet<String> = l.into_iter().collect();
-                *cache = Some(set.clone());
-                Some(set)
-            }
-            Err(e) => {
-                eprintln!("[reconcile] pane list failed, keeping topics: {e}");
-                None
-            }
-        }
-    }
     if s.cfg.forum.is_some() {
         let stored = s.topics.all_mappings();
         let missing: Vec<String> = stored
@@ -75,10 +58,17 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                 Some(panes) => {
                     for pane in missing {
                         if panes.contains(&pane) {
-                            s.status
-                                .lock()
-                                .await
-                                .insert(pane.clone(), "shell".to_string());
+                            // Already-shell panes run shell commands, not
+                            // agents: their pending intent is live work.
+                            // Only a fresh agent→shell flip owns the
+                            // vanished-agent retire below. Status is
+                            // volatile (empty at boot), so an unknown
+                            // status consults the durable shell marker
+                            // (creation tag/icon) before crying flip.
+                            let was_shell = match s.status.lock().await.get(&pane).cloned() {
+                                Some(st) => st == "shell",
+                                None => s.topics.is_shell_tagged(&pane),
+                            };
                             // Agent gone (shell reuse): its stall episode dies here
                             // or the next agent on this pane name inherits stale
                             // dedup (see status.rs working→* clear).
@@ -88,26 +78,86 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // the PC, no Telegram /quit) must not spin its
                             // watcher in get_agent backoff forever: retire
                             // it, surfacing the shell tail as the reply.
+                            // On already-shell panes the intent is an
+                            // active shell command — a blind retire here
+                            // ate it every tick, so long runs posted only
+                            // their start card and never the follow-up.
                             let owed = s.pending.lock().await.get(&pane).cloned();
-                            if owed.is_some() || s.jobs.lock().await.contains_key(&pane) {
-                                s.cancel_jobs_for(&pane).await;
-                                if let Some(pp) = owed
-                                    && let Ok(tail) =
-                                        read_shell_output(&s.cfg.socket, &pane, 60).await
-                                {
-                                    let tail = tail.trim().to_string();
-                                    if !tail.is_empty() {
-                                        let msg =
-                                            format!("agent quit to shell — last output:\n{tail}");
-                                        if !report(s, pp.chat, pp.thread, &pane, &msg).await {
+                            let has_job = s.jobs.lock().await.contains_key(&pane);
+                            match classify_shell_reuse(was_shell, owed.is_some(), has_job) {
+                                ShellReuse::Ignore => {
+                                    s.status
+                                        .lock()
+                                        .await
+                                        .insert(pane.clone(), "shell".to_string());
+                                }
+                                ShellReuse::CancelJob => {
+                                    s.status
+                                        .lock()
+                                        .await
+                                        .insert(pane.clone(), "shell".to_string());
+                                    s.cancel_job_only_for(&pane).await;
+                                }
+                                ShellReuse::RetireVanished => {
+                                    // Race verdict BEFORE retiring: quiet clears
+                                    // the slot, so a post-quiet check would
+                                    // always read false and drop the notice.
+                                    // A racer-retired intent has its own ack.
+                                    // (Micro-race: submit between check and
+                                    // retire — microseconds, no RPC between.)
+                                    let mine = match &owed {
+                                        Some(pp) => {
+                                            s.pending_matches(&pane, pp.chat, pp.thread, &pp.prompt)
+                                                .await
+                                        }
+                                        // Job-only flip: no competing intent.
+                                        None => true,
+                                    };
+                                    // Quiet retire: the pane died (agent quit
+                                    // to shell), so the parked watcher must
+                                    // exit silently — a loud cancel would
+                                    // post "✋ cancelled" next to the quit
+                                    // notice below (two cards, one prompt).
+                                    s.cancel_jobs_for_quiet(&pane).await;
+                                    if let Some(pp) = owed {
+                                        if !mine {
+                                            continue;
+                                        }
+                                        let tail = read_shell_output(&s.cfg.socket, &pane, 60)
+                                            .await
+                                            .map(|t| t.trim().to_string())
+                                            .unwrap_or_default();
+                                        // Always notify (even with an empty
+                                        // tail): the owed prompt retires
+                                        // here, silently dropping it would
+                                        // miss the reply with no retry.
+                                        let msg = if tail.is_empty() {
+                                            "agent quit to shell.".to_string()
+                                        } else {
+                                            format!("agent quit to shell — last output:\n{tail}")
+                                        };
+                                        if report(s, pp.chat, pp.thread, &pane, &msg).await {
+                                            s.status
+                                                .lock()
+                                                .await
+                                                .insert(pane.clone(), "shell".to_string());
+                                        } else {
                                             // Intent was already cancelled above:
                                             // keep it so boot-recover retries
                                             // the notice instead of losing it.
+                                            // Status stays un-shell so the
+                                            // next tick retries the retire
+                                            // instead of going quiet.
                                             s.remember_pending(
                                                 &pane, pp.chat, pp.thread, &pp.prompt,
                                             )
                                             .await;
                                         }
+                                    } else {
+                                        s.status
+                                            .lock()
+                                            .await
+                                            .insert(pane.clone(), "shell".to_string());
                                     }
                                 }
                             }
@@ -115,9 +165,18 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                         // for a non-silent tick — orphans from a restart close on
                         // the seed pass instead of lingering a full cycle.
                         // Compare-and-delete: a remint between snapshot and
-                        // close must survive the outer remove.
+                        // close must survive the outer remove. Quiet retire:
+                        // loud's "✋ cancelled" card would break the silence.
                         } else {
                             let thread = s.topics.all_mappings().get(&pane).copied();
+                            // Snapshot the owed intent: the silent close below
+                            // retires it, but boot-recover's gone-notice is
+                            // the designed reporter for dead panes — restore
+                            // it so the reply still arrives next boot
+                            // (bounded by recover's 24h stale drop). The flap
+                            // self-terminates: a successful close drops the
+                            // mapping, so this runs at most once more.
+                            let owed = s.pending.lock().await.get(&pane).cloned();
                             if s.topics.close_topic(&pane).await {
                                 // Some(thread): compare-delete a remint-safe
                                 // prune. None: mapping already gone (pruned
@@ -127,8 +186,12 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                     s.topics.remove_mapping_if_thread(&pane, t);
                                 }
                             }
-                            s.cancel_jobs_for(&pane).await;
+                            s.cancel_jobs_for_quiet(&pane).await;
                             s.clear_pane(&pane).await;
+                            if let Some(pp) = owed {
+                                s.remember_pending(&pane, pp.chat, pp.thread, &pp.prompt)
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -137,73 +200,9 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         }
     }
 
-    // Mode-independent dead-pane hygiene: DM-mode prompts can orphan
-    // jobs, durable intent, and per-pane maps for externally-closed
-    // panes (no topic mapping exists to trigger the forum close flow).
-    // Live panes are skipped; truly gone ones are cancelled + cleared.
-    // Fail-open: never wipe intents on a failed list call (Err) or a
-    // transient empty Ok([]).
-    {
-        let mut known: Vec<String> = s.jobs.lock().await.keys().cloned().collect();
-        known.extend(s.pending.lock().await.keys().cloned());
-        // Armed input waiters also pin a pane: a keywait/typewait for an
-        // externally-closed shell (no job, no intent, DM mode) must die
-        // with it instead of eating the next message as dead input.
-        known.extend(s.keywait.lock().await.values().cloned());
-        known.extend(s.runwait.lock().await.values().cloned());
-        known.extend(s.typewait.lock().await.values().cloned());
-        if !known.is_empty() {
-            match panes_once(s, &mut pane_list).await {
-                Some(live) if live.is_empty() => {
-                    eprintln!("[reconcile] pane list empty, keeping intents");
-                }
-                Some(live) => {
-                    // Retain live-only (not live∪known): known includes
-                    // the just-cleared dead panes, so ∪ would keep
-                    // everything clear_pane missed.
-                    for pane in &known {
-                        if !live.contains(pane) {
-                            s.cancel_jobs_for(pane).await;
-                            s.clear_pane(pane).await;
-                        }
-                    }
-                    s.status.lock().await.retain(|p, _| live.contains(p));
-                    s.seen.lock().await.retain(|p, _| live.contains(p));
-                    s.last_done.lock().await.retain(|p, _| live.contains(p));
-                    // Atomic with status (order status→last_change).
-                    s.last_change.lock().await.retain(|p, _| live.contains(p));
-                    s.limit_alert.lock().await.retain(|p, _| live.contains(p));
-                    s.limit_seen.lock().await.retain(|p, _| live.contains(p));
-                    s.limit_miss.lock().await.retain(|p, _| live.contains(p));
-                    s.debounce.lock().await.retain(|p, _| live.contains(p));
-                    s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
-                    s.modelop.lock().await.retain(|p| live.contains(p));
-                    s.blockop.lock().await.retain(|p| live.contains(p));
-                    // Typing tasks for dead panes: abort, don't leak.
-                    for (_, h) in s
-                        .typing_tasks
-                        .lock()
-                        .await
-                        .extract_if(|p, _| !live.contains(p))
-                        .collect::<Vec<_>>()
-                    {
-                        h.abort();
-                    }
-                    // Reply targets pointing at dead panes (order
-                    // torder→targets, as in remember).
-                    {
-                        let mut ord = s.torder.lock().await;
-                        let mut map = s.targets.lock().await;
-                        map.retain(|_, p| live.contains(p));
-                        let live_keys: std::collections::HashSet<(i64, i64)> =
-                            map.keys().cloned().collect();
-                        ord.retain(|k| live_keys.contains(k));
-                    }
-                }
-                None => {}
-            }
-        }
-    }
+    // Mode-independent dead-pane hygiene (jobs, intent, per-pane maps
+    // for externally-closed panes). Fail-open on Err/empty (see hygiene).
+    reap_orphans(s, &mut pane_list).await;
 
     // 1:1 pane↔topic titles (herdr labels win here; native TG renames
     // flow back via forum_topic_edited). Reuses this tick's rows plus

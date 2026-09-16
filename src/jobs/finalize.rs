@@ -43,20 +43,28 @@ pub async fn finalize(
     let mut screen = read_screen_adaptive(&s.cfg.socket, pane).await;
     let mut body = select_final_body(acc, &screen, &prompt);
     // TUI-lag race: the status flipped to settled a beat before the
-    // frame rendered the answer. One short delayed re-read (not the
-    // 5-60s outage backoff) rescues fast-task replies that would else
-    // post "no fresh output" and anchor away the real answer.
+    // frame rendered the answer. Short delayed re-reads (not the 5-60s
+    // outage backoff) rescue fast-task replies that would else post "no
+    // fresh output" and anchor away the real answer. Bounded at two
+    // rounds (~4s): lag beyond that needs a fresh transition to surface
+    // (the empty path below anchors + retires), which is vanishingly
+    // rare next to the cost of stalling every empty settle.
     if body.is_empty() {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        // Superseded during the grace wait: drop like any mid-finalize
-        // retarget below instead of posting stale.
-        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-            println!("[prompt] finalize {pane}: superseded in grace wait, dropping");
-            acc.clear();
-            return false;
+        for _ in 0..2 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // Superseded during the grace wait: drop like any mid-finalize
+            // retarget below instead of posting stale.
+            if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+                println!("[prompt] finalize {pane}: superseded in grace wait, dropping");
+                acc.clear();
+                return false;
+            }
+            screen = read_screen_adaptive(&s.cfg.socket, pane).await;
+            body = select_final_body(acc, &screen, &prompt);
+            if !body.is_empty() {
+                break;
+            }
         }
-        screen = read_screen_adaptive(&s.cfg.socket, pane).await;
-        body = select_final_body(acc, &screen, &prompt);
     }
     let snapshot = screen;
     // Nothing readable and nothing delivered: keep the intent for retry.
@@ -189,6 +197,14 @@ pub async fn finalize(
     // outage — retiring here would lose the reply with no re-arm.
     // (Stamps below describe a card the user saw; failed posts stamp
     // nothing, so the retry re-posts from an intact baseline.)
+    // Known limit: a multi-send is not atomic. `delivered` is any-part,
+    // so an outage/revocation landing mid-post truncates and retires:
+    // the landed prefix posts with no explicit truncation marker
+    // (missing tail, never silent loss of the whole reply). Duplication
+    // happens only on total failure (nothing landed): the retry re-posts
+    // from part 0. Skipping landed parts instead would risk the opposite
+    // (a failed send that actually landed goes missing with no trace).
+    // Per-call retries (3 sends + 3 flood-waits) narrow the window.
     if !delivered {
         println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
         return true;
@@ -222,7 +238,15 @@ async fn settle_books(
         return;
     }
     *job.pending.lock().await = 0;
-    s.clear_pending(pane).await;
+    // Clear the durable intent only if it still belongs to this prompt:
+    // a shell command (or a re-entered agent prompt) may have
+    // overwritten the shared per-pane slot mid-finalize — wiping it
+    // would eat their reply's intent while ours is already delivered.
+    let prompt = job.prompt.lock().await.clone();
+    let (chat, th) = *job.dest.lock().await;
+    if s.pending_matches(pane, chat, th, &prompt).await {
+        s.clear_pending(pane).await;
+    }
     let mut map = s.jobs.lock().await;
     if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
         map.remove(pane);

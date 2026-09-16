@@ -2,6 +2,7 @@
 //! mapping removal, and full-identity snapshot/restore (reset path).
 //! Split from `manager` (300-line file limit).
 use super::TopicManager;
+use crate::topics::names;
 
 impl TopicManager {
     /// F1: Reopen a closed forum topic (e.g. when agent transitions to working).
@@ -82,6 +83,30 @@ impl TopicManager {
                 false
             }
         }
+    }
+
+    /// Durable shell marker: creation tags (`sh<n>`) and the one-time
+    /// context icon survive restarts, unlike `status` (empty at boot).
+    /// Guards the already-shell retire decision when status is unknown —
+    /// without it the first tick after a restart misclassifies a live
+    /// shell long-run as a fresh agent→shell flip (ghost quit card +
+    /// eaten shell intent). Strict `sh<n>` shape plus icon cross-check:
+    /// in steady state an unknown future agent kind starting with "sh"
+    /// keeps its agent icon and cannot collide. Residuals: a crash in
+    /// the assign-tag→set-icon window leaves icon None + sh tag
+    /// (transient false positive until the next icon sync); pre-guard
+    /// "?"-stamped rows are not healed (the guard only stops new ones).
+    pub fn is_shell_tagged(&self, pane: &str) -> bool {
+        if self.storage.get_icon(pane).as_deref() == Some(names::context_icon_emoji_id("shell")) {
+            return true;
+        }
+        // Legacy tag-only marker (icon never persisted for this pane).
+        self.storage.get_icon(pane).is_none()
+            && self.storage.get_tag(pane).is_some_and(|t| {
+                t.starts_with("sh")
+                    && !t[2..].is_empty()
+                    && t[2..].chars().all(|c| c.is_ascii_digit())
+            })
     }
 
     /// Snapshot a pane's full topic identity (reset survivor path).

@@ -108,10 +108,17 @@ async fn main() -> Res<()> {
         );
     }
 
+    // Re-arm prompt watchers orphaned by a restart FIRST (replies would
+    // else be lost), then seed agent status without alert noise. Order
+    // matters: the seed retire paths (dead-pane silent close,
+    // agent→shell quit notice) consume owed intents — running them
+    // before recover would wipe replies recover was about to save, and
+    // an empty in-memory status would misclassify live shells as fresh
+    // flips (ghost quit card). Recovered watchers racing the seed lose
+    // deterministically to its last-writer-wins retires.
+    recover_pending(&s).await;
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
-    // Re-arm prompt watchers orphaned by a restart (replies would else be lost)
-    recover_pending(&s).await;
     // One-time cleanup of the retired pinned-status era (no-op when clean)
     s.topics.retire_pins().await;
     println!("[main] seed done, entering loop");

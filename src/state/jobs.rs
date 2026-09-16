@@ -1,99 +1,14 @@
 //! Job + waiter lifecycle for shared state. Split from `state` (300-line
-//! file limit): prompt-intent durability, watcher retire, and per-pane
-//! cleanup live here as `impl State`.
+//! file limit): prompt-intent durability, waiter retire, and per-pane
+//! cleanup live here as `impl State` (cancel paths live in `cancel`).
 use super::State;
-use crate::jobs::{
-    job::Job,
-    persist::{self, PendingPrompt},
-};
+use crate::jobs::persist::{self, PendingPrompt};
 use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::Ordering},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 impl State {
-    /// Retire one pane's watcher. Last-writer-wins: snapshot the job,
-    /// then remove only if the map still holds that same Arc — a prompt
-    /// inserted after the snapshot survives (new work beats a racing
-    /// /cancel), a prompt before it is cancelled. All callers (dead-pane
-    /// reap + live /cancel) share this. Typing uses ownership-check so a
-    /// live successor keeps its task.
-    pub async fn cancel_jobs_for(self: &Arc<Self>, pane: &str) -> bool {
-        let cur = self.jobs.lock().await.get(pane).cloned();
-        // Typing: ownership-checked (a live successor keeps its task).
-        self.stop_typing_unless_owned(pane).await;
-        let Some(job) = cur else {
-            // No job at snapshot: a successor inserted after still wins —
-            // leave it alone. Otherwise clear orphan/shell intent so a
-            // /cancel suppresses a settling shell card.
-            if self.jobs.lock().await.contains_key(pane) {
-                return false;
-            }
-            self.clear_pending(pane).await;
-            // No job: still disarm debounce/waiters for the pane (a stale
-            // arm must not fire after the confirmation).
-            self.clear_waiters(pane).await;
-            self.debounce.lock().await.remove(pane);
-            return false;
-        };
-        let removed = {
-            let mut map = self.jobs.lock().await;
-            if map.get(pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
-                map.remove(pane);
-                true
-            } else {
-                false
-            }
-        };
-        if !removed {
-            // A successor won the race: leave its intent/waiters alone.
-            return false;
-        }
-        self.clear_pending(pane).await;
-        self.clear_waiters(pane).await;
-        // Disarm a pending settle debounce: without this a card armed
-        // before the cancel lands after the confirmation.
-        self.debounce.lock().await.remove(pane);
-        job.mark_stopped();
-        // Bump the epoch: an in-flight finalize aborts at its next
-        // checkpoint instead of posting into a cancelled world.
-        job.epoch.fetch_add(1, Ordering::Relaxed);
-        job.cancel.notify_waiters();
-        true
-    }
-
-    pub async fn cancel_all_jobs(&self) -> usize {
-        // Narrow critical sections: take each map, drop its guard, then
-        // act — never hold typing_tasks across the jobs/pending/waiter
-        // locks (a future inverse nesting would deadlock, and every
-        // typing start/stop blocks for the whole global cancel).
-        let typing: Vec<tokio::task::JoinHandle<()>> =
-            std::mem::take(&mut *self.typing_tasks.lock().await)
-                .into_values()
-                .collect();
-        for handle in typing {
-            handle.abort();
-        }
-        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
-        self.clear_all_pending().await;
-        // Global cancel retires everything: armed input waiters and
-        // settle debounces die with the jobs, or the next message/card
-        // would serve a cancelled world.
-        self.typewait.lock().await.clear();
-        self.keywait.lock().await.clear();
-        self.runwait.lock().await.clear();
-        self.debounce.lock().await.clear();
-        let count = jobs.len();
-        for job in jobs.values() {
-            job.mark_stopped();
-            // Same epoch-bump as cancel_jobs_for: in-flight posts abort.
-            job.epoch.fetch_add(1, Ordering::Relaxed);
-            job.cancel.notify_waiters();
-        }
-        count
-    }
-
     /// Record a submitted prompt durably (cleared on settle/cancel).
     /// Disk write happens AFTER the guard drops (never hold `pending`
     /// across serde + blocking fs — it blocks every intent user).
@@ -139,6 +54,26 @@ impl State {
             map.clone()
         };
         persist::save_file(&persist::store_path(), &empty);
+    }
+
+    /// True when the durable intent still belongs to this exact submit.
+    /// One slot per pane is shared by agent prompts and shell commands —
+    /// last-writer-wins by overwrite — so waiters must only serve (and
+    /// clear) their own: an overlapping submit or an agent re-entry must
+    /// neither be served another command's output nor wipe its intent.
+    pub async fn pending_matches(
+        &self,
+        pane: &str,
+        chat: i64,
+        thread: Option<i64>,
+        prompt: &str,
+    ) -> bool {
+        self.pending
+            .lock()
+            .await
+            .get(pane)
+            .map(|p| p.chat == chat && p.thread == thread && p.prompt == prompt)
+            .unwrap_or(false)
     }
 
     /// End one pane's stall episode (limit alert, stuck timer, absence
