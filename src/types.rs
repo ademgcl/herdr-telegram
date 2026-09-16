@@ -64,7 +64,10 @@ pub fn collapse_home(path: &str, home: &str) -> String {
         // mid-path substrings (`/Users/x2` ≠ `/Users/x`) and corrupts
         // HOME=/ (every absolute path "starts" with it). Trailing-slash
         // homes are trimmed first (root stays root).
-        let home = home.strip_suffix('/').filter(|h| !h.is_empty()).unwrap_or(home);
+        let home = home
+            .strip_suffix('/')
+            .filter(|h| !h.is_empty())
+            .unwrap_or(home);
         match path.strip_prefix(home) {
             // The home dir itself.
             Some("") => "~".to_string(),
