@@ -58,7 +58,7 @@ pub async fn open_space(s: &AppState, chat: i64, thread: Option<i64>, label: &st
             return;
         }
     };
-    super::shell::open_shell(s, chat, thread, Some(&ws_id)).await;
+    super::shell::open_space_shell(s, chat, thread, &ws_id).await;
 }
 
 #[cfg(test)]

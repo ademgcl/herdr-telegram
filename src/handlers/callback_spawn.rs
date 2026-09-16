@@ -9,7 +9,12 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
         .await;
     let label = super::space::next_label(s).await;
     let ws_id = match create_workspace(&s.cfg.socket, &label).await {
-        Ok(id) => id,
+        Ok(id) if !id.is_empty() => id,
+        Ok(_) => {
+            s.tg.edit_msg(chat, msg_id, "⚠️ space create returned no id", None)
+                .await;
+            return;
+        }
         Err(e) => {
             s.tg.edit_msg(
                 chat,
@@ -21,7 +26,7 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
             return;
         }
     };
-    super::shell::open_shell(s, chat, thread, Some(&ws_id)).await;
+    super::shell::open_space_shell(s, chat, thread, &ws_id).await;
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
     s.tg.edit_msg(

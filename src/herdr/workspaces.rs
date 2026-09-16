@@ -23,20 +23,25 @@ pub async fn create_workspace(socket: &str, label: &str) -> Res<String> {
     Ok(r["workspace"]["workspace_id"].as_str().unwrap_or("").into())
 }
 
-pub async fn ensure_tg_space(socket: &str) -> Res<String> {
+/// Find the `tg` space, creating it when missing. Returns
+/// `(id, created)`: a just-created space ships a reusable root pane,
+/// so callers must prefer it over `tab.create` (else p1 orphans).
+pub async fn ensure_tg_space(socket: &str) -> Res<(String, bool)> {
     for w in list_workspaces(socket).await? {
         if w.label == "tg" {
-            return Ok(w.id);
+            return Ok((w.id, false));
         }
     }
-    create_workspace(socket, "tg").await
+    let id = create_workspace(socket, "tg").await?;
+    if id.is_empty() {
+        return Err("space create returned no id".into());
+    }
+    Ok((id, true))
 }
 
-pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> Res<AgentRow> {
-    let ws = match target_ws {
-        Some(w) if !w.is_empty() => w.to_string(),
-        _ => ensure_tg_space(socket).await?,
-    };
+/// Fresh tab in a known workspace id, returning its root pane.
+/// Shared by spawns that must not reuse (existing spaces).
+async fn create_tab_pane(socket: &str, ws: &str) -> Res<String> {
     let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
     let pane = tab["root_pane"]["pane_id"]
         .as_str()
@@ -45,6 +50,27 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
     if pane.is_empty() {
         return Err("tab.create returned no pane".into());
     }
+    Ok(pane)
+}
+
+pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> Res<AgentRow> {
+    let (ws, fresh) = match target_ws {
+        Some(w) if !w.is_empty() => (w.to_string(), false),
+        _ => ensure_tg_space(socket).await?,
+    };
+    // Fresh space ships a root pane: start the agent there instead of
+    // orphaning p1 with a new tab. Existing spaces always get a tab
+    // (probing them would waste RPCs and risk a live pane).
+    // `ours` tracks tabs WE minted: only those are closed when the
+    // start fails — a reused root stays as a usable shell.
+    let (pane, ours) = if fresh {
+        match super::panes::await_fresh_root(socket, &ws).await {
+            Some(p) => (p, false),
+            None => (create_tab_pane(socket, &ws).await?, true),
+        }
+    } else {
+        (create_tab_pane(socket, &ws).await?, true)
+    };
 
     // Millis + pid: same-second double-spawns (double-tapped N) must not
     // collide on the agent name.
@@ -65,8 +91,11 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
     )
     .await
     {
-        // Don't leak the tab when the start fails (bad kind, etc.).
-        let _ = super::panes::close_pane(socket, &pane).await;
+        // Don't leak a minted tab when the start fails (bad kind,
+        // etc.). A reused root is NOT ours: leave it as a shell.
+        if ours {
+            let _ = super::panes::close_pane(socket, &pane).await;
+        }
         return Err(e);
     }
 
