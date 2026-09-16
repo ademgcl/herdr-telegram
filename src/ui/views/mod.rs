@@ -233,7 +233,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
            • `/keys y enter` — send keystrokes\n\
          • `/cancel` — abort running prompt\n\
          • `/status` — refresh agent status card\n\
-         • ✏️ rename this topic = renames the herdr pane (kept in sync)"
+         • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
 }
 
@@ -250,6 +250,6 @@ pub fn shell_help_text(pane: &str) -> String {
           • `/kill` — close this pane completely (confirms first)\n\
          • `/split [right|down]` — sibling shell pane in this tab\n\
          • `/status` — shell card\n\
-         • ✏️ rename this topic = renames the herdr pane (kept in sync)"
+         • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
 }

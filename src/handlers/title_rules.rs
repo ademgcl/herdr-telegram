@@ -62,18 +62,26 @@ pub fn stored_matches_label(stored: Option<&str>, label: &str) -> bool {
 /// Reset title decision (single call-site for every reset loop, so the
 /// predicate can never drift): a pre-reset stored title equal to the
 /// tab core means the user set it verbatim — re-apply raw, else format.
-/// Split cores can never stay verbatim: the watchdog always formats
-/// them, so a bare re-apply would be renamed on the next tick.
-/// Pure so it is unit-tested.
+/// Split tabs additionally keep a stored title equal to the pane label
+/// (`pane_label` carries the herdr label when set; the agent-title
+/// fallback in `names.card` ~never equals a stored topic title, and a
+/// coincidence self-heals on the next watchdog tick): the watchdog's
+/// verbatim rule preserves it, so reset must re-apply it too. Pure so unit-tested.
 pub fn reset_desired_title(
     pre: Option<&str>,
     space: &str,
     label: &str,
     kind: &str,
     multi: bool,
+    pane_label: Option<&str>,
 ) -> String {
     if !multi && stored_matches_label(pre, label) {
         label.trim().to_string()
+    } else if multi
+        && let Some(pl) = pane_label.map(str::trim).filter(|l| !l.is_empty())
+        && stored_matches_label(pre, pl)
+    {
+        pl.to_string()
     } else {
         crate::topics::names::format_title(space, label, kind)
     }
@@ -133,29 +141,48 @@ mod tests {
     fn test_reset_desired_title_verbatim_or_formatted() {
         // Verbatim when pre-reset stored equals the tab core (single only).
         assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false),
+            reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false, None),
             "My Title"
         );
         assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false),
+            reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false, None),
             "My Title"
         );
-        // Split cores always format (watchdog parity — never verbatim).
+        // Split tab cores format — unless stored equals the pane label
+        // (a user rename the watchdog keeps verbatim).
         assert_eq!(
-            reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true),
+            reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true, None),
             "[tg] console o27 · opencode"
+        );
+        assert_eq!(
+            reset_desired_title(
+                Some("Custom Name"),
+                "tg",
+                "console o27",
+                "opencode",
+                true,
+                Some("Custom Name")
+            ),
+            "Custom Name"
         );
         // Formatted otherwise (new/changed cores, case-only changes).
         assert_eq!(
-            reset_desired_title(Some("[tg] api · opencode"), "tg", "backend", "opencode", false),
+            reset_desired_title(
+                Some("[tg] api · opencode"),
+                "tg",
+                "backend",
+                "opencode",
+                false,
+                None
+            ),
             "[tg] backend · opencode"
         );
         assert_eq!(
-            reset_desired_title(None, "tg", "backend", "opencode", false),
+            reset_desired_title(None, "tg", "backend", "opencode", false, None),
             "[tg] backend · opencode"
         );
         assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false),
+            reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false, None),
             "[tg] my title · opencode"
         );
     }

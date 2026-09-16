@@ -118,8 +118,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // Output activity → stream; status change → maybe finalize.
         // The fallback tick guarantees progress even without events.
         // Events (when they fire) simply trigger an earlier wake-up.
-        // The typing arm only touches the indicator and loops — never
-        // a herdr read — so its period stays exactly 4s.
+        // The typing arm fires every 4s and falls through to a poll
+        // cycle too (its own cost is one spawned `typing` RPC).
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
@@ -139,7 +139,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 tokio::spawn(async move {
                     tg.typing(dchat, dth).await;
                 });
-                continue;
+                // Falls through to a poll cycle below (no `continue`):
+                // restarting the 5s fallback sleep every 4s would starve
+                // it on quiet panes, leaving settle/stall 100% dependent
+                // on herdr events — the fallback exists exactly for when
+                // events are unavailable.
+                WatchEvent::Output
             }
             _ = tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)) => WatchEvent::Output,
             e = async {

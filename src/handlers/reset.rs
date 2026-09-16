@@ -11,7 +11,7 @@ use crate::{
     handlers::title_rules::{naming_core, tab_census, tab_of},
     herdr::{
         client::{list_agents, list_panes, list_workspaces},
-        labels::{pane_facts, tab_labels},
+        labels::{facts_contradict, pane_facts, tab_labels},
     },
     state::AppState,
     topics::manager::ResetNames,
@@ -142,6 +142,21 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     let census = tab_census(&facts);
 
     let mappings = s.topics.all_mappings();
+    // Hollow-read guard (mirrors the watchdog): every facts pane must
+    // appear in agents or shells (all three list the same panes) — a
+    // contradiction is a degraded read, and Step 3 would delete live
+    // topics as dead. Genuine empties (fresh installs, all closed)
+    // have no contradiction, so prune proceeds.
+    if !mappings.is_empty() && facts_contradict(&agents, &shell_panes, &facts) {
+        s.tg.send_msg(
+            chat,
+            thread_id,
+            "⚠️ reset aborted: herdr reads came back empty, mappings untouched",
+            None,
+        )
+        .await;
+        return;
+    };
     let to_reset_count = mappings.len();
     s.tg.send_msg(
         chat,

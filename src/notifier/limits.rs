@@ -4,7 +4,9 @@
 use crate::{
     herdr::client::read_screen_for_limits,
     jobs::notices::{detect_limit, limit_card_text, needs_stuck_gate},
-    notifier::limit_decide::{alert_suppressed, kind_flipped, scan_tail, send_cooled},
+    notifier::limit_decide::{
+        alert_suppressed, detect_tail_with_context, kind_flipped, scan_tail, send_cooled,
+    },
     state::AppState,
 };
 use std::time::{Duration, Instant};
@@ -63,11 +65,13 @@ pub(crate) async fn scan_limits(s: &AppState) {
         // Settled panes count fresh-tail banners only: a quota banner in
         // deep scrollback under idle/done is a finished run's leftover.
         // Stale-only screens fall into the clean-miss branch and clear.
+        // Context spans the full screen: a fresh WEAK banner with
+        // error words only in scrollback is still a live stall.
         let full = detect_limit(&screen);
         let hit = if st == "working" {
             full
         } else {
-            full.and_then(|_| detect_limit(scan_tail(&screen)))
+            full.and_then(|_| detect_tail_with_context(scan_tail(&screen), &screen))
         };
         let Some(hit) = hit else {
             // Clean miss: only a sustained absence clears the episode.
@@ -186,18 +190,26 @@ pub(crate) async fn scan_limits(s: &AppState) {
         // All-or-nothing claim: partial delivery (some owners) still
         // retries next tick — a duplicate card to a healthy owner beats a
         // silent one for quota, and single-owner deployments (the norm)
-        // never hit this branch partially.
-        let delivered = if let Some((chat, th)) = owned_dest {
-            send_one(s, chat, th, &text, &pane).await
-        } else if let Some((chat, th)) = forum_dest {
-            send_one(s, chat, Some(th), &text, &pane).await
-        } else {
+        // never hit this branch partially. Dest fallback: a stale prompt
+        // chat (pruned thread) falls back to the live topic; owners hear
+        // it only when no forum mapping exists at all (forum sends that
+        // fail transiently retry next tick instead of DM-spamming).
+        let mut delivered = false;
+        if let Some((chat, th)) = owned_dest {
+            delivered = send_one(s, chat, th, &text, &pane).await;
+        }
+        if !delivered
+            && let Some((fchat, fth)) = forum_dest
+        {
+            delivered = send_one(s, fchat, Some(fth), &text, &pane).await;
+        }
+        if !delivered && forum_dest.is_none() && !s.cfg.owners.is_empty() {
             let mut ok = true;
             for id in &s.cfg.owners {
                 ok = send_one(s, *id, None, &text, &pane).await && ok;
             }
-            ok
-        };
+            delivered = ok;
+        }
         // Screen excerpts stay out of the log (terminal content can hold
         // secrets); kind + length are enough for stall forensics.
         if delivered {

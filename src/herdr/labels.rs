@@ -3,7 +3,10 @@
 //! serves it). Pane labels (`pane.rename` / `pane.list`) are only written on
 //! split-tab Telegram renames (one shared tab can't take two names).
 //! Read-only except via `rename_pane` / `rename_tab`.
-use crate::{herdr::rpc::rpc, types::Res};
+use crate::{
+    herdr::rpc::rpc,
+    types::{AgentRow, Res},
+};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -12,6 +15,20 @@ pub struct PaneFacts {
     pub label: Option<String>,
     pub ws: String,
     pub tab_id: String,
+}
+
+/// Hollow-read predicate for destructive flows (reset Step 3): every
+/// facts pane must appear in agents or shells — all three list the same
+/// panes, so a contradiction is a degraded read, never a real empty.
+/// Pure so it is unit-tested (reset.rs has no room for tests).
+pub fn facts_contradict(
+    agents: &[AgentRow],
+    shells: &[String],
+    facts: &HashMap<String, PaneFacts>,
+) -> bool {
+    facts.keys().any(|p| {
+        !agents.iter().any(|a| &a.pane == p) && !shells.contains(p)
+    })
 }
 
 /// One `pane.list` per call — the reconcile watchdog's 60s tick is the
@@ -114,6 +131,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parse_facts(&v)["w8:p1"].label, None);
+    }
+
+    #[test]
+    fn test_facts_contradict() {
+        fn row(pane: &str) -> AgentRow {
+            AgentRow {
+                kind: "opencode".into(),
+                pane: pane.into(),
+                title: String::new(),
+                status: "working".into(),
+                ws: "w".into(),
+            }
+        }
+        fn facts(panes: &[&str]) -> HashMap<String, PaneFacts> {
+            panes
+                .iter()
+                .map(|p| {
+                    (
+                        p.to_string(),
+                        PaneFacts {
+                            label: None,
+                            ws: "w".into(),
+                            tab_id: "t".into(),
+                        },
+                    )
+                })
+                .collect()
+        }
+        // Consistent reads (agent, shell, empty) never contradict.
+        assert!(!facts_contradict(&[row("a")], &[], &facts(&["a"])));
+        assert!(!facts_contradict(&[], &["s".to_string()], &facts(&["s"])));
+        assert!(!facts_contradict(&[], &[], &facts(&[])));
+        // Facts pane missing from both lists = degraded read.
+        assert!(facts_contradict(&[], &[], &facts(&["a"])));
+        assert!(facts_contradict(&[row("a")], &[], &facts(&["a", "b"])));
     }
 
     #[test]

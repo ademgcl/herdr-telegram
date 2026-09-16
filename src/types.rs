@@ -60,7 +60,22 @@ pub fn collapse_home(path: &str, home: &str) -> String {
     if home.is_empty() {
         path.to_string()
     } else {
-        path.replacen(home, "~", 1)
+        // Anchored on a separator boundary: an unanchored replace masks
+        // mid-path substrings (`/Users/x2` ≠ `/Users/x`) and corrupts
+        // HOME=/ (every absolute path "starts" with it). Trailing-slash
+        // homes are trimmed first (root stays root).
+        let home = home.strip_suffix('/').filter(|h| !h.is_empty()).unwrap_or(home);
+        match path.strip_prefix(home) {
+            // The home dir itself.
+            Some("") => "~".to_string(),
+            // Normal rest keeps its leading slash ("/.config" → "~/.config").
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            // Trailing-slash home or root ("/"): the rest lacks the
+            // separator, but the boundary is real — re-add it.
+            Some(rest) if home.ends_with('/') => format!("~/{rest}"),
+            // Mid-name prefix (`/Users/x2` vs `/Users/x`): not home.
+            _ => path.to_string(),
+        }
     }
 }
 
@@ -73,5 +88,12 @@ mod tests {
         assert_eq!(collapse_home("/Users/x/.config/a", "/Users/x"), "~/.config/a");
         assert_eq!(collapse_home("/other/path", "/Users/x"), "/other/path");
         assert_eq!(collapse_home("/Users/x/a", ""), "/Users/x/a");
+        // Anchored: mid-path occurrences stay untouched (HOME=/ still
+        // collapses sanely instead of corrupting the leading slash).
+        assert_eq!(collapse_home("/tmp/Users/x/a", "/Users/x"), "/tmp/Users/x/a");
+        assert_eq!(collapse_home("/Users/x2/a", "/Users/x"), "/Users/x2/a");
+        assert_eq!(collapse_home("/etc/hosts", "/"), "~/etc/hosts");
+        assert_eq!(collapse_home("/Users/x", "/Users/x/"), "~");
+        assert_eq!(collapse_home("/Users/x/a", "/Users/x/"), "~/a");
     }
 }

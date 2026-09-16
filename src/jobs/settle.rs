@@ -61,6 +61,19 @@ fn confirm_due(armed: &mut SettledArm, status: &str, now: Instant) -> bool {
     }
 }
 
+/// Commit rule for one settle sample: `blocked` commits at once (input
+/// is needed NOW; blocked is never a mid-run transient, and the 750ms
+/// recheck upstream already filtered blips) while other settled kinds
+/// still prove [`SETTLED_CONFIRM_SECS`] persistence. Never arms the
+/// timer for blocked, so no stale arm survives it.
+fn settle_commit(status: &str, armed: &mut SettledArm, now: Instant) -> bool {
+    if status == "blocked" {
+        *armed = None;
+        return true;
+    }
+    confirm_due(armed, status, now)
+}
+
 /// One settle check for a settled-sampled status: flap-collapse, time
 /// confirmation, then `finalize` (with cancellable outage backoff).
 /// `settled_since` arms on the first confirmed sample (recording its
@@ -105,8 +118,10 @@ pub async fn settle_step(
     // Time-based confirmation: the first settled sample arms the timer
     // (recording its kind), only same-kind persistence commits. Sample
     // counting alone retires on two sub-second event wakes inside one
-    // transient gap.
-    if !confirm_due(settled_since, status, Instant::now()) {
+    // transient gap. Blocked skips the 5s gate — input is needed NOW and
+    // blocked is never a mid-run transient (the 750ms recheck above
+    // already filtered blips).
+    if !settle_commit(status, settled_since, Instant::now()) {
         return SettleStep::Continue;
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
@@ -221,5 +236,23 @@ mod tests {
                 "must not fire at {ms}ms"
             );
         }
+    }
+
+    #[test]
+    fn test_settle_commit_blocked_bypasses_gate() {
+        // Blocked commits at once without arming the timer; other kinds
+        // still prove 5s same-kind persistence; flips re-arm.
+        let t0 = Instant::now();
+        let mut since: SettledArm = None;
+        assert!(settle_commit("blocked", &mut since, t0));
+        assert!(since.is_none(), "blocked must not arm the timer");
+        // A pre-armed idle does not survive a blocked commit either.
+        assert!(!settle_commit("idle", &mut since, t0));
+        assert!(settle_commit("blocked", &mut since, t0));
+        assert!(since.is_none(), "blocked must clear a stale arm");
+        assert!(!settle_commit("idle", &mut since, t0));
+        assert!(!settle_commit("idle", &mut since, t0 + Duration::from_secs(4)));
+        assert!(settle_commit("idle", &mut since, t0 + Duration::from_secs(5)));
+        assert!(!settle_commit("done", &mut since, t0 + Duration::from_secs(6)));
     }
 }

@@ -44,10 +44,9 @@ pub(crate) async fn watch_stall(
     let detected = detect_limit(&screen);
     if detected.is_none() {
         // Clean read: on the CONFIRMED-clear transition (episode just
-        // reset after sustained absence) also release the shared claim —
-        // otherwise a genuine refire inside the remind window is
-        // swallowed on both paths until expiry. Duplicates from racing
-        // reads are the accepted trade-off (a card beats silence).
+        // reset after sustained absence) also release the shared claim.
+        // Duplicates-over-silence: one extra card on read disagreement
+        // beats a genuine refire swallowed by the remind window.
         let was_open = !episode.is_fresh();
         episode.tick(None, now);
         if was_open && episode.is_fresh() {

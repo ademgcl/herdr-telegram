@@ -14,9 +14,9 @@ pub struct ResetNames<'a> {
     /// Tab-derived core; None → stable tag default (never verbatim,
     /// matching the watchdog which never preserves a bare tag).
     pub core: Option<&'a str>,
-    /// Split-tab flag: verbatim-raw survives only when single (the
-    /// watchdog always formats split cores, so a bare re-apply would
-    /// be renamed on the next tick).
+    /// Split-tab flag: single-pane verbatim needs the tab core; split
+    /// panes additionally keep a stored title equal to the pane label
+    /// (`card` carries it when set — see reset_desired_title).
     pub multi: bool,
 }
 
@@ -229,7 +229,10 @@ impl TopicManager {
         // to the TAB core means a native rename synced both sides —
         // re-apply raw instead of reformatting ("My Title" → "[space]
         // My Title · o" would look like the bot reverting the rename).
-        // Same `naming_core` source as the watchdog: no drift.
+        // Split tabs additionally keep pane-label renames (`names.card`
+        // carries the label when set; a title-fallback coincidence
+        // self-heals on the next watchdog tick). Same `naming_core`
+        // source as the watchdog: no drift.
         let pre = self.storage.get_title(pane);
         let name = match names.core {
             Some(core) => crate::handlers::title_rules::reset_desired_title(
@@ -238,6 +241,7 @@ impl TopicManager {
                 core,
                 kind,
                 names.multi,
+                names.card,
             ),
             None => names::format_title(space, &tag, kind),
         };

@@ -59,7 +59,10 @@ pub fn screen_has_provider_failure(lines: &[String]) -> bool {
     lines.iter().any(|l| is_provider_failure_line(l))
 }
 
-fn clip(line: &str) -> String {
+/// Trim + 180-char cap for stall excerpts. Shared with the settled-pane
+/// tail scan (`limit_decide::detect_tail_with_context`) so both rank and
+/// quote identically.
+pub(crate) fn clip(line: &str) -> String {
     let t = line.trim();
     if t.chars().count() <= 180 {
         return t.to_string();

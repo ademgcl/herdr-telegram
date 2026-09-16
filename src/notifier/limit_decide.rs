@@ -1,6 +1,10 @@
 //! Pure stall-alert decisions shared by the watcher and watchdog paths.
 //! Split from `limits` (300-line file limit): predicates here are
 //! unit-tested, the async RPC/send orchestration stays in `limits`/`stall`.
+use crate::jobs::notices::{
+    LimitHit,
+    patterns::{CONTEXT, STRONG, WEAK, best_hit, kind_priority, normalize_line},
+};
 use std::time::{Duration, Instant};
 
 /// How many recent lines count as "fresh" for settled panes: a quota
@@ -39,6 +43,43 @@ pub(crate) fn kind_flipped(prev_kind: Option<&str>, kind: &str) -> bool {
 /// A recent failed send is still cooling down.
 pub(crate) fn send_cooled(last_fail: Option<Instant>, now: Instant) -> bool {
     last_fail.is_some_and(|t| now.duration_since(t) < Duration::from_secs(SEND_FAIL_COOL_SECS))
+}
+
+/// Tail detection with full-screen context: settled panes match banners
+/// in the fresh tail, but WEAK hits may draw error context from anywhere
+/// on screen — tail-only context would read a live stall as clean and
+/// clear its episode. Strong hits need no context either way. Mirrors
+/// `detect_limit` ranking (priority first, freshest line wins).
+pub(crate) fn detect_tail_with_context(tail: &[String], full: &[String]) -> Option<LimitHit> {
+    let lower_tail: Vec<String> = tail.iter().map(|l| normalize_line(&l.to_lowercase())).collect();
+    // Context lines get the same normalization: typo-only context
+    // (`exceded`) must count exactly like the working path sees it.
+    let lower_full: Vec<String> = full.iter().map(|l| normalize_line(&l.to_lowercase())).collect();
+    let strong_hit = best_hit(&lower_tail, STRONG, true);
+    let context = lower_full.iter().any(|l| CONTEXT.iter().any(|c| l.contains(c)));
+    let weak_hit = if context {
+        best_hit(&lower_tail, WEAK, false)
+    } else {
+        None
+    };
+    let mut best: Option<(u8, usize, &'static str, bool)> = None;
+    for (hit, strong) in [strong_hit, weak_hit].into_iter().zip([true, false]) {
+        if let Some((i, kind)) = hit {
+            let p = kind_priority(kind, strong);
+            let better = match best {
+                None => true,
+                Some((bp, bi, _, _)) => p < bp || (p == bp && i > bi),
+            };
+            if better {
+                best = Some((p, i, kind, strong));
+            }
+        }
+    }
+    best.map(|(_, i, kind, strong)| LimitHit {
+        kind,
+        excerpt: crate::jobs::notices::detect::clip(&tail[i]),
+        strong,
+    })
 }
 
 #[cfg(test)]
@@ -129,5 +170,53 @@ mod tests {
             .expect("typo quota must detect");
         assert_eq!(hit.kind, "rate-limit");
         assert!(detect_limit(&v(&["we exceded expectations on latency"])).is_none());
+    }
+
+    #[test]
+    fn test_tail_mirror_matches_full_detect_on_same_input() {
+        // The tail ranking must never drift from detect_limit: on
+        // identical input both agree on kind, excerpt and strength.
+        let screens = [
+            v(&["Free usage exceeded, subscribe to Go [retrying in 42s]"]),
+            v(&["error: rate limit hit", "backing off"]),
+            v(&["hello there", "  Thought · 300ms"]),
+            v(&["upstream error on attempt 9"]),
+            // Competing banners: stale strong transient above fresh weak
+            // quota — priority must beat recency on both paths.
+            v(&[
+                "⬝⬝⬝ Provider response headers timed out [retrying attempt #1]",
+                "error: upstream replied (429) trouble",
+            ]),
+        ];
+        for s in &screens {
+            let full = detect_limit(s).map(|h| (h.kind, h.excerpt, h.strong));
+            let tail = detect_tail_with_context(s, s).map(|h| (h.kind, h.excerpt, h.strong));
+            assert_eq!(full, tail);
+        }
+    }
+
+    #[test]
+    fn test_tail_weak_banner_uses_full_screen_context() {
+        // Fresh WEAK banner in the tail with error words only in deep
+        // scrollback is a live stall, not a clean screen.
+        let mut full = v(&["build failed: 2 tests red"]);
+        full.extend(v(&["plain working line"; 100]));
+        full.push("upstream replied (429) trouble".to_string());
+        let tail = scan_tail(&full);
+        let hit = detect_tail_with_context(tail, &full).expect("weak tail must detect");
+        assert_eq!(hit.kind, "rate-limit");
+        // Same tail without any context anywhere stays silent.
+        let lone = v(&["upstream replied (429) trouble"]);
+        assert!(detect_tail_with_context(&lone, &lone).is_none());
+        // Typo-only context counts after normalization, exactly like the
+        // working path — on quota-plausible lines (`usage` gates the
+        // `exceded` → `exceed` fix, so bare-typo prose never qualifies).
+        let mut typo_full = v(&["usage budget exceded again"]);
+        typo_full.extend(v(&["plain working line"; 100]));
+        typo_full.push("upstream replied (429) trouble".to_string());
+        let typo_tail = scan_tail(&typo_full);
+        let typo_hit =
+            detect_tail_with_context(typo_tail, &typo_full).expect("typo context must count");
+        assert_eq!(typo_hit.kind, "rate-limit");
     }
 }

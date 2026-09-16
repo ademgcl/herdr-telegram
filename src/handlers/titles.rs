@@ -5,8 +5,9 @@
 //! herdr TAB name (`tab.rename`/`tab.list`) — never the terminal/agent
 //! title (that lives only in the pinned card). Tab missing/empty falls
 //! back to the stable tag (`[{space}] {tag} · {agent}`, shells bare).
-//! Nothing is ever written to pane labels: the old pane-label path is
-//! removed, so bot-generated names can't pollute herdr again.
+//! Pane labels are written only for split-tab user renames (a shared tab
+//! can't disambiguate); the watchdog formats everything else from the
+//! tab core, preserving user-set names verbatim on both paths.
 use crate::{
     handlers::title_rules::{naming_core, stored_matches_label, tab_census, tab_of},
     herdr::{
@@ -120,11 +121,22 @@ pub async fn sync_titles_with(
         let (tab, multi) = tab_of(facts, tabs, &census, pane);
         // Verbatim preservation (merged upstream): a stored title equal to
         // the tab name means a Telegram native rename just synced both
-        // sides — keep it exactly, never reformat (single-pane only;
-        // split cores carry the tag and can't be verbatim).
+        // sides — keep it exactly, never reformat (single-pane; the
+        // split pane-label rule follows right below).
         if !multi
             && let Some(t) = tab
             && stored_matches_label(s.topics.topic_title(pane).as_deref(), t)
+        {
+            continue;
+        }
+        // Split tabs share one tab label, so pane-level renames live in
+        // the pane label: a stored title equal to the pane's herdr label
+        // is user-set — keep it exactly like single-pane verbatim above,
+        // or the format below reverts it every tick.
+        if multi
+            && let Some(pl) = f.label.as_deref()
+            && !pl.trim().is_empty()
+            && stored_matches_label(s.topics.topic_title(pane).as_deref(), pl)
         {
             continue;
         }
