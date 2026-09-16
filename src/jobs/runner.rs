@@ -63,6 +63,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // expiry. Spawned, never awaited inline.
     let mut typing_tick = tokio::time::interval(Duration::from_secs(4));
     typing_tick.tick().await;
+    // Consecutive settled samples before a report commits: agy idles
+    // briefly between phases mid-run, and a single settled sample (+ the
+    // 750ms recheck) retires the watcher on that transient — the agent
+    // keeps working unwatched (no final card at true completion) while
+    // the watchdog spams stall cards off working prose. Two strikes
+    // absorb gaps of several seconds; genuine settles just arrive one
+    // tick later.
+    let mut settled_streak: u32 = 0;
 
     loop {
         if job.is_stopped() {
@@ -75,6 +83,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if epoch != last_epoch {
             last_epoch = epoch;
             episode.reset();
+            settled_streak = 0;
             acc.clear();
             retry_wait = FALLBACK_TICK_SECS;
             // Retire the old live card instead of orphaning it frozen.
@@ -170,13 +179,22 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
         };
         if SETTLED.contains(&agent.status.as_str()) {
-            // Collapse done↔idle flapping before committing to a report
+            // Collapse done↔idle flapping before committing to a report.
             tokio::time::sleep(Duration::from_millis(750)).await;
             if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
                 && a.status == "working"
             {
+                settled_streak = 0;
                 continue;
             }
+            // Second consecutive settled sample required (see
+            // settled_streak): the first strike only arms, so a transient
+            // mid-run idle never retires the watcher.
+            settled_streak += 1;
+            if settled_streak < 2 {
+                continue;
+            }
+            settled_streak = 0;
             let epoch_before = job.epoch.load(Ordering::Relaxed);
             let retry = finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
             // finalize consumes the live slot on success — drop its
@@ -209,6 +227,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
             break;
         }
+        // Sampled working: any armed first strike was a transient.
+        settled_streak = 0;
 
         // Rate-limit stall watch (see stall.rs): opencode retries
         // internally with no settle and no buzz — one NEW card per

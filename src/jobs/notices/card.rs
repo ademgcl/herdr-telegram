@@ -44,6 +44,7 @@ mod tests {
         let hit = LimitHit {
             kind: "rate-limit",
             excerpt: "Free usage exceeded".into(),
+            strong: true,
         };
         let text = limit_card_text("wG:p1", &hit);
         assert!(text.contains("wG:p1"));
@@ -57,6 +58,7 @@ mod tests {
             kind: "provider",
             excerpt: "Provider response headers timed out after 300000ms [retrying attempt #1]"
                 .into(),
+            strong: true,
         };
         let text = limit_card_text("w8:p1", &hit);
         assert!(text.contains("w8:p1"));
@@ -69,6 +71,7 @@ mod tests {
         let hit = LimitHit {
             kind: ERROR_KIND,
             excerpt: "Error from provider (Console): fail".into(),
+            strong: true,
         };
         let text = limit_card_text("w8:p1", &hit);
         assert!(text.contains("won't auto-retry"));

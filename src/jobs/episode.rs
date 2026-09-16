@@ -1,10 +1,13 @@
 //! Mid-run buzz episodes: which stall banner already alerted this
-//! watcher. `provider` fatals and transient upstream stalls (`error`,
-//! `provider`) buzz only when stuck — transient flashes recover into the
-//! final reply, and settle arbitration already surfaces terminal errors
-//! there. `rate-limit`/`auth` buzz immediately: quota stalls never
-//! self-heal. The stuck gate is Instant-based (watcher wakes are
-//! event-driven, not periodic).
+//! watcher. `provider` fatals, transient upstream stalls (`error`,
+//! `provider`) and WEAK `auth` matches (common words + ambient context —
+//! agent prose or log dumps trip these transiently) buzz only when
+//! stuck — transient flashes recover into the final reply, and settle
+//! arbitration already surfaces terminal errors there.
+//! `rate-limit`/STRONG-`auth` buzz immediately: quota stalls never
+//! self-heal and specific denials persist until login is fixed. The
+//! stuck gate is Instant-based (watcher wakes are event-driven, not
+//! periodic).
 //!
 //! Once-per-episode survives noise: a single clean tick (banner scrolled
 //! out of the 40-line tail, one failed RPC, one redraw) does NOT clear
@@ -14,7 +17,7 @@
 //! must hold for [`KIND_SWITCH_STABLE`] consecutive ticks before it
 //! counts as a new episode, so scroll-order oscillation between
 //! co-present banners never spams.
-use super::notices::{ERROR_KIND, LimitHit, is_stuck_gated};
+use super::notices::{LimitHit, needs_stuck_gate};
 use std::time::{Duration, Instant};
 
 /// Ticks with a gated (`error`/`provider`) banner and no settle before
@@ -80,17 +83,19 @@ impl BuzzEpisode {
             // Same episode: pending flip (if any) is over.
             self.pending_kind = None;
             self.pending_n = 0;
-            // Same episode: only a stuck, unalerted gated banner re-fires.
-            if is_stuck_gated(hit.kind)
-                && !self.alerted
-                && self
-                    .since
-                    .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(STUCK_SECS))
+            // Fire once: immediately for immediate hits, after the stuck
+            // interval for gated ones. A WEAK-`auth` episode that upgrades
+            // to STRONG wording (same kind) still fires — the denial just
+            // proved itself genuine.
+            if !self.alerted
+                && (!needs_stuck_gate(hit)
+                    || self
+                        .since
+                        .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(STUCK_SECS)))
             {
                 self.alerted = true;
                 return Some(hit);
             }
-            // Immediate kinds fired at episode start; repeats silent.
             return None;
         }
         // Different kind while an episode is open: require stability so
@@ -110,25 +115,38 @@ impl BuzzEpisode {
         // New stable episode (banner returned after a confirmed clear,
         // or a kind held long enough to be genuine).
         self.kind = Some(hit.kind.to_string());
-        self.since = is_stuck_gated(hit.kind).then_some(now);
-        self.alerted = false;
+        self.since = needs_stuck_gate(hit).then_some(now);
         self.pending_kind = None;
         self.pending_n = 0;
-        if hit.kind == ERROR_KIND || hit.kind == "provider" {
+        // Gated kinds start their stuck timer silently; immediate kinds
+        // fire at once and mark themselves alerted so repeats stay silent.
+        if needs_stuck_gate(hit) {
+            self.alerted = false;
             return None;
         }
+        self.alerted = true;
         Some(hit)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::notices::types::ERROR_KIND;
     use super::*;
 
     fn hit(kind: &'static str) -> LimitHit {
         LimitHit {
             kind,
             excerpt: "x".into(),
+            strong: true,
+        }
+    }
+
+    fn weak_hit(kind: &'static str) -> LimitHit {
+        LimitHit {
+            kind,
+            excerpt: "x".into(),
+            strong: false,
         }
     }
 
@@ -229,5 +247,41 @@ mod tests {
         assert!(ep.tick(Some(&r), t0 + Duration::from_secs(302)).is_some());
         // Back to error needs stability again first.
         assert!(ep.tick(Some(&e), t0 + Duration::from_secs(303)).is_none());
+    }
+
+    #[test]
+    fn test_weak_auth_is_stuck_gated() {
+        // WEAK wording (prose/log-shaped) must persist before paging;
+        // STRONG wording pages at once.
+        let mut ep = BuzzEpisode::new();
+        let t0 = Instant::now();
+        let w = weak_hit("auth");
+        assert!(ep.tick(Some(&w), t0).is_none());
+        assert!(ep.tick(Some(&w), t0 + Duration::from_secs(30)).is_none());
+        assert!(ep.tick(Some(&w), t0 + Duration::from_secs(90)).is_some());
+        // Post-once: still present right after stays silent.
+        assert!(ep.tick(Some(&w), t0 + Duration::from_secs(200)).is_none());
+    }
+
+    #[test]
+    fn test_weak_auth_episode_upgrades_on_strong_wording() {
+        // Same-kind STRONG wording inside an unfired WEAK episode proves
+        // the denial genuine and fires immediately.
+        let mut ep = BuzzEpisode::new();
+        let t0 = Instant::now();
+        let w = weak_hit("auth");
+        let s = hit("auth");
+        assert!(ep.tick(Some(&w), t0).is_none());
+        assert!(ep.tick(Some(&s), t0 + Duration::from_secs(10)).is_some());
+        assert!(ep.tick(Some(&s), t0 + Duration::from_secs(20)).is_none());
+    }
+
+    #[test]
+    fn test_strong_auth_fires_immediately() {
+        let mut ep = BuzzEpisode::new();
+        let t = Instant::now();
+        let s = hit("auth");
+        assert!(ep.tick(Some(&s), t).is_some());
+        assert!(ep.tick(Some(&s), t).is_none());
     }
 }

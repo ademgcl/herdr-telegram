@@ -77,7 +77,13 @@ pub(crate) const WEAK: &[(&str, &str)] = &[
     ("payment required", "rate-limit"),
     ("unauthorized", "auth"),
     ("invalid api key", "auth"),
-    ("authentication", "auth"),
+    // NOTE: bare "authentication" is deliberately NOT here. Agents
+    // routinely DISCUSS authentication in working prose ("handles
+    // authentication requirements…") while unrelated tool output carries
+    // error context — paging that as "agent auth failed" spams one card
+    // per episode with a wrong fix-it hint. Real auth failures carry a
+    // specific marker above (permission_denied, invalid api key,
+    // login/session/token …), which all stay.
     ("token expired", "auth"),
     ("session expired", "auth"),
     ("login required", "auth"),
