@@ -2,9 +2,10 @@ use crate::jobs::episode::BuzzEpisode;
 use crate::jobs::stall::watch_stall;
 use crate::{
     herdr::client::get_agent,
-    jobs::finalize::{edit_live, finalize, fold_live},
+    jobs::finalize::{edit_live, fold_live},
     jobs::job::Job,
     jobs::segment::final_block,
+    jobs::settle::{SettleStep, settle_step},
     jobs::stream::{EvStream, WatchEvent, delta},
     state::AppState,
     types::LIVE_EDIT_COOLDOWN_SECS,
@@ -63,14 +64,11 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // expiry. Spawned, never awaited inline.
     let mut typing_tick = tokio::time::interval(Duration::from_secs(4));
     typing_tick.tick().await;
-    // Consecutive settled samples before a report commits: agy idles
-    // briefly between phases mid-run, and a single settled sample (+ the
-    // 750ms recheck) retires the watcher on that transient — the agent
-    // keeps working unwatched (no final card at true completion) while
-    // the watchdog spams stall cards off working prose. Two strikes
-    // absorb gaps of several seconds; genuine settles just arrive one
-    // tick later.
-    let mut settled_streak: u32 = 0;
+    // First settled sample arms the report timer (see settle.rs): agy
+    // idles briefly between phases mid-run, and retiring on that
+    // transient leaves the agent working unwatched. Cleared on working
+    // samples, herdr errors, and epoch changes.
+    let mut settled_since: Option<Instant> = None;
 
     loop {
         if job.is_stopped() {
@@ -86,7 +84,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if epoch != last_epoch {
             last_epoch = epoch;
             episode.reset();
-            settled_streak = 0;
+            settled_since = None;
             acc.clear();
             retry_wait = FALLBACK_TICK_SECS;
             // Retire the old live card instead of orphaning it frozen.
@@ -172,66 +170,41 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                             if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
                                 s.clear_pending(&pane).await;
                             }
+                            let (chat, th) = *job.dest.lock().await;
+                            edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                             break;
                         }
                         _ = tokio::time::sleep(Duration::from_secs(60)) => {}
                     }
                     fails = 0;
                 }
+                // Unknown, not settled: an armed report timer must not
+                // survive the outage (a post-outage sample would else
+                // count as persistence spanning the whole blackout).
+                settled_since = None;
                 continue;
             }
         };
         if SETTLED.contains(&agent.status.as_str()) {
-            // Collapse done↔idle flapping before committing to a report.
-            tokio::time::sleep(Duration::from_millis(750)).await;
-            if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
-                && a.status == "working"
+            match settle_step(
+                &s,
+                &pane,
+                &job,
+                &agent.status,
+                &mut live_mid,
+                &mut live_dest,
+                &mut acc,
+                &mut retry_wait,
+                &mut settled_since,
+            )
+            .await
             {
-                settled_streak = 0;
-                continue;
+                SettleStep::Continue => continue,
+                SettleStep::Break => break,
             }
-            // Second consecutive settled sample required (see
-            // settled_streak): the first strike only arms, so a transient
-            // mid-run idle never retires the watcher.
-            settled_streak += 1;
-            if settled_streak < 2 {
-                continue;
-            }
-            settled_streak = 0;
-            let epoch_before = job.epoch.load(Ordering::Relaxed);
-            let retry = finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
-            // finalize consumes the live slot on success — drop its
-            // address too, or a later reset would edit the final card.
-            if live_mid.is_none() {
-                live_dest = None;
-            }
-            if job.epoch.load(Ordering::Relaxed) != epoch_before {
-                continue;
-            }
-            if retry {
-                // Delivery/read outage: back off (capped) instead of
-                // retiring — the intent stays until /cancel or pane death.
-                // Cancellable like the unreachable backoff above.
-                tokio::select! {
-                    _ = job.cancel.notified() => {
-                        job.mark_stopped();
-                        // Like the sibling cancel branches: a genuine
-                        // cancel retires the durable intent (a supersede
-                        // never notifies — it bumps the epoch instead).
-                        if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
-                            s.clear_pending(&pane).await;
-                        }
-                        break;
-                    }
-                    _ = tokio::time::sleep(Duration::from_secs(retry_wait)) => {}
-                }
-                retry_wait = (retry_wait * 2).min(60);
-                continue;
-            }
-            break;
         }
-        // Sampled working: any armed first strike was a transient.
-        settled_streak = 0;
+        // Sampled working: any armed report timer was a transient.
+        settled_since = None;
 
         // Rate-limit stall watch (see stall.rs): opencode retries
         // internally with no settle and no buzz — one NEW card per

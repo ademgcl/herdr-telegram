@@ -20,8 +20,8 @@
 use super::notices::{LimitHit, needs_stuck_gate};
 use std::time::{Duration, Instant};
 
-/// Ticks with a gated (`error`/`provider`) banner and no settle before
-/// buzzing once.
+/// Ticks with a gated (`error`/`provider`/WEAK-`auth`) banner and no
+/// settle before buzzing once.
 const STUCK_SECS: u64 = 90;
 /// Consecutive clean (non-empty, banner-free) reads before the episode
 /// clears so the next banner re-alerts.

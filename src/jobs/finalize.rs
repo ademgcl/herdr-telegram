@@ -76,6 +76,13 @@ pub async fn finalize(
         if matches!(settled, "dead" | "closed" | "exited") {
             println!("[prompt] finalize {pane}: pane gone with no output, retiring");
             s.seen.lock().await.insert(pane.to_string(), snapshot);
+            // Fold the live slot: retiring with it set would orphan a
+            // frozen "working…" card (the caller only drops the address
+            // when the slot is already consumed).
+            if let Some(mid) = live_mid.take() {
+                let (chat, _) = *job.dest.lock().await;
+                let _ = s.tg.try_edit_msg(chat, mid, "⏹️ run ended", None).await;
+            }
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -172,12 +179,18 @@ pub async fn finalize(
         body.len()
     );
     let mut delivered = false;
+    // Whether the live slot itself holds landed final content (part 0
+    // edited in place): only then must a mid-post supersede leave the
+    // slot alone — otherwise the handoff's "superseded" retire still
+    // owns the stale working card.
+    let mut live_shows_final = false;
     for (i, part) in parts.iter().enumerate() {
         match (i, *live_mid) {
             (0, Some(mid)) => {
                 if s.tg.try_edit_msg(chat, mid, part, None).await.is_ok() {
                     let _ = s.tg.set_reaction(chat, mid, Some("✅")).await;
                     delivered = true;
+                    live_shows_final = true;
                 } else if report_done(s, chat, th, pane, part).await {
                     delivered = true;
                 }
@@ -192,6 +205,12 @@ pub async fn finalize(
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
             println!("[prompt] finalize {pane}: superseded mid-post, stopping");
             acc.clear();
+            // The live slot already shows the landed final: consume it so
+            // the epoch handoff never clobbers it with a "superseded"
+            // edit. Any other slot stays for the handoff's own retire.
+            if live_shows_final {
+                live_mid.take();
+            }
             return false;
         }
     }

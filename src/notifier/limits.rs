@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 /// Re-remind while a background limit stall persists (prompt-owned
 /// panes alert once per episode from their watcher instead).
 pub const LIMIT_REMIND_SECS: u64 = 1800;
-/// Gated (`provider`/`error`) banners must persist this long before the
-/// watchdog buzzes: transient upstream blips (timeout → retry succeeds)
-/// stay silent, stuck stalls page once.
+/// Gated (`provider`/`error`/WEAK-`auth`) banners must persist this long
+/// before the watchdog buzzes: transient upstream blips (timeout → retry
+/// succeeds) stay silent, stuck stalls page once.
 const LIMIT_STUCK_SECS: u64 = 90;
 /// Consecutive confirmed-clean 60s ticks before a limit episode clears.
 /// A single scroll/RPC flap never re-arms the alert.
