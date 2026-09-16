@@ -100,6 +100,7 @@ impl TopicManager {
     }
 
     /// Snapshot a pane's full topic identity (reset survivor path).
+    #[allow(dead_code)]
     pub fn snapshot_identity(
         &self,
         pane: &str,
@@ -154,6 +155,7 @@ impl TopicManager {
     /// Preserves `creating` (in-flight guards stay): wiping it would let
     /// a concurrent ensure double-mint while the winner still holds its
     /// guard. Drains before the wipe cover the race instead.
+    #[allow(dead_code)]
     pub fn storage_clear_except(&self, kept: Vec<crate::topics::storage::KeptIdentity>) {
         self.last_title_write
             .lock()
@@ -163,6 +165,7 @@ impl TopicManager {
     }
 
     /// F3: Unpin all messages in a topic thread.
+    #[allow(dead_code)]
     pub async fn unpin_all(&self, pane: &str) -> bool {
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
             return true;
@@ -204,7 +207,8 @@ impl TopicManager {
         let name = names::format_title(space, title_or_tag, kind);
 
         // Mint new topic
-        let new_thread = match self.tg.create_forum_topic(forum, &name).await {
+        let color = names::workspace_icon_color(space);
+        let new_thread = match self.tg.create_forum_topic(forum, &name, Some(color)).await {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("[reset] create topic failed for {pane}: {e}");

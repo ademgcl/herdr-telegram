@@ -12,6 +12,7 @@ pub struct TopicStorage {
 }
 
 /// Full topic identity for reset survivors (pane, thread, tag, title, icon).
+#[allow(dead_code)]
 pub type KeptIdentity = (String, i64, Option<String>, Option<String>, Option<String>);
 
 impl TopicStorage {
@@ -235,6 +236,7 @@ impl TopicStorage {
     }
 
     /// Atomic clear+restore (reset survivor path): one lock, one save.
+    #[allow(dead_code)]
     pub fn clear_except(&self, kept: Vec<KeptIdentity>) {
         let mut s = self.lock();
         s.topics.clear();

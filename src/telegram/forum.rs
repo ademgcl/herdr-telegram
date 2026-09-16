@@ -3,15 +3,45 @@ use crate::types::Res;
 use serde_json::json;
 use std::time::Duration;
 
+pub fn build_create_forum_topic_params(
+    chat_id: i64,
+    name: &str,
+    icon_color: Option<i64>,
+) -> serde_json::Value {
+    let mut body = json!({"chat_id": chat_id, "name": name});
+    if let Some(color) = icon_color {
+        body["icon_color"] = json!(color);
+    }
+    body
+}
+
 impl TelegramClient {
-    pub async fn create_forum_topic(&self, chat_id: i64, name: &str) -> Res<i64> {
-        let res = self
-            .call_retrying(
-                "createForumTopic",
-                json!({"chat_id": chat_id, "name": name}),
-                Duration::from_secs(15),
-            )
-            .await?;
+    /// F5: Create a forum topic with optional icon_color (one of Telegram's 6 RGB values).
+    pub async fn create_forum_topic(
+        &self,
+        chat_id: i64,
+        name: &str,
+        icon_color: Option<i64>,
+    ) -> Res<i64> {
+        let mut body = build_create_forum_topic_params(chat_id, name, icon_color);
+        let res = match self
+            .call_retrying("createForumTopic", body.clone(), Duration::from_secs(15))
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = e.to_string();
+                if body.get("icon_color").is_some()
+                    && (msg.contains("color") || msg.contains("COLOR"))
+                {
+                    body.as_object_mut().unwrap().remove("icon_color");
+                    self.call_retrying("createForumTopic", body, Duration::from_secs(15))
+                        .await?
+                } else {
+                    return Err(e);
+                }
+            }
+        };
         res["message_thread_id"]
             .as_i64()
             .ok_or_else(|| "missing message_thread_id in createForumTopic response".into())
@@ -163,4 +193,22 @@ pub struct BotPermissions {
     pub can_manage_topics: bool,
     pub can_pin_messages: bool,
     pub can_delete_messages: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_create_forum_topic_params() {
+        let p1 = build_create_forum_topic_params(123, "test-topic", Some(0x6FB9F0));
+        assert_eq!(p1["chat_id"], 123);
+        assert_eq!(p1["name"], "test-topic");
+        assert_eq!(p1["icon_color"], 0x6FB9F0);
+
+        let p2 = build_create_forum_topic_params(123, "test-topic", None);
+        assert_eq!(p2["chat_id"], 123);
+        assert_eq!(p2["name"], "test-topic");
+        assert!(p2.get("icon_color").is_none());
+    }
 }

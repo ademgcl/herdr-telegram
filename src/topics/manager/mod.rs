@@ -183,7 +183,8 @@ impl TopicManager {
 
         let title_or_tag = raw_title.unwrap_or(&tag);
         let name = names::format_title(space, title_or_tag, kind);
-        let out = match self.tg.create_forum_topic(forum, &name).await {
+        let color = names::workspace_icon_color(space);
+        let out = match self.tg.create_forum_topic(forum, &name, Some(color)).await {
             Ok(thread) => {
                 println!("[topics] created topic #{thread} for {pane} ({name})");
                 // One lock, one save: no title-less crash window.
@@ -236,6 +237,7 @@ impl TopicManager {
     }
 
     /// Reset-owned sync: mints through the reset gate (see ensure).
+    #[allow(dead_code)]
     pub async fn sync_topic_for_reset(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         self.sync_inner(pane, kind, space, true).await
     }

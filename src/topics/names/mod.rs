@@ -89,6 +89,38 @@ pub fn check_context_icons(valid_stickers: &[String]) -> Vec<&'static str> {
     missing
 }
 
+/// F5: Telegram's 6 supported forum topic icon colors in RGB format.
+pub const TOPIC_ICON_COLORS: [i64; 6] = [
+    0x6FB9F0, // Blue: 7322096
+    0xFFD67E, // Yellow: 16766590
+    0xCB86DB, // Violet: 13338331
+    0x8EEE98, // Green: 9367192
+    0xFF93B2, // Pink: 16749490
+    0xFB6F5F, // Red: 16478047
+];
+
+/// F5: Deterministic mapping from workspace name/label to one of the 6 Telegram icon colors.
+pub fn workspace_icon_color(space: &str) -> i64 {
+    let clean = space.trim().trim_matches(|c: char| c == '[' || c == ']');
+    if clean.is_empty() {
+        return TOPIC_ICON_COLORS[0];
+    }
+    // If space contains or ends with a number (e.g. "ws1", "space-2", "#3"), use numeric index
+    let num_suffix = clean
+        .rsplit(|c: char| !c.is_ascii_digit())
+        .next()
+        .and_then(|digits| digits.parse::<usize>().ok());
+    if let Some(n) = num_suffix {
+        return TOPIC_ICON_COLORS[n % TOPIC_ICON_COLORS.len()];
+    }
+    // Deterministic djb2 hash of the clean space string
+    let mut hash: usize = 5381;
+    for b in clean.as_bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(*b as usize);
+    }
+    TOPIC_ICON_COLORS[hash % TOPIC_ICON_COLORS.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +189,19 @@ mod tests {
             check_context_icons(&none_valid),
             vec!["5417915203100613993", "5350554349074391003"]
         );
+    }
+
+    #[test]
+    fn test_workspace_icon_color_mapping() {
+        // Deterministic: bracketed and unbracketed return identical color
+        assert_eq!(workspace_icon_color("shop"), workspace_icon_color("[shop]"));
+        // Color is always in allowed set
+        assert!(TOPIC_ICON_COLORS.contains(&workspace_icon_color("shop")));
+        assert!(TOPIC_ICON_COLORS.contains(&workspace_icon_color("")));
+        // Numeric suffixes map deterministically to color indices
+        assert_eq!(workspace_icon_color("ws0"), TOPIC_ICON_COLORS[0]);
+        assert_eq!(workspace_icon_color("ws1"), TOPIC_ICON_COLORS[1]);
+        assert_eq!(workspace_icon_color("ws2"), TOPIC_ICON_COLORS[2]);
+        assert_eq!(workspace_icon_color("#3"), TOPIC_ICON_COLORS[3]);
     }
 }
