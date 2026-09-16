@@ -77,12 +77,15 @@ impl State {
     }
 
     /// End one pane's stall episode (limit alert, stuck timer, absence
-    /// streak) — called when the pane leaves `working`, so the next stall
-    /// re-alerts fresh instead of inheriting the prior episode's dedup.
+    /// streak, send cooldown) — called on shell flips and pane death, or
+    /// after confirmed-clean reads. Working flicker deliberately does NOT
+    /// clear: opencode retries quota stalls across working↔idle samples,
+    /// and wiping per flicker kept genuine stalls silent for hours.
     pub async fn clear_limit_episode(&self, pane: &str) {
         self.limit_alert.lock().await.remove(pane);
         self.limit_seen.lock().await.remove(pane);
         self.limit_miss.lock().await.remove(pane);
+        self.limit_send_cool.lock().await.remove(pane);
     }
 
     /// Drop armed input waiters for a dead pane: a typewait surviving

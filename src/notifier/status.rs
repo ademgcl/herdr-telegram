@@ -56,13 +56,14 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     if old.as_deref() == Some("blocked") && new_status != "blocked" {
         s.blocked_sig.lock().await.remove(pane);
     }
-    // Leaving working behind — any stall episode (limit alert, stuck
-    // timer, absence streak) dies with it so the next working stall
-    // always re-alerts fresh instead of being suppressed by the prior
-    // episode's 30-min remind window / stale stuck timer.
-    if old.as_deref() == Some("working") && new_status != "working" {
-        s.clear_limit_episode(pane).await;
-    }
+    // NOTE: stall episodes are NOT cleared on leaving `working` anymore.
+    // Opencode retries quota stalls internally while herdr samples
+    // working↔idle flicker between retries — wiping the alert/stuck
+    // timer on every flicker meant the 90s gate (and the 30-min remind)
+    // never accumulated and quota stayed silent for hours. Episodes now
+    // clear only after confirmed-clean reads (see limits.rs
+    // LIMIT_CLEAR_MISSES) or pane death/shell flip, so flicker preserves
+    // the episode instead of restarting it.
 
     // Agent identity once per observation — shared by pins, cards and
     // alerts below.

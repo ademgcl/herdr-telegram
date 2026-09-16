@@ -39,9 +39,11 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
 
     // Rate-limit stalls never transition (herdr reports `working` while
     // opencode retries internally), so the status path above stays mute:
-    // scan working panes for the banner directly. Skipped on the silent
-    // seed (boot text can mimic error banners); the next watchdog tick
-    // — 60s later — surfaces real stalls anyway.
+    // scan non-shell panes for the banner directly (immediate quota/auth
+    // on any status — herdr can sample idle mid-retry; gated still needs
+    // working), backstopping prompt-owned panes with parked watchers.
+    // Skipped on the silent seed (boot text can mimic error banners); the
+    // next watchdog tick — 60s later — surfaces real stalls anyway.
     if !silent {
         scan_limits(s).await;
     }
@@ -51,7 +53,10 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // only truly gone panes get closed. Fail-open: a herdr hiccup must
     // never read as "everything is dead" (wiped topics + intents).
     // Single `list_panes` per tick (shared with the hygiene block
-    // below): 1 RPC, not 2.
+    // below): 1 RPC, not 2. Forum-only: in DM mode a quit-to-shell pane
+    // keeps its last agent status (fully-dead panes are still reaped by
+    // hygiene below); shell reuse under the same name inherits episode
+    // dedup for up to one remind window — accepted, DM has no topics.
     let mut pane_list: Option<HashSet<String>> = None;
     if s.cfg.forum.is_some() {
         let stored = s.topics.all_mappings();
@@ -83,7 +88,8 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             };
                             // Agent gone (shell reuse): its stall episode dies here
                             // or the next agent on this pane name inherits stale
-                            // dedup (see status.rs working→* clear).
+                            // dedup (working flicker no longer clears — only
+                            // shell/death/confirmed-clean reads do).
                             s.clear_limit_episode(&pane).await;
                             s.topics.mark_shell(&pane).await;
                             // A prompt owed to the vanished agent (quit on

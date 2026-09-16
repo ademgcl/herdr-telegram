@@ -1,5 +1,5 @@
 //! Screen scanning for limit/quota/provider stalls. Pure std-only.
-use super::patterns::{CONTEXT, FATAL_PROVIDER_MARKERS, STRONG, WEAK, best_hit};
+use super::patterns::{CONTEXT, FATAL_PROVIDER_MARKERS, STRONG, WEAK, best_hit, normalize_line};
 use super::types::LimitHit;
 
 /// Scan a raw pane screen for limit/quota/provider stalls. Strong hits
@@ -10,7 +10,13 @@ use super::types::LimitHit;
 /// across BOTH tables, ties break bottommost (freshest) — so the card
 /// quotes what the user saw last, never a scrolled-off transient.
 pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
-    let lower: Vec<String> = lines.iter().map(|l| l.to_lowercase()).collect();
+    // Normalized before matching so quota banners with single-e
+    // misspellings (`exceded`) still hit; `rfree`-style prefixes already
+    // match via substring (`free usage exceeded`).
+    let lower: Vec<String> = lines
+        .iter()
+        .map(|l| normalize_line(&l.to_lowercase()))
+        .collect();
     let strong_hit = best_hit(&lower, STRONG, true);
     let context = lower.iter().any(|l| CONTEXT.iter().any(|c| l.contains(c)));
     let weak_hit = if context {
