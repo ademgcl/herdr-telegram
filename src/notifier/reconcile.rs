@@ -3,7 +3,7 @@ use crate::{
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
     handlers::titles::sync_titles_with,
     herdr::client::{list_agents, list_workspaces, read_shell_output},
-    herdr::labels::pane_facts,
+    herdr::labels::{pane_facts, tab_labels},
     jobs::finalize::report,
     notifier::hygiene::{panes_once, reap_orphans},
     notifier::limits::scan_limits,
@@ -212,13 +212,14 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // for externally-closed panes). Fail-open on Err/empty (see hygiene).
     reap_orphans(s, &mut pane_list).await;
 
-    // 1:1 pane↔topic titles (herdr labels win here; native TG renames
+    // 1:1 tab↔topic titles (herdr tab names win; native TG renames
     // flow back via forum_topic_edited). Reuses this tick's rows plus
-    // one spaces/facts fetch — no extra list_agents per tick.
+    // one spaces/facts/tabs fetch — no extra list_agents per tick.
     if s.cfg.forum.is_some() {
         let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
         if let Ok(facts) = pane_facts(&s.cfg.socket).await {
-            sync_titles_with(s, &rows, &spaces, &facts).await;
+            let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+            sync_titles_with(s, &rows, &spaces, &facts, &tabs).await;
         }
     }
 }
