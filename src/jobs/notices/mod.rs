@@ -16,4 +16,4 @@ pub mod patterns;
 pub mod types;
 pub use card::limit_card_text;
 pub use detect::{detect_limit, is_provider_failure_line, screen_has_provider_failure};
-pub use types::{ERROR_KIND, LimitHit, is_stuck_gated};
+pub use types::{LimitHit, needs_stuck_gate};

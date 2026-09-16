@@ -30,11 +30,28 @@ pub(crate) async fn shell_snapshot(s: &AppState, pane: &str) -> String {
 /// take 30s+, but the abort itself adds no extra budget). The early
 /// return carries whatever was last read (empty on the first round);
 /// callers gate on the intent anyway, so it always stays silent.
-pub(crate) async fn await_shell_settle(s: &AppState, pane: &str, before: &str) -> (String, bool) {
+/// Sustains the 1:1 typing indicator inside the 1s poll loop (spawned,
+/// never awaited inline so a slow send never delays settle reads):
+/// without this any command over ~5s goes dark past the ≈5s expiry,
+/// and DM shells have no typing task to backstop them at all.
+pub(crate) async fn await_shell_settle(
+    s: &AppState,
+    pane: &str,
+    before: &str,
+    chat: i64,
+    thread: Option<i64>,
+) -> (String, bool) {
     let mut last = String::new();
     let mut stable = 0u32;
     let mut cur = String::new();
-    for _ in 0..15 {
+    for i in 0..15u32 {
+        // Direct dest touch every 4th second (≈4s cadence < ≈5s expiry).
+        if i.is_multiple_of(4) {
+            let tg = s.tg.clone();
+            tokio::spawn(async move {
+                tg.typing(chat, thread).await;
+            });
+        }
         sleep(Duration::from_secs(1)).await;
         // Prompt abort, not a settle verdict: the caller gates on the
         // intent anyway — this just skips dead sleeping.
@@ -137,10 +154,15 @@ pub(crate) async fn settle_report_shell(
     before: &str,
     kb: Option<Value>,
 ) {
-    let (out, settled) = await_shell_settle(s, pane, before).await;
+    // 1:1 working↔typing: shells run up to ~5 min with no watcher.
+    // `start_typing` no-ops in DM; the settle loop touches dest directly.
+    s.start_typing(pane).await;
+    s.tg.typing(chat, thread).await;
+    let (out, settled) = await_shell_settle(s, pane, before, chat, thread).await;
     // /cancel during the settle clears the intent: a stale card must not
     // post for cancelled work.
     if !s.pending_matches(pane, chat, thread, cmd).await {
+        s.stop_shell_typing(pane).await;
         return;
     }
     let first = if settled {
@@ -160,18 +182,21 @@ pub(crate) async fn settle_report_shell(
     if mid.is_none() {
         // Delivery-tracked: the intent survives for boot-recover instead
         // of eating the reply. No follow-up without a first card.
+        s.stop_shell_typing(pane).await;
         return;
     }
     let sent_lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
     let mut settle_base = out;
     if settled {
         s.clear_pending(pane).await;
+        s.stop_shell_typing(pane).await;
         return;
     }
     for _ in 0..SHELL_FOLLOW_UP_ROUNDS {
-        let (next, done) = await_shell_settle(s, pane, &settle_base).await;
+        let (next, done) = await_shell_settle(s, pane, &settle_base, chat, thread).await;
         settle_base = next.clone();
         if !s.pending_matches(pane, chat, thread, cmd).await {
+            s.stop_shell_typing(pane).await;
             return;
         }
         if !done {
@@ -189,11 +214,13 @@ pub(crate) async fn settle_report_shell(
         if mid2.is_some() {
             s.clear_pending(pane).await;
         }
+        s.stop_shell_typing(pane).await;
         return;
     }
     // Budget exhausted, still running: last fresh tail (or a short note
     // when nothing new arrived all budget) + `/read` pointer.
     if !s.pending_matches(pane, chat, thread, cmd).await {
+        s.stop_shell_typing(pane).await;
         return;
     }
     let new_lines: Vec<String> = settle_base
@@ -211,6 +238,7 @@ pub(crate) async fn settle_report_shell(
     if mid3.is_some() {
         s.clear_pending(pane).await;
     }
+    s.stop_shell_typing(pane).await;
 }
 
 #[cfg(test)]

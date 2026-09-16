@@ -2,7 +2,7 @@
 //! `reconcile` (300-line file limit).
 use crate::{
     herdr::client::read_screen_adaptive,
-    jobs::notices::{detect_limit, is_stuck_gated, limit_card_text},
+    jobs::notices::{detect_limit, limit_card_text, needs_stuck_gate},
     state::AppState,
 };
 use std::time::{Duration, Instant};
@@ -69,9 +69,11 @@ pub(crate) async fn scan_limits(s: &AppState) {
         s.limit_miss.lock().await.remove(&pane);
         // Stuck gate for transient-prone kinds: a timeout blip that
         // recovers on the next retry stays silent; only a banner that
-        // persists across watchdog ticks pages. A kind flip restarts the
-        // timer (co-present banners swapping topmost line never spam).
-        if is_stuck_gated(hit.kind) {
+        // persists across watchdog ticks pages. WEAK `auth` wording (agent
+        // prose, log dumps) is gated too — only specific denials page at
+        // once. A kind flip restarts the timer (co-present banners
+        // swapping topmost line never spam).
+        if needs_stuck_gate(&hit) {
             let stuck = {
                 let mut seen = s.limit_seen.lock().await;
                 match seen.get(&pane) {
@@ -108,9 +110,8 @@ pub(crate) async fn scan_limits(s: &AppState) {
         if let Some(forum) = s.cfg.forum
             && let Some(thread) = s.topics.all_mappings().get(&pane).copied()
         {
-            let mid = s
-                .tg
-                .send_msg_with_effect(
+            let mid =
+                s.tg.send_msg_with_effect(
                     forum,
                     Some(thread),
                     &text,
@@ -124,9 +125,8 @@ pub(crate) async fn scan_limits(s: &AppState) {
             s.remember(forum, mid, &pane).await;
         } else {
             for id in &s.cfg.owners {
-                let mid = s
-                    .tg
-                    .send_msg_with_effect(
+                let mid =
+                    s.tg.send_msg_with_effect(
                         *id,
                         None,
                         &text,

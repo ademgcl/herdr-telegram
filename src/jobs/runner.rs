@@ -2,7 +2,7 @@ use crate::jobs::episode::BuzzEpisode;
 use crate::jobs::stall::watch_stall;
 use crate::{
     herdr::client::get_agent,
-    jobs::finalize::{edit_live, finalize},
+    jobs::finalize::{edit_live, finalize, fold_live},
     jobs::job::Job,
     jobs::segment::final_block,
     jobs::stream::{EvStream, WatchEvent, delta},
@@ -56,9 +56,27 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     if !job.is_stopped() {
         s.start_typing(&pane).await;
     }
+    // Dedicated typing ticker (4s < ≈5s expiry, independent of the 5s
+    // fallback + herdr RPCs): thinking pauses with no output/events go
+    // dark in DM mode without it (no typing task there), and a slow
+    // get_agent would otherwise stretch the piggyback period past
+    // expiry. Spawned, never awaited inline.
+    let mut typing_tick = tokio::time::interval(Duration::from_secs(4));
+    typing_tick.tick().await;
+    // Consecutive settled samples before a report commits: agy idles
+    // briefly between phases mid-run, and a single settled sample (+ the
+    // 750ms recheck) retires the watcher on that transient — the agent
+    // keeps working unwatched (no final card at true completion) while
+    // the watchdog spams stall cards off working prose. Two strikes
+    // absorb gaps of several seconds; genuine settles just arrive one
+    // tick later.
+    let mut settled_streak: u32 = 0;
 
     loop {
         if job.is_stopped() {
+            // Quiet retire: no cancel card by design, but never freeze a
+            // live "working…" card — fold it in place, buzz nothing.
+            fold_live(&s, &mut live_dest, &mut live_mid, "⏹️ run ended").await;
             break;
         }
         // New prompt on a reused watcher restarts all episode timers
@@ -68,6 +86,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if epoch != last_epoch {
             last_epoch = epoch;
             episode.reset();
+            settled_streak = 0;
             acc.clear();
             retry_wait = FALLBACK_TICK_SECS;
             // Retire the old live card instead of orphaning it frozen.
@@ -94,7 +113,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Output activity → stream; status change → maybe finalize.
         // The fallback tick guarantees progress even without events.
-        // Events (when they fire) simply trigger an earlier wake-up
+        // Events (when they fire) simply trigger an earlier wake-up.
+        // The typing arm only touches the indicator and loops — never
+        // a herdr read — so its period stays exactly 4s.
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
@@ -107,6 +128,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 let (chat, th) = *job.dest.lock().await;
                 edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
                 break;
+            }
+            _ = typing_tick.tick() => {
+                let (dchat, dth) = *job.dest.lock().await;
+                let tg = s.tg.clone();
+                tokio::spawn(async move {
+                    tg.typing(dchat, dth).await;
+                });
+                continue;
             }
             _ = tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)) => WatchEvent::Output,
             e = async {
@@ -121,7 +150,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         };
 
         // Every wake-up: check settle first (never depend on herdr events),
-        // then stream whatever output is new.
+        // then stream whatever output is new. (Dest typing lives on its
+        // own 4s ticker arm above, not piggybacked here.)
         let agent = match get_agent(&s.cfg.socket, &pane).await {
             Ok(a) => {
                 fails = 0;
@@ -152,13 +182,22 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
         };
         if SETTLED.contains(&agent.status.as_str()) {
-            // Collapse done↔idle flapping before committing to a report
+            // Collapse done↔idle flapping before committing to a report.
             tokio::time::sleep(Duration::from_millis(750)).await;
             if let Ok(a) = get_agent(&s.cfg.socket, &pane).await
                 && a.status == "working"
             {
+                settled_streak = 0;
                 continue;
             }
+            // Second consecutive settled sample required (see
+            // settled_streak): the first strike only arms, so a transient
+            // mid-run idle never retires the watcher.
+            settled_streak += 1;
+            if settled_streak < 2 {
+                continue;
+            }
+            settled_streak = 0;
             let epoch_before = job.epoch.load(Ordering::Relaxed);
             let retry = finalize(&s, &pane, &job, &agent.status, &mut live_mid, &mut acc).await;
             // finalize consumes the live slot on success — drop its
@@ -191,6 +230,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
             break;
         }
+        // Sampled working: any armed first strike was a transient.
+        settled_streak = 0;
 
         // Rate-limit stall watch (see stall.rs): opencode retries
         // internally with no settle and no buzz — one NEW card per

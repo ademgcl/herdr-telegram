@@ -16,6 +16,7 @@ const POST_PROMPT_QUIET_SECS: u64 = 45;
 /// of eating it. Fresh work recomputes the delta vs CURRENT seen just
 /// before post (a final retiring during the screen RPC anchors seen —
 /// the pre-RPC body would else re-post the final's duplicate).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn push_dm_alert(
     s: &AppState,
     pane: &str,
@@ -54,7 +55,10 @@ pub(crate) async fn push_dm_alert(
         )
         .await
         {
-            s.seen.lock().await.insert(pane.to_string(), screen.to_vec());
+            s.seen
+                .lock()
+                .await
+                .insert(pane.to_string(), screen.to_vec());
         }
         return;
     }
@@ -63,7 +67,10 @@ pub(crate) async fn push_dm_alert(
     if let Some(t) = s.last_done.lock().await.get(pane)
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
     {
-        s.seen.lock().await.insert(pane.to_string(), screen.to_vec());
+        s.seen
+            .lock()
+            .await
+            .insert(pane.to_string(), screen.to_vec());
         return;
     }
     let hint = "";
@@ -80,9 +87,8 @@ pub(crate) async fn push_dm_alert(
     text.push_str(hint);
     let mut delivered = true;
     for id in &s.cfg.owners {
-        let mid = s
-            .tg
-            .send_msg(
+        let mid =
+            s.tg.send_msg(
                 *id,
                 None,
                 &text,
@@ -102,7 +108,10 @@ pub(crate) async fn push_dm_alert(
     // delta instead of eating it. Stamp last_done like a posted
     // card so the next settle in the quiet window stays silent.
     if delivered {
-        s.seen.lock().await.insert(pane.to_string(), screen.to_vec());
+        s.seen
+            .lock()
+            .await
+            .insert(pane.to_string(), screen.to_vec());
         s.last_done
             .lock()
             .await

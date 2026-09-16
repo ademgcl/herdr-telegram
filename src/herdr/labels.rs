@@ -1,7 +1,7 @@
 //! Pane + tab display labels + workspace placement: the user-set tab
 //! name is the topic title source (`tab.rename` sets it, `tab.list`
-//! serves it). Pane labels (`pane.rename` / `pane.list`) are legacy
-//! bot-written friendly defaults, kept only as fallback for split tabs.
+//! serves it). Pane labels (`pane.rename` / `pane.list`) are only written on
+//! split-tab Telegram renames (one shared tab can't take two names).
 //! Read-only except via `rename_pane` / `rename_tab`.
 use crate::{herdr::rpc::rpc, types::Res};
 use serde_json::{Value, json};

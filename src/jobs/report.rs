@@ -33,3 +33,22 @@ pub async fn report(
     s.remember(chat_id, mid, pane).await;
     true
 }
+
+/// Best-effort fold of a live card with NO fallback post: quiet retire
+/// paths (dead pane / shell flip) must never buzz a new message — the
+/// frozen "working…" card just resolves in place, or stays if the
+/// thread is already gone (edit fails silently).
+pub async fn fold_live(
+    s: &AppState,
+    live_dest: &mut Option<(i64, Option<i64>)>,
+    live_mid: &mut Option<i64>,
+    text: &str,
+) {
+    if let Some(mid) = live_mid.take() {
+        if let Some((chat, _)) = live_dest.take() {
+            let _ = s.tg.try_edit_msg(chat, mid, text, None).await;
+        }
+    } else {
+        live_dest.take();
+    }
+}

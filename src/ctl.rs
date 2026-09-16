@@ -1,7 +1,7 @@
 //! Local control server & CLI client on the single-instance guard port (47319).
 //! Enables zero-split-brain inspection, single-topic reset, and event mocking.
 use crate::{
-    handlers::{reset::run_single_topic_reset, titles::pick_core},
+    handlers::{reset::run_single_topic_reset, title_rules::pick_core},
     herdr::{
         client::{get_agent, list_panes, list_workspaces},
         labels::{pane_facts, tab_labels},
@@ -118,7 +118,7 @@ async fn report_topics(s: &AppState) -> String {
     }
 
     // Missing topics (live panes with no mapped topic)
-    let mapped_set: HashSet<String> = mappings.into_iter().map(|(p, _)| p).collect();
+    let mapped_set: HashSet<String> = mappings.into_keys().collect();
     for pane in &live_panes {
         if !mapped_set.contains(pane) {
             let ws = facts.get(pane).map(|f| f.ws.as_str()).unwrap_or("");

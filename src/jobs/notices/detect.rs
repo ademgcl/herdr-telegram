@@ -14,6 +14,7 @@ pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
         return Some(LimitHit {
             kind,
             excerpt: clip(&lines[i]),
+            strong: true,
         });
     }
     let context = lower.iter().any(|l| CONTEXT.iter().any(|c| l.contains(c)));
@@ -24,6 +25,7 @@ pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {
         return Some(LimitHit {
             kind,
             excerpt: clip(&lines[i]),
+            strong: false,
         });
     }
     None
@@ -232,5 +234,35 @@ mod tests {
         .expect("must detect");
         assert_eq!(hit.kind, "provider");
         assert!(hit.excerpt.contains("attempt 9"));
+    }
+
+    #[test]
+    fn test_agent_auth_prose_with_ambient_error_stays_silent() {
+        // Live agy false positive: the agent DISCUSSING authentication
+        // in working prose while unrelated tool output carries error
+        // context must never page as "agent auth failed".
+        let screen = v(&[
+            "> I'm currently investigating the /orbit/clusters endpoint, specifically how the run-orbit.sh script handles authentication requirements like orbi...",
+            "⡿ Running command...",
+            "  Build failed: 2 tests red",
+        ]);
+        assert!(detect_limit(&screen).is_none());
+    }
+
+    #[test]
+    fn test_auth_provenance_strong_vs_weak() {
+        // STRONG wording stands alone and pages at once…
+        let hit = detect_limit(&v(&[
+            "GenerateContent failed: PERMISSION_DENIED for gemini-3-flash",
+        ]))
+        .expect("must detect");
+        assert_eq!(hit.kind, "auth");
+        assert!(hit.strong);
+        // …while WEAK wording needs context and is stuck-gated.
+        let hit =
+            detect_limit(&v(&["error: session expired, retrying login"])).expect("must detect");
+        assert_eq!(hit.kind, "auth");
+        assert!(!hit.strong);
+        assert!(super::super::types::needs_stuck_gate(&hit));
     }
 }

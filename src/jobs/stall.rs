@@ -59,13 +59,7 @@ pub(crate) async fn watch_stall(
             let text = limit_card_text(pane, hit);
             let mid = s
                 .tg
-                .send_msg_with_effect(
-                    chat,
-                    th,
-                    &text,
-                    None,
-                    Some(crate::telegram::EFFECT_FIRE),
-                )
+                .send_msg_with_effect(chat, th, &text, None, Some(crate::telegram::EFFECT_FIRE))
                 .await;
             if let Some(m) = mid {
                 let _ = s.tg.set_reaction(chat, m, Some("❗")).await;

@@ -8,6 +8,7 @@
 //! Nothing is ever written to pane labels: the old pane-label path is
 //! removed, so bot-generated names can't pollute herdr again.
 use crate::{
+    handlers::title_rules::{pick_core, stored_matches_label},
     herdr::{
         client::{list_agents, list_workspaces},
         labels::{pane_facts, rename_pane, rename_tab, tab_labels},
@@ -73,22 +74,6 @@ pub async fn sync_titles(s: &AppState) {
     sync_titles_with(s, &agents, &spaces, &facts, &tabs).await;
 }
 
-/// Pick the bare core for a topic title: user-visible tab name, else
-/// the stable tag. Terminal/agent titles are NEVER used here — they live
-/// only in the pinned identity card. Multi-pane tabs disambiguate with
-/// the tag (`console` + `o27` → `console o27`), so split siblings never
-/// collide. Empty/whitespace names count as missing (herdr tab names are
-/// never blank in practice — this is just the safety net).
-pub fn pick_core(tab: Option<&str>, tag: &str, multi: bool) -> String {
-    if let Some(t) = tab.map(str::trim).filter(|t| !t.is_empty()) {
-        if multi {
-            return format!("{t} {tag}");
-        }
-        return t.to_string();
-    }
-    tag.to_string()
-}
-
 /// Cached variant: reuses the reconcile tick's agents/spaces/facts/tabs
 /// so the watchdog costs 1 extra list RPC (tab.list) per tick, not 8.
 pub async fn sync_titles_with(
@@ -125,6 +110,16 @@ pub async fn sync_titles_with(
             tabs.get(f.tab_id.as_str()).map(|t| t.as_str())
         };
         let multi = !f.tab_id.is_empty() && tab_count.get(f.tab_id.as_str()).copied().unwrap_or(0) > 1;
+        // Verbatim preservation (merged upstream): a stored title equal to
+        // the tab name means a Telegram native rename just synced both
+        // sides — keep it exactly, never reformat (single-pane only;
+        // split cores carry the tag and can't be verbatim).
+        if !multi
+            && let Some(t) = tab
+            && stored_matches_label(s.topics.topic_title(pane).as_deref(), t)
+        {
+            continue;
+        }
         let tag = s.topics.tag_for(pane, kind);
         let core = pick_core(tab, &tag, multi);
         let formatted = names::format_title(space, &core, kind);
@@ -140,13 +135,19 @@ pub async fn sync_titles_with(
 /// (split tab). Unmapped threads (General) are ignored; our own sync
 /// echoes match the stored title and skip.
 pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name: &str) {
+    // Reset owns migration: a native rename mid-reset would mutate herdr
+    // during the read-only window and fight re-sync. Dropped:
+    // reset rebuilds from herdr, re-apply post-reset.
+    if crate::handlers::reset::is_resetting() {
+        return;
+    }
     let Some(th) = thread else { return };
     let Some(pane) = s.topics.pane_of_thread(th) else {
         println!("[titles] rename to {name:?} in unmapped thread #{th} — ignored");
         return;
     };
     let name = name.trim();
-    if name.is_empty() || s.topics.topic_title(&pane).as_deref() == Some(name) {
+    if name.is_empty() || stored_matches_label(s.topics.topic_title(&pane).as_deref(), name) {
         return;
     }
     // Single-pane tab: the user-visible name is the tab — rename it so
@@ -166,7 +167,15 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     if !multi && !tab_id.is_empty() {
         match rename_tab(&s.cfg.socket, &tab_id, name).await {
             Ok(()) => {
-                s.topics.note_title(&pane, name);
+                // Same re-gate as the pane path below: a remint landing
+                // mid-RPC must not gain a stale title.
+                if crate::handlers::reset::is_resetting() {
+                    return;
+                }
+                if !s.topics.note_title_if_thread(&pane, th, name) {
+                    println!("[titles] stale rename dropped for {pane}");
+                    return;
+                }
                 println!("[titles] topic #{th} renamed → tab {tab_id} ({pane}) {name:?}");
             }
             Err(e) => {
@@ -178,7 +187,17 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     }
     match rename_pane(&s.cfg.socket, &pane, Some(name)).await {
         Ok(()) => {
-            s.topics.note_title(&pane, name);
+            // Re-gate after the await + CAS-store: a remint (reset /
+            // probe prune) landing mid-RPC must not gain a stale title —
+            // plain note_title would poison the fresh mapping and the
+            // watchdog would then preserve the wrong title forever.
+            if crate::handlers::reset::is_resetting() {
+                return;
+            }
+            if !s.topics.note_title_if_thread(&pane, th, name) {
+                println!("[titles] stale rename dropped for {pane}");
+                return;
+            }
             println!("[titles] topic #{th} renamed → pane {pane} label {name:?}");
         }
         Err(e) => {
@@ -245,18 +264,5 @@ mod tests {
             ),
             None
         );
-    }
-
-    #[test]
-    fn test_pick_core_prefers_tab() {
-        // User-visible tab name wins; empty/missing falls back to tag.
-        // Terminal titles never reach here (pinned card only).
-        assert_eq!(pick_core(Some("agy_gelistirme"), "a14", false), "agy_gelistirme");
-        assert_eq!(pick_core(Some("console"), "o27", false), "console");
-        // Split tabs disambiguate with the tag.
-        assert_eq!(pick_core(Some("console"), "o27", true), "console o27");
-        // No tab: stable tag default. Blank counts as missing.
-        assert_eq!(pick_core(None, "o1", false), "o1");
-        assert_eq!(pick_core(Some("  "), "sh1", false), "sh1");
     }
 }

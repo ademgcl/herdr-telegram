@@ -242,7 +242,7 @@ async fn report_done(
     }
 }
 
-pub use super::report::{edit_live, report};
+pub use super::report::{edit_live, fold_live, report};
 
 /// Cover the prompts owed at entry. A new submit mid-finalize bumps the
 /// epoch: leave its pending count, persisted intent and map entry so the

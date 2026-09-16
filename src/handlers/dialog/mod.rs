@@ -90,9 +90,8 @@ async fn send_with(
 ) -> bool {
     let q = waiting_lines(screen);
     let options = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
-    let mid = s
-        .tg
-        .send_msg_with_effect(
+    let mid =
+        s.tg.send_msg_with_effect(
             chat,
             thread,
             &blocked_card_text(&q),

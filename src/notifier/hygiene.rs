@@ -79,15 +79,21 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
             s.modelop.lock().await.retain(|p| live.contains(p));
             s.blockop.lock().await.retain(|p| live.contains(p));
-            // Typing tasks for dead panes: abort, don't leak.
-            for (_, h) in s
+            // Typing tasks for dead panes: ownership-checked stop, never raw
+            // abort — a remint racing the tick keeps its task (a raw
+            // extract_if+abort could kill a successor's task while its job
+            // lives). Dead panes have no job by now (cancelled above), so
+            // this still stops them; live/flapped panes are untouched.
+            let drop_typing: Vec<String> = s
                 .typing_tasks
                 .lock()
                 .await
-                .extract_if(|p, _| !live.contains(p))
-                .collect::<Vec<_>>()
-            {
-                h.abort();
+                .keys()
+                .filter(|p| !live.contains(*p))
+                .cloned()
+                .collect();
+            for pane in &drop_typing {
+                s.stop_typing_unless_owned(pane).await;
             }
             // Reply targets pointing at dead panes (order
             // torder→targets, as in remember).

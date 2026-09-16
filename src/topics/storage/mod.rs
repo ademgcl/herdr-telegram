@@ -85,7 +85,8 @@ impl TopicStorage {
         let c = s.pins.remove(pane);
         let d = s.icons.remove(pane);
         let e = s.last_msgs.remove(pane);
-        if prev.is_some() || a.is_some() || b.is_some() || c.is_some() || d.is_some() || e.is_some() {
+        if prev.is_some() || a.is_some() || b.is_some() || c.is_some() || d.is_some() || e.is_some()
+        {
             self.save(&s);
         }
         prev

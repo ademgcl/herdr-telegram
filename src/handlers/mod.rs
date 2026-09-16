@@ -10,6 +10,7 @@ pub mod dm_model;
 pub mod dm_prompt;
 pub mod escape;
 pub mod forum;
+pub mod forum_topic;
 pub mod general;
 pub mod interactive;
 pub mod kill;
@@ -31,6 +32,7 @@ pub mod tap_classify;
 pub mod tap_input;
 pub mod tap_keys;
 pub mod target;
+pub mod title_rules;
 pub mod titles;
 
 pub use callback::handle_callback;

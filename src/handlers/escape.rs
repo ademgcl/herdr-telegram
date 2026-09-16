@@ -117,10 +117,9 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     match classify_tap(&before, &after, still_blocked) {
         TapResult::Resumed => {
             s.blocked_sig.lock().await.remove(pane);
-            let mid = s
-                .tg
-                .send_msg(chat, thread, "✅ dismissed — agent resumed", None)
-                .await;
+            let mid =
+                s.tg.send_msg(chat, thread, "✅ dismissed — agent resumed", None)
+                    .await;
             if let Some(m) = mid {
                 let _ = s.tg.set_reaction(chat, m, Some("✅")).await;
             }

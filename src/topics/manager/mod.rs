@@ -184,7 +184,7 @@ impl TopicManager {
         let title_or_tag = raw_title.unwrap_or(&tag);
         let name = names::format_title(space, title_or_tag, kind);
         let color = names::workspace_icon_color(space);
-        let out = match self.tg.create_forum_topic(forum, &name, Some(color)).await {
+        match self.tg.create_forum_topic(forum, &name, Some(color)).await {
             Ok(thread) => {
                 println!("[topics] created topic #{thread} for {pane} ({name})");
                 // One lock, one save: no title-less crash window.
@@ -225,8 +225,7 @@ impl TopicManager {
                 }
                 None
             }
-        };
-        out
+        }
     }
 
     /// Sync topic: ensure the pane's topic exists (creation + one-time

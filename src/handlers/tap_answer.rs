@@ -107,9 +107,8 @@ pub async fn answer_tap(
                         let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
                         s.blocked_sig.lock().await.insert(pane.to_string(), q);
                         s.remember(chat, Some(msg_id), pane).await;
-                    } else if let Some(mid) = s
-                        .tg
-                        .send_msg_with_effect(
+                    } else if let Some(mid) =
+                        s.tg.send_msg_with_effect(
                             chat,
                             thread,
                             &text,

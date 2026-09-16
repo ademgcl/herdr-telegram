@@ -65,14 +65,35 @@ pub async fn enqueue_prompt(
     // Deliver FIRST, record after: a failed submit must neither bump the
     // epoch (it would reset the live watcher's stream state for nothing)
     // nor overwrite dest/prompt with undelivered text.
-    if let Err(e) = rpc_t(
+    // Reservation-window cover: the 30s submit RPC runs before the
+    // watcher exists — light the indicator now. `start_typing` no-ops
+    // in DM mode, so touch dest directly + sustain it until submit
+    // lands (else a DM submit sits dark up to 30s).
+    s.start_typing(&pane).await;
+    s.tg.typing(req.chat_id, req.message_thread_id).await;
+    let sustain = if s.cfg.forum.is_none() {
+        let tg = s.tg.clone();
+        let (c, t) = (req.chat_id, req.message_thread_id);
+        Some(tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                tg.typing(c, t).await;
+            }
+        }))
+    } else {
+        None
+    };
+    let submit_res = rpc_t(
         &s.cfg.socket,
         "agent.prompt",
         json!({"target": pane, "text": req.text}),
         30,
     )
-    .await
-    {
+    .await;
+    if let Some(h) = sustain {
+        h.abort();
+    }
+    if let Err(e) = submit_res {
         println!("[jobs] submit error: {e}");
         // Owed = prior prompts only (this one was never recorded).
         let owed = *job.pending.lock().await;

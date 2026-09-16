@@ -249,6 +249,9 @@ impl State {
     }
 
     pub async fn set_focus(&self, pane: &str) {
+        // Memory first, disk second: concurrent focuses must converge
+        // disk vs RAM on the same winner (disk-first can resurrect loser).
+        *self.focus.lock().await = Some(pane.to_string());
         let file = Self::focus_file();
         let mut tmp = file.as_os_str().to_owned();
         tmp.push(".tmp");
@@ -260,7 +263,6 @@ impl State {
         } else {
             eprintln!("[state] focus write failed (disk full?)");
         }
-        *self.focus.lock().await = Some(pane.to_string());
     }
 
     pub async fn get_focus(&self) -> Option<String> {
