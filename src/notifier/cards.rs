@@ -23,9 +23,9 @@ pub(crate) const SETTLE_DEBOUNCE_SECS: u64 = 15;
 /// stray/empty (else the same stray re-RPCs every settle forever).
 pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Instant) {
     tokio::time::sleep(Duration::from_secs(SETTLE_DEBOUNCE_SECS)).await;
-    // Reset sırasında spontane kart yok: thread'ler ölüyor/yeniden
-    // doğuyor, karta basmak 429 bütçesini yakar. Baseline tüketilmez —
-    // reset sonrası ilk tick deltayı yeniden görür.
+    // No spontaneous cards during reset: threads are dying/respawning,
+    // posting a card would burn the 429 budget. Baseline is not consumed —
+    // the first tick after reset re-sees the delta.
     if crate::handlers::reset::is_resetting() {
         return;
     }

@@ -13,9 +13,9 @@ use crate::{
 use std::collections::HashSet;
 
 pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
-    // Reset koşarken topic lifecycle reset'e aittir: watchdog tick'i
-    // topic açıp kart basarsa silme/oluşturma ile yarışıp 429 fırtınası
-    // çıkar. Reset bitinceki ilk tick her şeyi zaten yakalar.
+    // While reset runs, topic lifecycle belongs to reset: a watchdog tick
+    // opening topics and posting cards would race delete/create and cause
+    // a 429 storm. The first tick after reset already catches everything.
     if is_resetting() {
         println!("[reconcile] skipped ({src}): paced reset in progress");
         return;

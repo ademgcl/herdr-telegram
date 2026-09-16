@@ -76,9 +76,9 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         .unwrap_or_else(|| ws_id.clone());
 
     // The pane's topic exists (ensured silently — never notifies).
-    // Reset sırasında atlanır: event-driven ensure, reset'in sildiği
-    // topic'i anında yeniden açıp sil/oluştur ile yarışmasın. Hafıza
-    // (status/last_change yukarıda) güncellenmeye devam eder.
+    // Skipped during reset: event-driven ensure must not instantly reopen
+    // a topic deleted by reset and race delete/create. Memory
+    // (status/last_change above) keeps updating.
     if !crate::handlers::reset::is_resetting() {
         s.topics.sync_topic(pane, &kind, raw_space).await;
 
