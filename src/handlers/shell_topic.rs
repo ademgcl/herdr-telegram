@@ -25,6 +25,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
             .await;
         return;
     }
+    if cmd == "/reset" {
+        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
     if cmd == "/quit" {
         s.tg.send_msg(
             chat,

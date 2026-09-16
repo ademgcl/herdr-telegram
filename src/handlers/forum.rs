@@ -87,13 +87,12 @@ async fn handle_topic_agent_message(
     );
 
     if cmd == "/help" {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            &topic_help_text(pane, &agent.kind),
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), &topic_help_text(pane, &agent.kind), None).await;
+        return;
+    }
+
+    if cmd == "/reset" {
+        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
         return;
     }
 
@@ -102,11 +101,7 @@ async fn handle_topic_agent_message(
         s.runwait.lock().await.remove(&(chat, Some(thread_id)));
         s.typewait.lock().await.remove(&(chat, Some(thread_id)));
         let n = s.cancel_jobs_for(pane).await;
-        let msg = if n {
-            "cancelled pane job(s)"
-        } else {
-            "nothing running"
-        };
+        let msg = if n { "cancelled pane job(s)" } else { "nothing running" };
         s.tg.send_msg(chat, Some(thread_id), msg, None).await;
         return;
     }

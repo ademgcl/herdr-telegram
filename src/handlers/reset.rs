@@ -23,6 +23,8 @@ use std::{
 
 pub const RESET_STEP_DELAY: Duration = Duration::from_millis(1500);
 
+pub use super::reset_single::*;
+
 static RESET_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// True while a paced reset runs: topic creators must not mint (only
