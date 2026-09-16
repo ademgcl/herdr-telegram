@@ -11,7 +11,7 @@ use super::{
 
 /// Tool-call echo prefixes across providers (opencode →/←, claude ●/⎿,
 /// codex/pi ☰/❯ …): after one of these, prior prose is intermediate work.
-const TOOL_PREFIXES: &[&str] = &["→", "←", "●", "⎿", "☰", "❯", "›"];
+const TOOL_PREFIXES: &[&str] = &["→", "←", "●", "○", "⎿", "☰", "❯", "›"];
 
 /// A full-width box-rule turn separator (────…): turns are wrapped in these,
 /// so the fresh reply follows the last one. ASCII "---" is deliberately NOT
@@ -250,5 +250,36 @@ mod tests {
         assert!(body.contains("Allow once"), "options kept: {body}");
         assert!(body.contains("opencode/*"), "path kept: {body}");
         assert!(!body.contains("ctrl+p"), "footer dropped: {body}");
+    }
+
+    #[test]
+    fn test_final_block_drops_agy_tool_noise() {
+        let lines = v(&[
+            "> build the project",
+            "● Edit(src/main.rs)",
+            "○ Bash(cargo test)",
+            "⡿ Running command...",
+            "└ Tip: Use --release for faster builds",
+            "────────────────────────────────────────────────",
+            ">",
+            "? for shortcuts             Gemini 3.8 Flash · high",
+        ]);
+        assert_eq!(
+            final_block(&lines, "build the project"),
+            Vec::<String>::new()
+        );
+
+        let lines_with_answer = v(&[
+            "> build the project",
+            "● Edit(src/main.rs)",
+            "○ Bash(cargo test)",
+            "     Build succeeded with 0 errors.",
+            "────────────────────────────────────────────────",
+            ">",
+        ]);
+        assert_eq!(
+            final_block(&lines_with_answer, "build the project"),
+            v(&["     Build succeeded with 0 errors."])
+        );
     }
 }

@@ -39,6 +39,15 @@ const CHROME_MARKERS: &[&str] = &[
     "⠧", // spinner
     "⠇", // spinner
     "⠏", // spinner
+    "⡿", // spinner
+    "⣟", // spinner
+    "⣯", // spinner
+    "⣷", // spinner
+    "⣾", // spinner
+    "⣽", // spinner
+    "⣻", // spinner
+    "⢿", // spinner
+    "└ Tip:",
 ];
 
 /// Start-anchored prefixes for tool-call echoes, reasoning headers,
@@ -51,6 +60,7 @@ const CHROME_PREFIXES: &[&str] = &[
     "→",
     "←",
     "●",
+    "○",
     "⎿",
     "☰",
     "❯",
@@ -79,14 +89,34 @@ const CHROME_PREFIXES: &[&str] = &[
     "[alert]",
 ];
 
-/// Spinner braille frames (⠋⠙⠹…) — pure progress, never content.
+/// Spinner braille frames (⠋⠙⠹… / ⡿⣟⣯…) — pure progress, never content.
 fn is_spinner(line: &str) -> bool {
     let t = line.trim();
     if t.is_empty() {
         return false;
     }
-    t.chars()
-        .all(|c| matches!(c, '⠋' | '⠙' | '⠹' | '⠸' | '⠼' | '⠴' | '⠦' | '⠧' | '⠇' | '⠏'))
+    t.chars().all(|c| {
+        matches!(
+            c,
+            '⠋' | '⠙'
+                | '⠹'
+                | '⠸'
+                | '⠼'
+                | '⠴'
+                | '⠦'
+                | '⠧'
+                | '⠇'
+                | '⠏'
+                | '⡿'
+                | '⣟'
+                | '⣯'
+                | '⣷'
+                | '⣾'
+                | '⣽'
+                | '⣻'
+                | '⢿'
+        )
+    })
 }
 
 /// A line of pure interface (spinner frames, footers, borders, tool
@@ -196,11 +226,15 @@ mod tests {
         assert!(is_chrome(
             "  ADC: firebase-adminsdk-fbsvc@ajgc-dig-pdi-dev-cdp"
         ));
+        assert!(is_chrome("○ Bash(cargo test)"));
+        assert!(is_chrome("⡿ Running command..."));
+        assert!(is_chrome("└ Tip: Run with --nocapture"));
         // …but quoted/diff/table content and ASCII rules survive.
         assert!(!is_chrome("> quoted text"));
         assert!(!is_chrome("> added line"));
         assert!(!is_chrome("| a | b |"));
         assert!(!is_chrome("intro --- still content"));
+        assert!(!is_chrome("here is a tip for your code"));
         // …and prose mentioning the CLI inline survives (anchored only).
         assert!(!is_chrome("I use Antigravity CLI daily"));
         assert!(!is_chrome("the ADC value rose today"));
