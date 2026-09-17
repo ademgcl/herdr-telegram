@@ -128,6 +128,7 @@ impl TelegramClient {
                 {"command": "quit", "description": "drop the agent to a shell"},
                 {"command": "kill", "description": "close the pane completely"},
                 {"command": "shell", "description": "open a fresh shell pane"},
+                {"command": "pane", "description": "shell tab in this space, stays here"},
                 {"command": "read", "description": "recent output of focused agent"},
                 {"command": "output", "description": "alias of /read with line count"},
                 {"command": "status", "description": "agent card for focused agent"},

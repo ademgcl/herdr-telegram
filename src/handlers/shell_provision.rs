@@ -1,7 +1,10 @@
 use super::shell_common::shell_card_text;
 use super::shell_run::run_shell_cmd;
 use crate::{
-    herdr::client::{await_fresh_root, create_tab, ensure_tg_space, get_agent, list_workspaces},
+    herdr::client::{
+        await_fresh_root, best_split_direction, create_tab, ensure_tg_space, get_agent, list_workspaces,
+        pane_layout,
+    },
     herdr::labels::pane_facts,
     jobs::enqueue_prompt,
     state::AppState,
@@ -58,6 +61,70 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
 /// A just-created `tg` space reuses its root pane (else p1 orphans);
 /// existing spaces always get a new tab (reuse would hijack live panes).
 pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option<&str>) {
+    open_shell_inner(s, chat, thread, ws, true).await;
+}
+
+/// `/pane [space]`: same opener as a sidecar — new shell tab + topic,
+/// card + open-topic button, focus stays where it is (like /split,
+/// unlike /shell). `ws_id` is already resolved.
+async fn open_pane(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str) {
+    if ws_id.is_empty() {
+        s.tg.send_msg(chat, thread, "⚠️ could not read space — try again", None).await;
+        return;
+    }
+    create_tab_and_attach(s, chat, thread, ws_id, false).await;
+}
+
+/// Topic `/pane [space]`: this pane's space, or the named one.
+/// Fail-closed: an unreadable space never opens in the wrong one.
+pub async fn open_pane_here(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, arg: &str) {
+    if !arg.is_empty() {
+        match super::space::resolve_ws(s, arg).await {
+            Some(id) => open_pane(s, chat, thread, &id).await,
+            None => {
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{arg}`"), None).await;
+            }
+        }
+        return;
+    }
+    match pane_facts(&s.cfg.socket).await.ok().and_then(|m| m.get(pane).map(|f| f.ws.clone())) {
+        Some(ws) if !ws.is_empty() => open_pane(s, chat, thread, &ws).await,
+        _ => {
+            s.tg.send_msg(chat, thread, "⚠️ could not read space — try again", None).await;
+        }
+    }
+}
+
+/// General/DM `/pane [space]`: named space, else the focused pane's
+/// space (shell focus counts — facts cover every pane), else tg.
+pub async fn open_pane_general(s: &AppState, chat: i64, thread: Option<i64>, arg: &str) {
+    if !arg.is_empty() {
+        match super::space::resolve_ws(s, arg).await {
+            Some(id) => open_pane(s, chat, thread, &id).await,
+            None => {
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{arg}`"), None).await;
+            }
+        }
+        return;
+    }
+    let ws = match s.get_focus().await {
+        Some(p) => pane_facts(&s.cfg.socket).await.ok().and_then(|m| m.get(&p).map(|f| f.ws.clone())).unwrap_or_default(),
+        None => String::new(),
+    };
+    if ws.is_empty() {
+        open_shell_inner(s, chat, thread, None, false).await;
+        return;
+    }
+    open_pane(s, chat, thread, &ws).await;
+}
+
+async fn open_shell_inner(
+    s: &AppState,
+    chat: i64,
+    thread: Option<i64>,
+    ws: Option<&str>,
+    follow: bool,
+) {
     let (ws_id, reuse) = match ws {
         Some(w) if !w.is_empty() => match super::space::resolve_ws(s, w).await {
             Some(id) => (id, None),
@@ -80,10 +147,10 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
         },
     };
     if let Some(pane) = reuse {
-        attach_shell_pane(s, chat, thread, &pane, &space_label(s, &ws_id).await, true).await;
+        attach_shell_pane(s, chat, thread, &pane, &space_label(s, &ws_id).await, follow).await;
         return;
     }
-    create_tab_and_attach(s, chat, thread, &ws_id).await;
+    create_tab_and_attach(s, chat, thread, &ws_id, follow).await;
 }
 
 /// Fresh space → shell topic WITHOUT a second tab: `ws_id` was just
@@ -101,13 +168,13 @@ pub async fn open_space_shell(s: &AppState, chat: i64, thread: Option<i64>, ws_i
         Some(pane) => {
             attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await, true).await
         }
-        None => create_tab_and_attach(s, chat, thread, ws_id).await,
+        None => create_tab_and_attach(s, chat, thread, ws_id, true).await,
     }
 }
 
 /// Fresh tab in a known workspace id + shell badge. The id is already
 /// resolved — never `resolve_ws` here (fresh ids may not list yet).
-async fn create_tab_and_attach(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str) {
+async fn create_tab_and_attach(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str, follow: bool) {
     let pane = match create_tab(&s.cfg.socket, ws_id).await {
         Ok(p) if !p.is_empty() => p,
         Ok(_) => {
@@ -120,7 +187,7 @@ async fn create_tab_and_attach(s: &AppState, chat: i64, thread: Option<i64>, ws_
             return;
         }
     };
-    attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await, true).await;
+    attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await, follow).await;
 }
 
 async fn space_label(s: &AppState, ws_id: &str) -> String {
@@ -160,9 +227,16 @@ async fn attach_shell_pane(
 }
 
 /// Split the pane sideways in the SAME tab: sibling shell pane + its own
-/// topic, named/provisioned like any shell. `dir` is right|down.
+/// topic, named/provisioned like any shell. Empty `dir` picks the pane's
+/// longer axis from live layout (explicit right|down always wins);
+/// unreadable layout falls back to right.
 pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, dir: &str) {
-    let new = match crate::herdr::client::split_pane(&s.cfg.socket, pane, dir).await {
+    let dir = if dir.is_empty() {
+        auto_split_dir(&s.cfg.socket, pane).await
+    } else {
+        dir.to_string()
+    };
+    let new = match crate::herdr::client::split_pane(&s.cfg.socket, pane, &dir).await {
         Ok(p) => p,
         Err(e) => {
             s.tg.send_msg(chat, thread, &format!("⚠️ split failed: {e}"), None)
@@ -179,4 +253,22 @@ pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
     let space = ws_label(&spaces, &ws_id).to_string();
     let space = if space.is_empty() { pane } else { &space };
     attach_shell_pane(s, chat, thread, &new, space, false).await;
+}
+
+/// Bare-`/split` direction from live tab geometry: the target pane's
+/// longer axis wins. Any unreadable step falls back to right (the old
+/// bare default) — a failed probe must never block the split.
+async fn auto_split_dir(socket: &str, pane: &str) -> String {
+    let tab = pane_facts(socket)
+        .await
+        .ok()
+        .and_then(|m| m.get(pane).map(|f| f.tab_id.clone()))
+        .filter(|t| !t.is_empty());
+    let Some(tab) = tab else {
+        return "right".to_string();
+    };
+    match pane_layout(socket, &tab).await.ok().and_then(|m| m.get(pane).copied()) {
+        Some((w, h)) => best_split_direction(w, h).to_string(),
+        None => "right".to_string(),
+    }
 }

@@ -114,6 +114,11 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/pane" {
+        super::dm_lifecycle::handle_pane(&s, chat, arg).await;
+        return;
+    }
+
     if cmd == "/space" {
         super::dm_lifecycle::handle_space(&s, chat, arg).await;
         return;

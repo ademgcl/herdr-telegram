@@ -22,6 +22,7 @@ pub(crate) async fn handle_general_forum_message(
                    • `/agents` — open spaces & agents control panel\n\
                    • `/spawn <kind> [workspace]` — spawn a new agent & topic\n\
                     • `/shell [space]` — open a fresh shell pane & topic\n\
+                    • `/pane [space]` — shell tab in this space, stays here\n\
                     • `/space [name]` — new space + shell topic\n\
                    • `/model` — inside an agent topic: model picker\n\
                    • `/card` `/esc` — inside an agent topic: fresh buttons / guarded dismiss\n\
@@ -195,6 +196,11 @@ pub(crate) async fn handle_general_forum_message(
             if arg.is_empty() { None } else { Some(arg) },
         )
         .await;
+        return;
+    }
+
+    if cmd == "/pane" {
+        super::shell::open_pane_general(&s, chat, thread_id, arg).await;
         return;
     }
 

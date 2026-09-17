@@ -45,15 +45,18 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     if cmd == "/split" {
         let dir = match arg {
-            "" | "right" => "right",
-            "down" => "down",
+            "" | "right" | "down" => arg,
             _ => {
-                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]`", None)
+                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]` — bare picks the longer side", None)
                     .await;
                 return;
             }
         };
         super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
+        return;
+    }
+    if cmd == "/pane" {
+        super::shell::open_pane_here(&s, chat, Some(thread_id), pane, arg).await;
         return;
     }
     if cmd == "/cancel" {

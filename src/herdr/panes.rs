@@ -201,59 +201,42 @@ pub async fn split_pane(socket: &str, pane: &str, direction: &str) -> Res<String
         .ok_or_else(|| "split returned no pane".into())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::herdr::labels::parse_facts;
+/// Live tab geometry: pane id → (width, height) cells from
+/// `pane.layout`. Powers bare-`/split` direction picking.
+pub async fn pane_layout(socket: &str, tab_id: &str) -> Res<HashMap<String, (u64, u64)>> {
+    let r = rpc(socket, "pane.layout", json!({"tab_id": tab_id})).await?;
+    Ok(parse_layout(&r))
+}
 
-    fn facts(json: &str) -> HashMap<String, PaneFacts> {
-        parse_facts(&serde_json::from_str(json).unwrap())
+/// Pure parse so tests cover the shape without I/O. Missing rects
+/// never block a split (caller falls back to `right`).
+pub fn parse_layout(v: &serde_json::Value) -> HashMap<String, (u64, u64)> {
+    let layout = v.get("layout").unwrap_or(v);
+    let mut out = HashMap::new();
+    if let Some(arr) = layout["panes"].as_array() {
+        for p in arr {
+            if let (Some(id), Some(w), Some(h)) = (
+                p["pane_id"].as_str(),
+                p["rect"]["width"].as_u64(),
+                p["rect"]["height"].as_u64(),
+            ) {
+                out.insert(id.to_string(), (w, h));
+            }
+        }
     }
+    out
+}
 
-    #[test]
-    fn test_pick_first_pane_prefers_p1() {
-        let m = facts(
-            r#"{"panes": [
-                {"pane_id": "wJ:p2", "workspace_id": "wJ"},
-                {"pane_id": "wJ:p1", "workspace_id": "wJ"}]}"#,
-        );
-        assert_eq!(pick_first_pane(&m, "wJ"), Some("wJ:p1".to_string()));
-    }
-
-    #[test]
-    fn test_pick_first_pane_ignores_other_ws() {
-        let m = facts(
-            r#"{"panes": [
-                {"pane_id": "w8:p1", "workspace_id": "w8"},
-                {"pane_id": "wJ:p3", "workspace_id": "wJ"}]}"#,
-        );
-        assert_eq!(pick_first_pane(&m, "wJ"), Some("wJ:p3".to_string()));
-    }
-
-    #[test]
-    fn test_pick_first_pane_none_when_empty() {
-        let m = facts(r#"{"panes": [{"pane_id": "w8:p1", "workspace_id": "w8"}]}"#);
-        assert_eq!(pick_first_pane(&m, "wJ"), None);
-    }
-
-    #[test]
-    fn test_pick_first_pane_rejects_empty_ws() {
-        // Rows with a missing workspace default to "": "" must never
-        // match, or an empty id could attach cross-workspace.
-        let m = facts(r#"{"panes": [{"pane_id": "w8:p1"}]}"#);
-        assert_eq!(pick_first_pane(&m, ""), None);
-    }
-
-    #[test]
-    fn test_pick_first_pane_none_when_unparseable() {
-        let m = facts(r#"{"panes": [{"pane_id": "bogus", "workspace_id": "wJ"}]}"#);
-        assert_eq!(pick_first_pane(&m, "wJ"), None);
-    }
-
-    #[test]
-    fn test_pane_num_orders_numerically() {
-        assert!(pane_num("wJ:p2") < pane_num("wJ:p12"));
-        assert_eq!(pane_num("bogus"), u64::MAX);
-        assert_eq!(pane_num("wJ:p"), u64::MAX);
+/// Split along the longer axis (wide → right, tall → down); ties go
+/// right (the historic bare-`/split` default). Pure so unit-tested.
+pub fn best_split_direction(width: u64, height: u64) -> &'static str {
+    if width >= height {
+        "right"
+    } else {
+        "down"
     }
 }
+
+#[cfg(test)]
+#[path = "panes_tests.rs"]
+mod tests;

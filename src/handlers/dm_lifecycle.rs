@@ -60,6 +60,10 @@ pub(crate) async fn handle_shell(s: &AppState, chat: i64, rows: &[AgentRow], arg
     super::shell::open_shell(s, chat, None, ws.as_deref()).await;
 }
 
+pub(crate) async fn handle_pane(s: &AppState, chat: i64, arg: &str) {
+    super::shell::open_pane_general(s, chat, None, arg).await;
+}
+
 pub(crate) async fn handle_space(s: &AppState, chat: i64, arg: &str) {
     let label = if super::space::check_label(arg) {
         arg.to_string()

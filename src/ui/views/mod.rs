@@ -206,6 +206,7 @@ pub fn help_text() -> &'static str {
      /quit     drop the agent to a shell (busy confirms)\n\
      /kill     close the pane completely (confirms first)\n\
      /shell    open a fresh shell pane\n\
+     /pane     shell tab in this space, stays here\n\
      /read     recent output of focused agent (/output too)\n\
      /card     re-post the question + buttons (never stuck)\n\
      /esc      guarded Esc: dismiss, blocked-only\n\
@@ -227,9 +228,10 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • `/kill` — close this pane completely (confirms first)\n\
          • `/card` — re-post the question + buttons (never stuck)\n\
          • `/esc` — guarded Esc: dismiss, blocked-only\n\
-         • `/shell [space]` — open a fresh shell pane\n\
+          • `/shell [space]` — open a fresh shell pane\n\
+          • `/pane [space]` — shell tab in this space, stays here\n\
           • `/space [name]` — new space + shell topic\n\
-          • `/split [right|down]` — sibling shell pane in this tab\n\
+          • `/split` — sibling shell pane (longer side; or right|down)\n\
            • `/keys y enter` — send keystrokes\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
           • `/reset` — reset this topic (re-sync from Herdr)\n\
@@ -251,7 +253,8 @@ pub fn shell_help_text(pane: &str) -> String {
           • `/reset` — reset this topic (re-sync from Herdr)\n\
           • `/keys y enter` — send keystrokes\n\
           • `/kill` — close this pane completely (confirms first)\n\
-         • `/split [right|down]` — sibling shell pane in this tab\n\
+         • `/pane [space]` — shell tab in this space, stays here\n\
+         • `/split` — sibling shell pane (longer side; or right|down)\n\
          • `/status` — shell card\n\
          • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
