@@ -6,9 +6,9 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 
 ## 1. Rules
 
-- No source file over **300 lines** — split near the limit.
+- No source file over **300 lines** — split near the limit (tests to sibling `*_tests.rs`).
 - Verify: `cargo test`, clippy clean, `wc -l $(find src -name '*.rs') AGENTS.md` before committing.
-- cargo; tokio multi-thread; `Res<T>`; no async mutex across sleep/RPC; herdr/telegram own I/O.
+- cargo; tokio multi-thread; `Res<T>`; no async mutex across sleep/RPC; herdr/telegram own I/O (except jobs EvStream subscription).
 - Min code, max greatness: smallest diff that fully fixes, zero dead code; A+ or rework.
 - Fail-closed: ambiguous reads/errors → no write, no buzz.
 - No personal identifiers in tracked files/commits; secrets in untracked files only.
@@ -20,7 +20,7 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 
 ## 3. Behavior
 
-- One topic per pane; titles 1:1 with herdr TAB names (`[space] label`, kind in icon); herdr→tg ≤60s watchdog, tg→herdr immediate adopt, stale replays dropped.
+- One topic per pane; titles 1:1 with herdr TAB names (split tabs: pane label) (`[space] label`, kind in icon); herdr→tg ≤60s watchdog, tg→herdr immediate adopt, stale replays dropped, no chat echo.
 - Icon = live kind (glyphs + fallback, customs kept); status in cards/typing (never pin). Buzz: answers, `blocked`, stuck limits.
 - Blocked cards follow content; taps edit in place; `/card` reposts, `/esc` dismisses (blocked-only; shell: Esc raw, card refused).
 - Topic: text = prompt + commands; General: panel + scoped cmds (see `/help`); DM: full set, reply→focus→sole-agent.
