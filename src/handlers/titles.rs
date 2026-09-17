@@ -4,10 +4,17 @@
 //! converge instead of echo-looping. Title source is the user-visible
 //! herdr TAB name (`tab.rename`/`tab.list`) — never the terminal/agent
 //! title (that lives only in the pinned card). Tab missing/empty falls
-//! back to the stable tag (`[{space}] {tag} · {agent}`, shells bare).
+//! back to the stable tag (`[{space}] {tag} · {code}`, e.g. `[tg] o2 · o`).
 //! Pane labels are written only for split-tab user renames (a shared tab
 //! can't disambiguate); the watchdog formats everything else from the
 //! tab core, preserving user-set names verbatim on both paths.
+//! Telegram→herdr renames shed Format-B chrome first (`[space]` prefix,
+//! `· agent` suffix via [`names::topic_core`]): users edit the rendered
+//! title, and herdr already shows the space — only the bare core is
+//! written. Single-pane stores the raw text (bare renames verbatim-keep;
+//! chrome pastes converge via one format rename to house style);
+//! split-pane stores the core (the formatter renders from the shared
+//! tab+tag, so raw would revert every tick).
 use crate::{
     handlers::title_rules::{naming_core, stored_matches_label, tab_census, tab_of},
     herdr::{
@@ -187,8 +194,31 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             .as_ref()
             .map(|m| m.values().filter(|f| f.tab_id == tab_id).count() > 1)
             .unwrap_or(false);
+    // Shed Format-B chrome users inherit from the rendered title
+    // (`[space] main · opencode` → `main`): herdr shows the space
+    // already, so only the bare core is written. Fail-open: unreadable
+    // kind/space keeps the raw name (status quo, never a dropped rename).
+    let core = match (
+        list_workspaces(&s.cfg.socket).await.ok(),
+        list_agents(&s.cfg.socket).await.ok(),
+    ) {
+        (Some(spaces), Some(agents)) => {
+            let ws = facts
+                .as_ref()
+                .and_then(|m| m.get(&pane))
+                .map(|f| f.ws.as_str())
+                .unwrap_or("");
+            let kind = agents
+                .iter()
+                .find(|a| a.pane == pane)
+                .map(|a| a.kind.as_str())
+                .unwrap_or("shell");
+            names::topic_core(name, ws_label(&spaces, ws), kind)
+        }
+        _ => name.to_string(),
+    };
     if !multi && !tab_id.is_empty() {
-        match rename_tab(&s.cfg.socket, &tab_id, name).await {
+        match rename_tab(&s.cfg.socket, &tab_id, &core).await {
             Ok(()) => {
                 // Same re-gate as the pane path below: a remint landing
                 // mid-RPC must not gain a stale title.
@@ -199,7 +229,7 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                     println!("[titles] stale rename dropped for {pane}");
                     return;
                 }
-                println!("[titles] topic #{th} renamed → tab {tab_id} ({pane}) {name:?}");
+                println!("[titles] topic #{th} renamed → tab {tab_id} ({pane}) {core:?} (raw {name:?})");
             }
             Err(e) => {
                 s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {e}"), None)
@@ -208,7 +238,7 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
         }
         return;
     }
-    match rename_pane(&s.cfg.socket, &pane, Some(name)).await {
+    match rename_pane(&s.cfg.socket, &pane, Some(core.as_str())).await {
         Ok(()) => {
             // Re-gate after the await + CAS-store: a remint (reset /
             // probe prune) landing mid-RPC must not gain a stale title —
@@ -217,11 +247,17 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             if crate::handlers::reset::is_resetting() {
                 return;
             }
-            if !s.topics.note_title_if_thread(&pane, th, name) {
+            // Store the CORE (not the raw text): the formatter renders
+            // split topics from the shared tab+tag, so a raw chrome
+            // title would never verbatim-match the pane label and the
+            // watchdog would revert the topic every tick, orphaning this
+            // label. Stored==label verbatim-keeps, and the probe
+            // converges the topic onto the core instead of reverting.
+            if !s.topics.note_title_if_thread(&pane, th, &core) {
                 println!("[titles] stale rename dropped for {pane}");
                 return;
             }
-            println!("[titles] topic #{th} renamed → pane {pane} label {name:?}");
+            println!("[titles] topic #{th} renamed → pane {pane} label {core:?} (raw {name:?})");
         }
         Err(e) => {
             s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {e}"), None)
@@ -231,61 +267,5 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn edit_msg(thread: Option<i64>, name: &str) -> Value {
-        let mut m = json!({"message_thread_id": 17, "forum_topic_edited": {"name": name}});
-        if let Some(th) = thread {
-            m["message_thread_id"] = json!(th);
-        } else {
-            m.as_object_mut().unwrap().remove("message_thread_id");
-        }
-        m
-    }
-
-    #[test]
-    fn test_parse_topic_edit_service_msg() {
-        assert_eq!(
-            parse_topic_edit(&edit_msg(Some(17), "o2 · myblender")),
-            Some((17, "o2 · myblender".to_string()))
-        );
-        // Padded names trim.
-        assert_eq!(
-            parse_topic_edit(&edit_msg(Some(17), "  api  ")),
-            Some((17, "api".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_parse_topic_edit_rejects_non_edits() {
-        // Plain text message: no forum_topic_edited key.
-        assert_eq!(parse_topic_edit(&json!({"text": "/space x"})), None);
-        // Missing thread or blank name: unroutable.
-        assert_eq!(parse_topic_edit(&edit_msg(None, "api")), None);
-        assert_eq!(parse_topic_edit(&edit_msg(Some(17), "   ")), None);
-        assert_eq!(
-            parse_topic_edit(&json!({"message_thread_id": 17, "forum_topic_edited": {}})),
-            None
-        );
-    }
-
-    #[test]
-    fn test_parse_topic_icon_edit() {
-        let msg = json!({
-            "message_thread_id": 17,
-            "forum_topic_edited": {"icon_custom_emoji_id": "5350554349074391003"}
-        });
-        assert_eq!(
-            parse_topic_icon_edit(&msg),
-            Some((17, "5350554349074391003".to_string()))
-        );
-        assert_eq!(
-            parse_topic_icon_edit(
-                &json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})
-            ),
-            None
-        );
-    }
-}
+#[path = "titles_tests.rs"]
+mod tests;

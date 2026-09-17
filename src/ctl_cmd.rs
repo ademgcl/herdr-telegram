@@ -161,11 +161,7 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
     )
     .unwrap_or_else(|| tag_str.to_string());
     let desired = format_title(space, &core, kind);
-    let suffix = if kind == "shell" {
-        "none".to_string()
-    } else {
-        format!("·{}", kind.to_lowercase())
-    };
+    let suffix = format!("·{}", crate::topics::names::code(&kind.to_lowercase()));
 
     format!(
         "=== PANE INSPECTION: {pane} ===\n\
@@ -176,7 +172,7 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
          Tab:         {tab_label} ({tab_id})\n\
          Pane Label:  {}\n\
          Workspace:   {ws_name}\n\
-         Agent Kind:  {} (suffix {}; shell=none)\n\
+         Agent Kind:  {} (suffix {})\n\
          Term Title:  {term_title} (pinned card only)\n\
          Status:      {}\n\
          Recent Msgs: {:?}\n\

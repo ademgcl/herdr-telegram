@@ -152,7 +152,7 @@ mod tests {
         // (a user rename the watchdog keeps verbatim).
         assert_eq!(
             reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true, None),
-            "[tg] console o27 · opencode"
+            "[tg] console o27 · o"
         );
         assert_eq!(
             reset_desired_title(
@@ -168,22 +168,22 @@ mod tests {
         // Formatted otherwise (new/changed cores, case-only changes).
         assert_eq!(
             reset_desired_title(
-                Some("[tg] api · opencode"),
+                Some("[tg] api · o"),
                 "tg",
                 "backend",
                 "opencode",
                 false,
                 None
             ),
-            "[tg] backend · opencode"
+            "[tg] backend · o"
         );
         assert_eq!(
             reset_desired_title(None, "tg", "backend", "opencode", false, None),
-            "[tg] backend · opencode"
+            "[tg] backend · o"
         );
         assert_eq!(
             reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false, None),
-            "[tg] my title · opencode"
+            "[tg] my title · o"
         );
     }
 

@@ -1,11 +1,14 @@
 //! Stable short tags per pane (`o2`): kept as persisted ids; the
-//! VISIBLE title formats in Format B `[ws] label · agent` (shells bare:
-//! `[ws] label`) — see [`format_title`]. The topic icon is context-only (agent vs shell,
+//! VISIBLE title formats in Format B `[ws] label · code` (e.g.
+//! `[tg] o2 · o`, shells `[space-1] sh1 · sh`) — see [`format_title`].
+//! The topic icon is context-only (agent vs shell,
 //! set once at creation); live status surfaces in cards and the typing
 //! indicator (plus one unpinned identity card per topic).
 
+mod core;
 mod format;
 
+pub use core::topic_core;
 pub use format::format_title;
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents

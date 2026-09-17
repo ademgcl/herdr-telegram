@@ -3,15 +3,17 @@ use super::*;
 
 #[test]
 fn test_title_format() {
-    assert_eq!(format_title("tg", "o2", "opencode"), "[tg] o2 · opencode");
-    assert_eq!(format_title("ajnow", "c1", "claude"), "[ajnow] c1 · claude");
+    assert_eq!(format_title("tg", "o2", "opencode"), "[tg] o2 · o");
+    assert_eq!(format_title("tg", "a1", "agy"), "[tg] a1 · a");
+    assert_eq!(format_title("tg", "main", "shell"), "[tg] main · sh");
+    assert_eq!(format_title("ajnow", "c1", "claude"), "[ajnow] c1 · c");
     assert_eq!(
         format_title("a-very-long-workspace-label-here", "o1", "opencode"),
-        "[a-very-long-workspac] o1 · opencode"
+        "[a-very-long-workspac] o1 · o"
     );
     assert_eq!(
         format_title("shop", "shop-backend", "claude"),
-        "[shop] shop-backend · claude"
+        "[shop] shop-backend · c"
     );
     // Legacy bracketed titles freeze verbatim (stable: no rewrite loop).
     assert_eq!(
@@ -20,57 +22,59 @@ fn test_title_format() {
     );
     assert_eq!(
         format_title("tg", "o2 · tg", "opencode"),
-        "[tg] o2 · opencode"
+        "[tg] o2 · o"
     );
-    // Shells take no suffix: the sh tag says it all.
-    assert_eq!(format_title("space-1", "sh1", "shell"), "[space-1] sh1");
-    assert_eq!(format_title("infra", "s1", "shell"), "[infra] s1");
-    // Unknown kinds keep their full name; blank stays literal.
-    assert_eq!(format_title("tg", "x1", "my-agent"), "[tg] x1 · my-agent");
+    // Shells carry the `sh` code like every kind (the PC shows live
+    // kind; Telegram only has this suffix).
+    assert_eq!(format_title("space-1", "sh1", "shell"), "[space-1] sh1 · sh");
+    assert_eq!(format_title("infra", "s1", "shell"), "[infra] s1 · sh");
+    // Unknown kinds keep short fallbacks; blank stays literal.
+    assert_eq!(format_title("tg", "x1", "my-agent"), "[tg] x1 · my");
     assert_eq!(format_title("tg", "x1", "?"), "[tg] x1 · agent");
     assert_eq!(
         format_title("herdr-telegram", "main · herdr-telegram dev", "opencode"),
-        "[herdr-telegram] main · herdr-telegram dev · opencode"
+        "[herdr-telegram] main · herdr-telegram dev · o"
     );
     // Minimal-dedup: the reported stutter collapses...
-    assert_eq!(format_title("ip", "ip shell", "shell"), "[ip] shell");
-    assert_eq!(format_title("ip", "IP SHELL", "shell"), "[ip] SHELL");
-    assert_eq!(format_title("ip", "ip ip shell", "shell"), "[ip] shell");
-    assert_eq!(format_title("ip", "ip ·", "shell"), "[ip] ip");
+    assert_eq!(format_title("ip", "ip shell", "shell"), "[ip] shell · sh");
+    assert_eq!(format_title("ip", "IP SHELL", "shell"), "[ip] SHELL · sh");
+    assert_eq!(format_title("ip", "ip ip shell", "shell"), "[ip] shell · sh");
+    assert_eq!(format_title("ip", "ip ·", "shell"), "[ip] ip · sh");
     assert_eq!(
         format_title("tg", "tg opencode", "opencode"),
-        "[tg] opencode"
+        "[tg] opencode · o"
     );
-    // ...legacy short-code labels shed the code and re-sync...
+    // ...legacy full-name suffixes shed and re-sync to short...
     assert_eq!(
         format_title("tg", "o2 · o", "opencode"),
-        "[tg] o2 · opencode"
+        "[tg] o2 · o"
     );
     assert_eq!(
         format_title("tg", "o2 · opencode", "opencode"),
-        "[tg] o2 · opencode"
+        "[tg] o2 · o"
     );
-    assert_eq!(format_title("ip", "sh1 · shell", "shell"), "[ip] sh1");
-    assert_eq!(format_title("ip", "foo · SHELL", "shell"), "[ip] foo");
-    assert_eq!(format_title("ip", "sh1 · $", "shell"), "[ip] sh1");
+    assert_eq!(format_title("ip", "sh1 · shell", "shell"), "[ip] sh1 · sh");
+    assert_eq!(format_title("ip", "foo · SHELL", "shell"), "[ip] foo · sh");
+    assert_eq!(format_title("ip", "sh1 · $", "shell"), "[ip] sh1 · sh");
     // ...kind match is case-blind (herdr kinds are lowercase anyway)...
-    assert_eq!(format_title("ip", "sh1", "SHELL"), "[ip] sh1");
-    // ...but agents keep the gate: bare bodies never newly collide...
-    assert_eq!(format_title("tg", "o", "opencode"), "[tg] o · opencode");
+    assert_eq!(format_title("ip", "sh1", "SHELL"), "[ip] sh1 · sh");
+    // ...a core that IS the short code renders once, never stuttering...
+    assert_eq!(format_title("tg", "o", "opencode"), "[tg] o");
+    assert_eq!(format_title("ip", "sh", "shell"), "[ip] sh");
     assert_eq!(
         format_title("tg", "opencode", "opencode"),
-        "[tg] opencode · opencode"
+        "[tg] opencode · o"
     );
-    // ...degenerate kind-word shell bodies converge (documented)...
-    assert_eq!(format_title("ip", "shell", "shell"), "[ip] shell");
+    // ...degenerate kind-word bodies keep their suffix (documented)...
+    assert_eq!(format_title("ip", "shell", "shell"), "[ip] shell · sh");
     // ...exact-space bodies stay (stable, unambiguous)...
-    assert_eq!(format_title("ip", "ip", "shell"), "[ip] ip");
+    assert_eq!(format_title("ip", "ip", "shell"), "[ip] ip · sh");
     // ...and compounds are untouched.
     assert_eq!(
         format_title("shop", "shop-backend", "shell"),
-        "[shop] shop-backend"
+        "[shop] shop-backend · sh"
     );
-    assert_eq!(format_title("ip", "ip: shell", "shell"), "[ip] ip: shell");
+    assert_eq!(format_title("ip", "ip: shell", "shell"), "[ip] ip: shell · sh");
 }
 
 #[test]
@@ -83,6 +87,8 @@ fn test_title_fixed_point() {
         ("ip", "shell", "shell"),
         ("tg", "o", "opencode"),
         ("tg", "o2 · opencode", "opencode"),
+        ("tg", "m", "agy"),
+        ("tg", "main · o", "opencode"),
         ("shop", "shop-backend", "claude"),
         ("ip", "ip", "shell"),
     ] {
