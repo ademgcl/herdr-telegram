@@ -12,9 +12,7 @@ use crate::{
     types::MAX_MSG_UNITS,
     ui::chunks,
 };
-/// Prompt result finalization: turn the live message into the final card.
-/// Split from `runner` (300-line file limit). `watch_job` calls
-/// `finalize` on settle; `enqueue_prompt` reports submit errors.
+/// Prompt result finalization.
 /// Returns true when nothing was delivered (read outage OR every card
 /// part failed to send) so the watcher loop retries instead of retiring
 /// the intent.
@@ -47,13 +45,10 @@ pub async fn finalize(
     // doubles as the spontaneous baseline below (no second RPC).
     let mut screen = read_screen_adaptive(&s.cfg.socket, pane).await;
     let mut body = select_final_body(acc, &screen, &prompt);
-    // TUI-lag race: the status flipped to settled a beat before the
-    // frame rendered the answer. Short delayed re-reads (not the 5-60s
-    // outage backoff) rescue fast-task replies that would else post "no
-    // fresh output" and anchor away the real answer. Bounded at two
-    // rounds (~4s): lag beyond that needs a fresh transition to surface
-    // (the empty path below anchors + retires), which is vanishingly
-    // rare next to the cost of stalling every empty settle.
+    // TUI-lag race: status flips settled a beat before the frame
+    // renders the answer. Two delayed re-reads (~4s) rescue fast-task
+    // replies; lag beyond that needs a fresh transition (vanishingly
+    // rare next to stalling every empty settle).
     if body.is_empty() {
         for _ in 0..2 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -112,12 +107,19 @@ pub async fn finalize(
         return false;
     }
 
-    // Blocked settle: the viewport holds the question, the scrollback
-    // tail holds tool activity — so NEVER dump the stream body here (it
-    // posts ↳ echoes + a reply footer ahead of the real question card).
-    // Always take the blocked-card path: it reads the visible screen
-    // (question text survives, activity doesn't) with answer buttons.
+    // Blocked settle: never the stream body (↳ echoes + footer would
+    // pre-empt the question card) — always the blocked-card path.
     if settled == "blocked" {
+        // Boot seed already carded this exact dialog: observe + books
+        // only, or the same question buzzes twice with ❗.
+        if s.blocked_sig.lock().await.get(pane)
+            .map(|v| v == &crate::handlers::dialog::dialog_sig(&snapshot))
+            .unwrap_or(false)
+        {
+            observe_status(s, pane, settled, true, "job").await;
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
+            return false;
+        }
         let (chat, th) = *job.dest.lock().await;
         // Reuse the live message slot when there is one.
         if let Some(mid) = live_mid.take() {

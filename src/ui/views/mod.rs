@@ -232,6 +232,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
           • `/split [right|down]` — sibling shell pane in this tab\n\
            • `/keys y enter` — send keystrokes\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
+          • `/reset` — reset this topic (re-sync from Herdr)\n\
           • `/status` — refresh agent status card\n\
           • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
@@ -246,7 +247,9 @@ pub fn shell_help_text(pane: &str) -> String {
          • `/read` — recent shell output (`/output` too)\n\
          • `/esc` — send Esc (vim toggles mode)\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
-         • `/keys y enter` — send keystrokes\n\
+          • `/space [name]` — new space + shell topic\n\
+          • `/reset` — reset this topic (re-sync from Herdr)\n\
+          • `/keys y enter` — send keystrokes\n\
           • `/kill` — close this pane completely (confirms first)\n\
          • `/split [right|down]` — sibling shell pane in this tab\n\
          • `/status` — shell card\n\

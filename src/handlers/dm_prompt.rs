@@ -114,13 +114,13 @@ pub(crate) async fn handle_bare_prompt(
                 )
                 .await;
             }
-            Err(_) => {
-                // A tap in flight owns the card: never double-post over it.
+            Err(e) => {
+                // In-flight tap owns the card; a failed card post falls
+                // back to text so the error is never silent.
                 if s.blockop.lock().await.contains(&row.pane) {
-                    s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None)
-                        .await;
-                } else {
-                    super::dialog::send_blocked_card(s, chat, None, &row.pane).await;
+                    s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None).await;
+                } else if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
+                    s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
                 }
             }
         }

@@ -193,10 +193,14 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                                     }
                                                 }
                                             }
-                                            s.remember_pending(
-                                                &pane, pp.chat, pp.thread, &pp.prompt,
-                                            )
-                                            .await;
+                                            // Guarded like the dead-close restore:
+                                            // a submit racing the RPCs wins.
+                                            if s.pending.lock().await.get(&pane).is_none()
+                                                || s.pending_matches(&pane, pp.chat, pp.thread, &pp.prompt).await
+                                            {
+                                                s.remember_pending(&pane, pp.chat, pp.thread, &pp.prompt)
+                                                    .await;
+                                            }
                                         }
                                     } else {
                                         s.status
@@ -233,7 +237,13 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             }
                             s.cancel_jobs_for_quiet(&pane).await;
                             s.clear_pane(&pane).await;
-                            if let Some(pp) = owed {
+                            // Restore only when nothing newer owns the slot:
+                            // a submit racing the close RPCs above must win
+                            // over the corpse's text (overwrite = lost reply).
+                            if let Some(pp) = owed
+                                && (s.pending.lock().await.get(&pane).is_none()
+                                    || s.pending_matches(&pane, pp.chat, pp.thread, &pp.prompt).await)
+                            {
                                 s.remember_pending(&pane, pp.chat, pp.thread, &pp.prompt)
                                     .await;
                             }

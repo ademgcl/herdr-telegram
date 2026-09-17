@@ -1,6 +1,6 @@
 use super::tap_classify::dialog_stalled;
 use crate::{
-    handlers::dialog::{dialog_sig, refresh_blocked_card},
+    handlers::dialog::refresh_blocked_card,
     herdr::client::{
         get_agent, read_screen_visible, send_agent_keys, send_pane_input, send_pane_keys,
     },
@@ -49,14 +49,17 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
     };
     // The agent may have resumed between the snapshot and now: typing
     // into live work injects the answer as stray input. Bail so the
-    // caller routes the text as a prompt instead. Unknown (read error)
-    // stays fail-open — an outage must not brick real answers.
-    if get_agent(socket, pane)
-        .await
-        .map(|a| a.status != "blocked")
-        .unwrap_or(false)
-    {
-        return Err(TypeError::Resumed);
+    // caller routes the text as a prompt instead. Unreadable status is
+    // fail-CLOSED (never inject blind): callers keep the waiter, so the
+    // retry is just sending the message again after the blip.
+    match get_agent(socket, pane).await {
+        Err(_) => {
+            return Err(TypeError::Failed("herdr status unreadable".into()));
+        }
+        Ok(a) if a.status != "blocked" => {
+            return Err(TypeError::Resumed);
+        }
+        _ => {}
     }
     if let Err(e) = send_pane_input(socket, pane, text).await {
         return Err(TypeError::Failed(e.to_string()));
@@ -73,13 +76,9 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
                 "text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into(),
             ));
         }
-        // Advanced (possibly to a second dialog): anchor the signature so
-        // observers stay silent instead of double-posting before the
-        // delayed refresh below.
-        s.blocked_sig
-            .lock()
-            .await
-            .insert(pane.to_string(), dialog_sig(&after));
+        // Advanced: stamp NOTHING. The delayed refresh + watchdog post
+        // the new dialog exactly once via claim + sig re-check; an
+        // anchor here would blind them (stamp-only-on-delivery rule).
     }
     drop(_op);
     let s2 = s.clone();

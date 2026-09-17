@@ -7,6 +7,7 @@ use crate::{
     herdr::client::get_agent,
     jobs::finalize::{edit_live, finalize},
     jobs::job::Job,
+    jobs::repoint::repoint_dest_if_remapped,
     state::AppState,
 };
 use std::sync::Arc;
@@ -125,6 +126,7 @@ pub async fn settle_step(
         return SettleStep::Continue;
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
+    repoint_dest_if_remapped(s, pane, job, live_mid, epoch_before).await;
     let retry = finalize(s, pane, job, status, live_mid, acc).await;
     // finalize consumes the live slot on success — drop its
     // address too, or a later reset would edit the final card.

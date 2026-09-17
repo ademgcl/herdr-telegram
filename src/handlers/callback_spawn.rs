@@ -71,6 +71,21 @@ pub(crate) async fn handle_spawn(
                     Some(agent_card_kb(&row.pane, &agent.ws)),
                 )
                 .await;
+            } else {
+                // Spawned but status unreadable (herdr blip): still land
+                // the topic + ack instead of hanging on "starting…".
+                if s.cfg.forum.is_some() {
+                    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+                    let sp = ws_label(&spaces, &row.ws);
+                    s.topics.sync_topic(&row.pane, &row.kind, sp).await;
+                }
+                s.tg.edit_msg(
+                    chat,
+                    msg_id,
+                    &format!("✅ Started {} [{}] (status unreadable — /card)", row.kind, row.pane),
+                    None,
+                )
+                .await;
             }
         }
         Err(e) => {

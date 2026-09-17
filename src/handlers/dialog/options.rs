@@ -10,7 +10,7 @@ fn parse_numbered_option(line: &str) -> Option<(usize, String)> {
     let t = deframe(line);
     let s = t
         .trim()
-        .trim_start_matches(|c: char| c == '❯' || c == '*' || c == '-')
+        .trim_start_matches(['❯', '*', '-'])
         .trim();
     let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
@@ -42,15 +42,15 @@ pub fn has_numbered_options(lines: &[String]) -> bool {
         if t.is_empty() || is_rule(&t) {
             continue;
         }
-        if let Some((n, _)) = parse_numbered_option(line) {
-            if n == expected {
-                count += 1;
-                expected += 1;
-                if count >= 2 {
-                    return true;
-                }
-                continue;
+        if let Some((n, _)) = parse_numbered_option(line)
+            && n == expected
+        {
+            count += 1;
+            expected += 1;
+            if count >= 2 {
+                return true;
             }
+            continue;
         }
         expected = 1;
         count = 0;
@@ -168,12 +168,12 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
         if t.is_empty() || is_rule(&t) {
             continue;
         }
-        if let Some((n, label)) = parse_numbered_option(line) {
-            if n == expected_num {
-                num_run.push(label);
-                expected_num += 1;
-                continue;
-            }
+        if let Some((n, label)) = parse_numbered_option(line)
+            && n == expected_num
+        {
+            num_run.push(label);
+            expected_num += 1;
+            continue;
         }
         if num_run.len() >= 2 {
             return num_run;

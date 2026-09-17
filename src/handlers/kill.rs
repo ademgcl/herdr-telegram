@@ -67,7 +67,9 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
     }
     match close_pane(&s.cfg.socket, pane).await {
         Ok(()) => {
-            s.cancel_jobs_for(pane).await;
+            // Quiet: the "☠️ killed" edit below is the ack — a loud
+            // cancel would add a stray "✋ cancelled" card next to it.
+            s.cancel_jobs_for_quiet(pane).await;
             s.clear_pane(pane).await;
             // Compare-and-delete: a remint between snapshot and close
             // must survive. None (already pruned inside/ raced) → no-op.

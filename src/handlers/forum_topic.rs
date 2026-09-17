@@ -92,27 +92,13 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     // An armed typed-answer waiter wins over every command except
-    // /cancel (checked above): the next message belongs to the waiting
-    // prompt. Intentional parity with DM/General — a literal "/kill" can
-    // itself be the answer a dialog is waiting for. A race
-    // lost to a resume falls through to prompt routing below.
-    // Peek first: a blockop race or failed send must not consume the
-    // waiter — the retry is just sending the message again.
-    if let Some(wpane) = s
-        .typewait
-        .lock()
-        .await
-        .get(&(chat, Some(thread_id)))
-        .cloned()
-    {
+    // /cancel, /card, /esc (checked above): the next message belongs to
+    // the waiting prompt — a literal "/kill" can itself be the answer
+    // a dialog is waiting for. Peek first (a blockop race or failed
+    // send must not consume the waiter); a resume race falls through.
+    if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).cloned() {
         if s.blockop.lock().await.contains(&wpane) {
-            s.tg.send_msg(
-                chat,
-                Some(thread_id),
-                "answer already in flight — wait a beat",
-                None,
-            )
-            .await;
+            s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
             return;
         }
         match super::tap::type_text(&s, &wpane, text).await {
@@ -281,14 +267,13 @@ pub(crate) async fn handle_topic_agent_message(
                 // regular prompt instead of stray input (mirrors DM).
                 enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
             }
-            Err(_) => {
-                // A tap in flight owns the card: never double-post over
-                // it — the waiter stays for a beat-later retry.
+            Err(e) => {
+                // In-flight tap owns the card; a failed card post falls
+                // back to text so the error is never silent.
                 if s.blockop.lock().await.contains(pane) {
-                    s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None)
-                        .await;
-                } else {
-                    super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await;
+                    s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
+                } else if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
+                    s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
                 }
             }
         }

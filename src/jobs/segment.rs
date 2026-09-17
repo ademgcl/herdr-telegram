@@ -38,11 +38,11 @@ pub(crate) fn is_numbered_option_line(s: &str) -> bool {
 fn is_continuation_numbered_option(s: &str) -> bool {
     let t = s.trim().trim_start_matches('❯').trim_start();
     let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if let Ok(num) = digits.parse::<usize>() {
-        if num > 1 {
-            let rest = &t[digits.len()..];
-            return rest.starts_with('.') || rest.starts_with(')');
-        }
+    if let Ok(num) = digits.parse::<usize>()
+        && num > 1
+    {
+        let rest = &t[digits.len()..];
+        return rest.starts_with('.') || rest.starts_with(')');
     }
     false
 }
@@ -78,10 +78,10 @@ pub fn is_boundary(line: &str) -> bool {
 
 pub fn is_dialog_boundary(line: &str, next_line: Option<&str>) -> bool {
     if is_rule(line) {
-        if let Some(next) = next_line {
-            if is_continuation_numbered_option(next) {
-                return false;
-            }
+        if let Some(next) = next_line
+            && is_continuation_numbered_option(next)
+        {
+            return false;
         }
         return true;
     }
