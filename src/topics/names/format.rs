@@ -1,4 +1,5 @@
-//! Format B titles `[space] body · code` (e.g. `[tg] o2 · o`).
+//! Format B titles `[space] body` (e.g. `[tg] o2`). Kind lives in the
+//! topic icon only — never in the title.
 use super::chrome::{shed_once, short_space_for, strip_space_prefix, trim_stray};
 use super::code;
 
@@ -30,31 +31,23 @@ pub(crate) fn strip_leading_word<'a>(body: &'a str, word: &str) -> Option<&'a st
     }
 }
 
-/// Format B topic title: `[{space}] {label_or_tag} · {code}`.
-/// e.g. `[shop] shop-backend · c` (when labeled),
-/// or `[tg] o2 · o` (when unlabeled, using assigned tag).
+/// Format B topic title: `[{space}] {label_or_tag}` — bare.
+/// e.g. `[shop] shop-backend` (when labeled),
+/// or `[tg] o2` (when unlabeled, using assigned tag).
 ///
-/// 1:1 always: every herdr label renders with its space + live kind
-/// code, so a Telegram rename to `Custom` converges to
-/// `[space] Custom · o/a…` — space and agent code are never lost.
-/// Custom `[bracket]` text is kept INSIDE the wrap
-/// (`[urgent] fix` → `[shop] [urgent] fix · o`), never frozen.
-///
-/// The kind suffix is the SHORT code (`o`, `a`, `sh` — the same map as
-/// tags): Telegram can't show live kind like the PC tab bar, so the
-/// title carries it and tracks flips (opencode → shell → agy each rename
-/// once and converge). Unknown kinds keep the explicit `agent` word.
-/// Overlong names truncate at Telegram's 128-char cap.
+/// Kind lives in the topic ICON only (per-agent glyph, user customs
+/// kept): the title carries no suffix, so same-label panes across kinds
+/// share one title and stay distinguished by glyph. Overlong names
+/// truncate at Telegram's 128-char cap.
 ///
 /// Minimal-dedup: a body echoing the space head word collapses (`ip
-/// shell` in space `ip` → `[ip] shell · sh`); a body that IS the short
-/// code renders once (`o` stays `[tg] o`, never `[tg] o · o`).
-/// Near-identical labels can still converge (`foo` vs `foo · o` →
+/// shell` in space `ip` → `[ip] shell`).
+/// Near-identical labels can still converge (`foo` vs `[tg] foo` →
 /// one title — identical labels always could).
-/// Pasted chrome sheds tolerantly and re-syncs to short: any `·•⋅`
-/// code (any 1–2 alnum, stale or current), `· agent`, `· $`,
-/// `· {space}`, legacy full kinds, plus `| : / -` variants with spaces
-/// (`main | o`, `main - o`); case-blind, whitespace-collapsed.
+/// Pasted chrome sheds tolerantly: any `·•⋅` code (any 1–2 alnum, stale
+/// or current), `· agent`, `· shell`, `· $`, `· {space}`, legacy full
+/// kinds, plus `| : / -` variants with spaces (`main | o`, `main - o`);
+/// case-blind, whitespace-collapsed.
 ///
 /// Idempotent: `format_title(space, &format_title(space, l, k), k)`
 /// is stable (space prefix + chrome shed, then re-wrapped).
@@ -65,9 +58,8 @@ pub fn format_title(space: &str, label_or_tag: &str, kind: &str) -> String {
     let trimmed = label_or_tag.trim();
     let short_space = short_space_for(space);
     let kind_full = kind.trim().to_lowercase();
-    // Short kind code on every title (`o`, `a`, `sh` — shell included:
-    // the PC shows live kind, Telegram only has this suffix). Unknown
-    // kinds keep the explicit `agent` word.
+    // Own kind first for shedding (migration of suffixed labels);
+    // the render below stays bare regardless of kind.
     let short_agent: String = match kind_full.as_str() {
         "" | "?" => "agent".to_string(),
         k => code(k),
@@ -123,22 +115,15 @@ pub fn format_title(space: &str, label_or_tag: &str, kind: &str) -> String {
     if core.trim().is_empty() {
         return trimmed.chars().take(128).collect();
     }
-    // A core that IS the short code renders once (`[tg] o`, `[ip] sh`):
-    // the suffix would only stutter. Cross-kind same-label collisions
-    // need identical labels with colliding shorts — documented
-    // convergence, same class as identical labels always could.
-    if core.eq_ignore_ascii_case(&short_agent) {
-        let minimal: String = format!("[{short_space}] {core}");
-        return minimal.chars().take(128).collect();
-    }
 
-    let formatted = format!("[{short_space}] {core} · {short_agent}");
+    let formatted = format!("[{short_space}] {}", core.trim());
     formatted.chars().take(128).collect()
 }
 
-/// Friendly default: `format_title(space, tag, kind)` — `[{space}] {tag} ·
-/// {code}` e.g. `[tg] o2 · o`. Tags (`o2`, `a14`, `sh1`) keep short
-/// codes; the title suffix uses the same short map.
+/// Friendly default: `format_title(space, tag, kind)` — `[{space}] {tag}`
+/// e.g. `[tg] o2`. Tags (`o2`, `a14`, `sh1`) keep short codes; kind is
+/// ignored for the title (icon only) but kept as a parameter so pasted
+/// chrome sheds own-kind-first.
 #[cfg(test)]
 #[path = "format_tests.rs"]
 mod tests;

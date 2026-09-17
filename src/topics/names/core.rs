@@ -46,7 +46,7 @@ pub fn topic_core(raw: &str, space: &str, kind: &str) -> String {
         return trimmed.to_string();
     }
     let kind_full = kind.trim().to_lowercase();
-    // Same short map as the forward suffix (`o`, `a`, `sh`).
+    // Own kind first for shedding (migration of suffixed labels).
     let short_agent: String = match kind_full.as_str() {
         "" | "?" => "agent".to_string(),
         k => code(k),

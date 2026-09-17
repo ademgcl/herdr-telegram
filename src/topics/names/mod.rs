@@ -1,9 +1,8 @@
 //! Stable short tags per pane (`o2`): kept as persisted ids; the
-//! VISIBLE title formats in Format B `[ws] label · code` (e.g.
-//! `[tg] o2 · o`, shells `[space-1] sh1 · sh`) — see [`format_title`].
-//! The topic icon names the live kind (one glyph per agent, 💬 shell);
-//! live status surfaces in cards and the typing indicator (plus one
-//! unpinned identity card per topic).
+//! VISIBLE title is bare Format B `[ws] label` (e.g. `[tg] o2`) — see
+//! [`format_title`]. Kind lives in the topic icon only (one glyph per
+//! agent, 💬 shell); live status surfaces in cards and the typing
+//! indicator (plus one unpinned identity card per topic).
 
 mod chrome;
 mod core;
@@ -16,47 +15,52 @@ pub use format::format_title;
 #[path = "icon_tests.rs"]
 mod icon_tests;
 
-/// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
-/// (single letters collide: claude/cline/copilot/cursor/codex); unknown
-/// kinds fall back to their first two alphanumerics. Case-blind: herdr
-/// kinds are lowercase but callers may pass `SHELL`/`Opencode`.
+/// Full-name → short-code map for every herdr-known agent kind, single
+/// source for [`code`] and title-chrome shedding.
+/// Single letters collide, so claude/cline/copilot/cursor/codex are
+/// hand-disambiguated; `shell` is explicit (code `sh`).
+pub(crate) const KIND_CODES: &[(&str, &str)] = &[
+    ("opencode", "o"),
+    ("claude", "c"),
+    ("codex", "x"),
+    ("gemini", "g"),
+    ("agy", "a"),
+    ("devin", "d"),
+    ("maki", "m"),
+    ("hermes", "h"),
+    ("pi", "pi"),
+    ("cursor", "cu"),
+    ("cline", "cl"),
+    ("copilot", "co"),
+    ("droid", "dr"),
+    ("kimi", "ki"),
+    ("kiro", "kr"),
+    ("kilo", "kl"),
+    ("qodercli", "qo"),
+    ("qwen", "qw"),
+    ("amp", "am"),
+    ("grok", "gr"),
+    ("shell", "sh"),
+];
+
+/// 1–2 char code per agent kind ([`KIND_CODES`]); unknown kinds fall back
+/// to their first two alphanumerics. Case-blind: herdr kinds are
+/// lowercase but callers may pass `SHELL`/`Opencode`.
 pub fn code(kind: &str) -> String {
-    match kind.trim().to_lowercase().as_str() {
-        "opencode" => "o",
-        "claude" => "c",
-        "codex" => "x",
-        "gemini" => "g",
-        "agy" => "a",
-        "devin" => "d",
-        "maki" => "m",
-        "hermes" => "h",
-        "pi" => "pi",
-        "cursor" => "cu",
-        "cline" => "cl",
-        "copilot" => "co",
-        "droid" => "dr",
-        "kimi" => "ki",
-        "kiro" => "kr",
-        "kilo" => "kl",
-        "qodercli" => "qo",
-        "qwen" => "qw",
-        "amp" => "am",
-        "grok" => "gr",
-        _ => {
-            let short: String = kind
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .take(2)
-                .collect::<String>()
-                .to_lowercase();
-            if short.is_empty() {
-                return "?".into();
-            } else {
-                return short;
-            }
-        }
+    let k = kind.trim().to_lowercase();
+    if let Some((_, short)) = KIND_CODES.iter().find(|(name, _)| *name == k) {
+        return short.to_string();
     }
-    .to_string()
+    let short: String = kind
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(2)
+        .collect::<String>()
+        .to_lowercase();
+    if short.is_empty() {
+        return "?".into();
+    }
+    short
 }
 
 /// Smallest positive `n` such that `{code}{n}` is unused. Deterministic for

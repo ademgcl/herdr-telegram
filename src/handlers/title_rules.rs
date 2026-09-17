@@ -84,18 +84,17 @@ pub fn stored_covers_label(stored: Option<&str>, space: &str, kind: &str, label:
 }
 
 /// Kind-flip bypass: seen kind differing from current forces reformat
-/// (verbatim keeps must not hide an agent→shell `· code` change).
+/// (verbatim keeps must not hide an agent→shell icon change).
 pub fn kind_bypass(last: Option<&str>, cur: &str) -> bool {
     matches!(last, Some(l) if l != cur)
 }
 
 /// Reset title decision (single call-site for every reset loop, so the
 /// predicate can never drift): 1:1 Format-B always — even a pre-reset
-/// stored title equal to the tab core re-renders with space + fresh kind
-/// code (user text preserved, never returned bare). Split tabs re-suffix
-/// a stored title covering the pane label (fresh kind code, custom
-/// preserved — never the tab core, which would orphan it). Pure so
-/// unit-tested.
+/// stored title equal to the tab core re-renders bare with the space
+/// wrap (user text preserved; kind lives in the icon). Split tabs
+/// re-wrap a stored title covering the pane label (custom preserved —
+/// never the tab core, which would orphan it). Pure so unit-tested.
 pub fn reset_desired_title(
     pre: Option<&str>,
     space: &str,
@@ -189,7 +188,7 @@ mod tests {
         ));
         assert!(!stored_covers_label(None, "tg", "opencode", "main"));
         // Stale suffix under a new kind still covers (custom preserved,
-        // watchdog re-suffixes with the fresh code).
+        // watchdog re-wraps bare).
         assert!(stored_covers_label(
             Some("[tg] main · o"),
             "tg",
@@ -207,37 +206,37 @@ mod tests {
 
     #[test]
     fn test_reset_desired_title_raw_split_custom() {
-        // Raw-stored split custom re-suffixes the pane label (fresh code).
+        // Raw-stored split custom re-wraps the pane label bare.
         assert_eq!(
             reset_desired_title(
-                Some("[tg] Custom · o"),
+                Some("[tg] Custom"),
                 "tg",
                 "console o27",
                 "opencode",
                 true,
                 Some("Custom")
             ),
-            "[tg] Custom · o"
+            "[tg] Custom"
         );
     }
 
     #[test]
     fn test_reset_desired_title_verbatim_or_formatted() {
         // 1:1 Format-B always: even a verbatim pre-reset custom gains
-        // space + fresh kind code (user text preserved, never bare).
+        // the space wrap (user text preserved, kind lives in the icon).
         assert_eq!(
             reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false, None),
-            "[tg] My Title · o"
+            "[tg] My Title"
         );
         assert_eq!(
             reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false, None),
-            "[tg] My Title · o"
+            "[tg] My Title"
         );
         // Split tab cores format — a stored title covering the pane
-        // label re-suffixes it (custom preserved, fresh kind code).
+        // label re-wraps it bare.
         assert_eq!(
             reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true, None),
-            "[tg] console o27 · o"
+            "[tg] console o27"
         );
         assert_eq!(
             reset_desired_title(
@@ -248,27 +247,27 @@ mod tests {
                 true,
                 Some("Custom Name")
             ),
-            "[tg] Custom Name · o"
+            "[tg] Custom Name"
         );
         // Formatted otherwise (new/changed cores, case-only changes).
         assert_eq!(
             reset_desired_title(
-                Some("[tg] api · o"),
+                Some("[tg] api"),
                 "tg",
                 "backend",
                 "opencode",
                 false,
                 None
             ),
-            "[tg] backend · o"
+            "[tg] backend"
         );
         assert_eq!(
             reset_desired_title(None, "tg", "backend", "opencode", false, None),
-            "[tg] backend · o"
+            "[tg] backend"
         );
         assert_eq!(
             reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false, None),
-            "[tg] my title · o"
+            "[tg] my title"
         );
     }
 

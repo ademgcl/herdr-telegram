@@ -18,17 +18,10 @@ pub(crate) fn short_space_for(space: &str) -> String {
     t.chars().take(20).collect()
 }
 
+use super::KIND_CODES;
+
 const DOT_SEPS: [char; 3] = ['·', '•', '⋅'];
 const ALT_SEPS: [char; 9] = ['|', ':', '/', '-', '‐', '‑', '‒', '–', '—'];
-const KNOWN_SHORTS: [&str; 21] = [
-    "o", "a", "c", "x", "g", "d", "m", "h", "pi", "cu", "cl", "co", "dr", "ki", "kr", "kl",
-    "qo", "qw", "am", "gr", "sh",
-];
-const KNOWN_FULLS: [&str; 20] = [
-    "opencode", "claude", "codex", "gemini", "agy", "devin", "maki", "hermes", "cursor",
-    "cline", "copilot", "droid", "kimi", "kiro", "kilo", "qodercli", "qwen", "amp", "grok",
-    "shell",
-];
 
 /// Tolerant `[space]` prefix strip: case-blind, whitespace-collapsed,
 /// full label or displayed 20-char truncation. `]` is ASCII so the
@@ -74,7 +67,7 @@ fn strip_dot_token<'a>(body: &'a str, token: &str) -> Option<&'a str> {
 
 /// Split trailing dot-suffixed code: returns (core, token) when the
 /// text after the last `·•⋅` is a plausible code (1–2 alnum, `agent`,
-/// `$`, or a known full kind). Stale codes shed here so flips re-suffix
+/// `$`, or a known full kind). Stale codes shed here so flips stay bare
 /// instead of stacking (`main · x` under kind opencode → `main`).
 fn split_dot_code(body: &str) -> Option<(&str, &str)> {
     let t = body.trim_end();
@@ -107,7 +100,7 @@ fn split_dot_code(body: &str) -> Option<(&str, &str)> {
     }
     let n = norm_title(tok);
     let generic = tok.chars().count() <= 2 && tok.chars().all(|c| c.is_alphanumeric());
-    if generic || n == "agent" || KNOWN_FULLS.contains(&n.as_str()) {
+    if generic || n == "agent" || KIND_CODES.iter().any(|(f, _)| *f == n) {
         let core = before.trim_end();
         if !core.is_empty() {
             return Some((core, tok));
@@ -185,11 +178,13 @@ pub(crate) fn shed_once<'a>(
             return Some(s);
         }
     }
-    for k in KNOWN_SHORTS.iter().chain(KNOWN_FULLS.iter()) {
-        if let Some(s) = strip_alt_token(body, k)
-            && !s.is_empty()
-        {
-            return Some(s);
+    for (f, s) in KIND_CODES {
+        for k in [*f, *s] {
+            if let Some(s) = strip_alt_token(body, k)
+                && !s.is_empty()
+            {
+                return Some(s);
+            }
         }
     }
     // Single ASCII letter after `| : / -` is near-certainly a code

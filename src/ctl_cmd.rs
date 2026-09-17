@@ -162,18 +162,17 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
     )
     .unwrap_or_else(|| tag_str.to_string());
     let desired = format_title(space, &core, kind);
-    let suffix = format!("·{}", crate::topics::names::code(&kind.to_lowercase()));
 
     format!(
         "=== PANE INSPECTION: {pane} ===\n\
          Thread ID:   {}\n\
          Topic Title: {} (stored)\n\
-         Desired:     {desired} (tab wins, terminal→pin only)\n\
+         Desired:     {desired} (tab wins, terminal→card only)\n\
          Tag:         {}\n\
          Tab:         {tab_label} ({tab_id})\n\
          Pane Label:  {}\n\
          Workspace:   {ws_name}\n\
-         Agent Kind:  {} (suffix {})\n\
+         Agent Kind:  {kind} (icon only)\n\
          Term Title:  {term_title} (identity card only)\n\
          Status:      {}\n\
          Recent Msgs: {:?}\n\
@@ -182,8 +181,6 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
         title.as_deref().unwrap_or("-"),
         tag.as_deref().unwrap_or("-"),
         pf.and_then(|f| f.label.as_deref()).unwrap_or("-"),
-        kind,
-        suffix,
         agent.as_ref().map(|a| a.status.as_str()).unwrap_or("ready"),
         recent
     )

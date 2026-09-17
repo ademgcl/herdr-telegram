@@ -18,7 +18,7 @@ fn test_topic_core_strips_chrome() {
         topic_core("[herdr-telegram] main", "herdr-telegram", "opencode"),
         "main"
     );
-    // Kind flips map back to the same core (suffix tracks live kind).
+    // Kind flips map back to the same core (kind lives in the icon).
     assert_eq!(topic_core("[tg] main · sh", "tg", "shell"), "main");
     assert_eq!(topic_core("[tg] main · a", "tg", "agy"), "main");
     assert_eq!(topic_core("[tg] a1 · a", "tg", "agy"), "a1");

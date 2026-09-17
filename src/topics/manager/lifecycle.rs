@@ -215,7 +215,7 @@ impl TopicManager {
         let old_thread = self.storage.get_thread(pane);
         let tag = self.storage.assign_tag(pane, kind);
         // 1:1 Format-B always: user text survives reset re-wrapped
-        // with space + fresh kind code (never bare). Split tabs keep
+        // bare with the space. Split tabs keep pane-label renames
         // pane-label renames (`names.core` already carries the label
         // when set — watchdog parity, no flap). Same `naming_core`
         // source as the watchdog: no drift.

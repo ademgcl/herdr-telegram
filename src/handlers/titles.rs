@@ -4,14 +4,14 @@
 //! converge instead of echo-looping. Title source is the user-visible
 //! herdr TAB name (`tab.rename`/`tab.list`) — never the terminal/agent
 //! title (that lives only in the identity card). Tab missing/empty falls
-//! back to the stable tag (`[{space}] {tag} · {code}`, e.g. `[tg] o2 · o`).
+//! back to the stable tag (`[{space}] {tag}`, e.g. `[tg] o2`).
 //! Pane labels are written only for split-tab user renames (a shared tab
 //! can't disambiguate); the watchdog formats everything else from the
-//! tab core. 1:1 Format-B always: every topic shows
-//! `[space] label · code`, so a Telegram rename to `Custom` converges to
-//! `[space] Custom · code` (space + agent code preserved, promptly —
-//! adopt re-asserts the formatted title right after the herdr rename,
-//! the watchdog converges herdr edits next tick).
+//! tab core. 1:1 Format-B always: every topic shows `[space] label`
+//! (kind lives in the icon), so a Telegram rename to `Custom` converges
+//! to `[space] Custom` promptly — adopt re-asserts the formatted title
+//! right after the herdr rename, the watchdog converges herdr edits
+//! next tick.
 //! Telegram→herdr renames shed Format-B chrome tolerantly
 //! (`[space]` prefix case-blind/collapsed/truncated, any `·•⋅` code,
 //! `| : / -` spaced variants, stale codes — see [`names`]): users edit
@@ -104,7 +104,7 @@ pub async fn sync_titles_with(
         }
         // Shells are invisible to `agent.list`: a missing row is shell
         // ONLY when the last seen kind agrees — otherwise it is a
-        // transient dropout, and defaulting would flip `· o` → `· sh`.
+        // transient dropout, and defaulting would mis-mark the icon.
         let kind = match kind_of.get(pane.as_str()).copied() {
             Some(k) => k,
             None if s.topics.kind_changed(pane, "shell") => continue,
@@ -112,8 +112,8 @@ pub async fn sync_titles_with(
         };
         s.topics.note_kind(pane, kind);
         // Kind flips re-icon bot-owned topics (user customs skipped):
-        // the glyph is the at-a-glance kind signal next to the short
-        // suffix. RPC only on an actual flip; failures retry next tick.
+        // the glyph is the at-a-glance kind signal (titles stay bare).
+        // RPC only on an actual flip; failures retry next tick.
         if let Some(want) =
             names::icon_needs_update(s.topics.storage.get_icon(pane).as_deref(), kind)
             && let (Some(forum), Some(thread)) =
@@ -233,7 +233,7 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
         return;
     }
     // 1:1 prompt converge: after herdr takes the core, re-assert the
-    // formatted title immediately (space + fresh code preserved) instead
+    // formatted title immediately (space wrap preserved) instead
     // of waiting up to 60s for the watchdog.
     let formatted = names::format_title(&space, &core, &kind);
     if !multi {
