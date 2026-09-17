@@ -1,5 +1,5 @@
 //! Forum-topic ownership: TopicManager owns Telegram forum-topic CRUD
-//! for mapped threads (create/delete/close/reopen/icon/pins/identity
+//! for mapped threads (create/delete/close/reopen/icon/identity
 //! card); notifier owns alert CARDS (when/what to buzz), ui owns card
 //! TEXT. Mapping state lives in storage; herdr names flow in, never out.
 use crate::{
@@ -212,11 +212,11 @@ impl TopicManager {
                     Err(_) => {}
                 }
 
-                // F2 + D7: Identity card posted and pinned in topic header
+                // F2 + D7: Identity card posted in topic header (never
+                // pinned — tracked by id so status edits stay in place).
                 let card =
-                    crate::ui::build_pinned_card_text(kind, pane, space, status, raw_title, branch);
+                    crate::ui::build_identity_card_text(kind, pane, space, status, raw_title, branch);
                 if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await {
-                    let _ = self.tg.pin_msg(forum, mid).await;
                     self.storage.set_pin(pane, mid);
                 }
 

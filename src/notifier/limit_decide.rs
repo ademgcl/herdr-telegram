@@ -136,14 +136,17 @@ mod tests {
     fn test_unfire_retries_without_restarting() {
         // Delivery failure must re-page next tick, not arm a suppress
         // with nothing delivered and not restart the stuck timer.
+        // (rate-limit pages only after the stuck gate — transient quota
+        // flashes stay silent.)
         let mut ep = BuzzEpisode::new();
         let t = Instant::now();
         let hit = detect_limit(&v(&["Free usage exceeded, subscribe to Go [retrying in 42s]"]))
             .expect("quota must detect");
-        assert!(ep.tick(Some(&hit), t).is_some());
         assert!(ep.tick(Some(&hit), t).is_none());
+        assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_some());
+        assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_none());
         ep.unfire();
-        assert!(ep.tick(Some(&hit), t).is_some());
+        assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_some());
     }
 
     #[test]
@@ -155,8 +158,9 @@ mod tests {
         let t = Instant::now();
         let hit = detect_limit(&v(&["Free usage exceeded, subscribe to Go"]))
             .expect("quota must detect");
-        assert!(ep.tick(Some(&hit), t).is_some());
+        assert!(ep.tick(Some(&hit), t).is_none());
         assert!(!ep.is_fresh());
+        assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_some());
         ep.tick(None, t);
         ep.tick(None, t);
         assert!(!ep.is_fresh());

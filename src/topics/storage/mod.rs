@@ -1,6 +1,7 @@
-//! Durable topic identity (pane→thread/tag/title/icon/pins): JSON file
+//! Durable topic identity (pane→thread/tag/title/icon/card): JSON file
 //! with `.prev` backup, mutex-guarded in memory. Atomic clear-except
 //! covers the reset survivor path. Split into `disk` + `tests`.
+//! (`card` persists under the legacy `pins` key — same ids, never pinned.)
 use std::{collections::HashMap, env, path::PathBuf, sync::Mutex};
 
 mod disk;
@@ -194,6 +195,8 @@ impl TopicStorage {
         tag
     }
 
+    /// Identity-card message id per pane (tracked for status edits —
+    /// nothing is ever pinned). Legacy `pins` key kept for disk compat.
     pub fn get_pin(&self, pane: &str) -> Option<i64> {
         self.lock().pins.get(pane).copied()
     }

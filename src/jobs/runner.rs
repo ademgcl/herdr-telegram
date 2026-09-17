@@ -210,6 +210,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 &mut acc,
                 &mut retry_wait,
                 &mut settled_since,
+                episode.error_stuck(std::time::Instant::now()),
             )
             .await
             {

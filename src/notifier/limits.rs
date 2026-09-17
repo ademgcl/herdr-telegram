@@ -14,9 +14,10 @@ use std::time::{Duration, Instant};
 /// Re-remind while a limit stall persists (shared with prompt watchers —
 /// either path's alert suppresses the other per kind, so handoffs buzz once).
 pub const LIMIT_REMIND_SECS: u64 = 1800;
-/// Gated (`provider`/`error`/WEAK-`auth`) banners must persist this long
-/// before the watchdog buzzes: transient upstream blips (timeout → retry
-/// succeeds) stay silent, stuck stalls page once.
+/// Gated (`rate-limit`/`provider`/`error`/WEAK-`auth`) banners must
+/// persist this long before the watchdog buzzes: transient upstream
+/// blips (timeout → retry succeeds) and 429/auto-retry flashes stay
+/// silent, stuck stalls page once.
 const LIMIT_STUCK_SECS: u64 = 90;
 /// Consecutive confirmed-clean 60s ticks before a limit episode clears —
 /// matches the watcher hysteresis so handoffs never double-page or
@@ -24,12 +25,12 @@ const LIMIT_STUCK_SECS: u64 = 90;
 const LIMIT_CLEAR_MISSES: u32 = 3;
 
 /// Buzz once per limit episode — plus a backstop for prompt-owned panes
-/// whose watcher is parked (backoff), settling, or retired: quota stalls
-/// never self-heal, so a dead watcher must not mean a silent user.
-/// Immediate (`rate-limit`/STRONG-`auth`) banners alert on ANY non-shell
-/// status (herdr can sample idle mid-retry) but only from the fresh tail
-/// (deep-scrollback leftovers of a settled run stay silent); gated
-/// (`provider`/`error`/WEAK-`auth`) ones still need a working pane.
+/// whose watcher is parked (backoff), settling, or retired: stuck stalls
+/// still page, so a dead watcher must not mean a silent user.
+/// STRONG-`auth` banners alert on ANY non-shell status (herdr can sample
+/// idle mid-retry) but only from the fresh tail (deep-scrollback
+/// leftovers of a settled run stay silent); gated (`rate-limit`/
+/// `provider`/`error`/WEAK-`auth`) ones still need a working pane.
 /// Once-per-episode survives noise: empty/outage reads preserve all
 /// state (unknown ≠ clean), a banner must be absent for
 /// [`LIMIT_CLEAR_MISSES`] consecutive clean reads to clear the episode,

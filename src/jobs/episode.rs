@@ -1,11 +1,10 @@
 //! Mid-run buzz episodes: which stall banner already alerted this
-//! watcher. `provider` fatals, transient upstream stalls (`error`,
-//! `provider`) and WEAK `auth` matches (common words + ambient context —
-//! agent prose or log dumps trip these transiently) buzz only when
-//! stuck — transient flashes recover into the final reply, and settle
-//! arbitration already surfaces terminal errors there.
-//! `rate-limit`/STRONG-`auth` buzz immediately: quota stalls never
-//! self-heal and specific denials persist until login is fixed. The
+//! watcher. `error`, `provider`, `rate-limit` and WEAK `auth` matches
+//! buzz only when stuck — transient flashes (upstream blips, 429
+//! auto-retry bursts, common words + ambient context in agent prose or
+//! log dumps) recover into the final reply, and settle arbitration
+//! already surfaces terminal errors there. STRONG-`auth` buzzes
+//! immediately: specific denials persist until login is fixed. The
 //! stuck gate is Instant-based (watcher wakes are event-driven, not
 //! periodic).
 //!
@@ -18,10 +17,11 @@
 //! counts as a new episode, so scroll-order oscillation between
 //! co-present banners never spams.
 use super::notices::{LimitHit, needs_stuck_gate};
+use super::notices::types::ERROR_KIND;
 use std::time::{Duration, Instant};
 
-/// Ticks with a gated (`error`/`provider`/WEAK-`auth`) banner and no
-/// settle before buzzing once.
+/// Ticks with a gated (`error`/`provider`/`rate-limit`/WEAK-`auth`)
+/// banner and no settle before buzzing once.
 const STUCK_SECS: u64 = 90;
 /// Consecutive clean (non-empty, banner-free) reads before the episode
 /// clears so the next banner re-alerts.
@@ -72,6 +72,22 @@ impl BuzzEpisode {
     /// starts a new episode and pages per its kind rules.
     pub fn is_fresh(&self) -> bool {
         self.kind.is_none()
+    }
+
+    /// A fatal provider error has been stuck since `now` minus the full
+    /// gate: the run is effectively over even when herdr keeps sampling
+    /// settled kinds too briefly to arm the report timer (working↔blocked
+    /// ↔idle flap around a fatal error would else loop the watcher
+    /// forever on a frozen "working" card). Settle uses this to commit
+    /// at once, like `blocked`. Delivery-independent on purpose: a dead
+    /// Telegram must not also block terminal delivery (finalize retries
+    /// sends itself). `now` is a parameter (not captured) so tests can
+    /// time-travel without sleeping the gate out.
+    pub fn error_stuck(&self, now: std::time::Instant) -> bool {
+        self.kind.as_deref() == Some(ERROR_KIND)
+            && self
+                .since
+                .is_some_and(|t| now.duration_since(t) >= std::time::Duration::from_secs(STUCK_SECS))
     }
 
     /// Current detection (or None for a clean non-empty read) → the hit
@@ -143,158 +159,5 @@ impl BuzzEpisode {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::notices::types::ERROR_KIND;
-    use super::*;
-
-    fn hit(kind: &'static str) -> LimitHit {
-        LimitHit {
-            kind,
-            excerpt: "x".into(),
-            strong: true,
-        }
-    }
-
-    fn weak_hit(kind: &'static str) -> LimitHit {
-        LimitHit {
-            kind,
-            excerpt: "x".into(),
-            strong: false,
-        }
-    }
-
-    #[test]
-    fn test_plain_kinds_buzz_on_change_only() {
-        let mut ep = BuzzEpisode::new();
-        let t = Instant::now();
-        let r = hit("rate-limit");
-        assert!(ep.tick(Some(&r), t).is_some());
-        assert!(ep.tick(Some(&r), t).is_none());
-        // A single-tick flip is scroll noise: silent…
-        let p = hit("provider");
-        assert!(ep.tick(Some(&p), t).is_none());
-        assert!(ep.tick(Some(&p), t).is_none());
-        // …but held stable it becomes a genuine new episode (gated → silent first).
-        assert!(ep.tick(Some(&p), t).is_none());
-        // provider is stuck-gated: buzzes only after STUCK_SECS.
-        assert!(ep.tick(Some(&p), t + Duration::from_secs(91)).is_some());
-    }
-
-    #[test]
-    fn test_error_stuck_gate() {
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let e = hit(ERROR_KIND);
-        assert!(ep.tick(Some(&e), t0).is_none());
-        assert!(ep.tick(Some(&e), t0 + Duration::from_secs(30)).is_none());
-        assert!(ep.tick(Some(&e), t0 + Duration::from_secs(90)).is_some());
-        // Post-once: still present right after stays silent.
-        assert!(ep.tick(Some(&e), t0 + Duration::from_secs(200)).is_none());
-    }
-
-    #[test]
-    fn test_provider_stuck_gate() {
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let p = hit("provider");
-        // Transient timeout blip: silent until stuck.
-        assert!(ep.tick(Some(&p), t0).is_none());
-        assert!(ep.tick(Some(&p), t0 + Duration::from_secs(30)).is_none());
-        assert!(ep.tick(Some(&p), t0 + Duration::from_secs(90)).is_some());
-        assert!(ep.tick(Some(&p), t0 + Duration::from_secs(200)).is_none());
-    }
-
-    #[test]
-    fn test_single_absence_does_not_reset() {
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let r = hit("rate-limit");
-        assert!(ep.tick(Some(&r), t0).is_some());
-        // One clean tick (scroll flap / missed tail): episode survives.
-        assert!(ep.tick(None, t0 + Duration::from_secs(5)).is_none());
-        assert!(ep.tick(None, t0 + Duration::from_secs(10)).is_none());
-        // Banner back without a confirmed clear: still the same episode.
-        assert!(ep.tick(Some(&r), t0 + Duration::from_secs(15)).is_none());
-    }
-
-    #[test]
-    fn test_empty_preserves_episode() {
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let r = hit("rate-limit");
-        assert!(ep.tick(Some(&r), t0).is_some());
-        ep.note_empty();
-        ep.note_empty();
-        assert!(ep.tick(Some(&r), t0 + Duration::from_secs(15)).is_none());
-    }
-
-    #[test]
-    fn test_sustained_absence_clears() {
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let r = hit("rate-limit");
-        assert!(ep.tick(Some(&r), t0).is_some());
-        assert!(ep.tick(None, t0).is_none());
-        assert!(ep.tick(None, t0).is_none());
-        assert!(ep.tick(None, t0).is_none());
-        // Fresh episode after a confirmed clear alerts again.
-        assert!(ep.tick(Some(&r), t0).is_some());
-    }
-
-    #[test]
-    fn test_banner_leave_and_kind_change_reset() {
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let e = hit(ERROR_KIND);
-        assert!(ep.tick(Some(&e), t0).is_none());
-        assert!(ep.tick(None, t0 + Duration::from_secs(200)).is_none());
-        assert!(ep.tick(None, t0 + Duration::from_secs(200)).is_none());
-        assert!(ep.tick(None, t0 + Duration::from_secs(200)).is_none());
-        // Fresh episode after the banner left: silent again, timer restarted.
-        assert!(ep.tick(Some(&e), t0 + Duration::from_secs(200)).is_none());
-        assert!(ep.tick(Some(&e), t0 + Duration::from_secs(291)).is_some());
-        // Stable kind change re-arms (3 ticks), then immediate kinds fire.
-        let r = hit("rate-limit");
-        assert!(ep.tick(Some(&r), t0 + Duration::from_secs(300)).is_none());
-        assert!(ep.tick(Some(&r), t0 + Duration::from_secs(301)).is_none());
-        assert!(ep.tick(Some(&r), t0 + Duration::from_secs(302)).is_some());
-        // Back to error needs stability again first.
-        assert!(ep.tick(Some(&e), t0 + Duration::from_secs(303)).is_none());
-    }
-
-    #[test]
-    fn test_weak_auth_is_stuck_gated() {
-        // WEAK wording (prose/log-shaped) must persist before paging;
-        // STRONG wording pages at once.
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let w = weak_hit("auth");
-        assert!(ep.tick(Some(&w), t0).is_none());
-        assert!(ep.tick(Some(&w), t0 + Duration::from_secs(30)).is_none());
-        assert!(ep.tick(Some(&w), t0 + Duration::from_secs(90)).is_some());
-        // Post-once: still present right after stays silent.
-        assert!(ep.tick(Some(&w), t0 + Duration::from_secs(200)).is_none());
-    }
-
-    #[test]
-    fn test_weak_auth_episode_upgrades_on_strong_wording() {
-        // Same-kind STRONG wording inside an unfired WEAK episode proves
-        // the denial genuine and fires immediately.
-        let mut ep = BuzzEpisode::new();
-        let t0 = Instant::now();
-        let w = weak_hit("auth");
-        let s = hit("auth");
-        assert!(ep.tick(Some(&w), t0).is_none());
-        assert!(ep.tick(Some(&s), t0 + Duration::from_secs(10)).is_some());
-        assert!(ep.tick(Some(&s), t0 + Duration::from_secs(20)).is_none());
-    }
-
-    #[test]
-    fn test_strong_auth_fires_immediately() {
-        let mut ep = BuzzEpisode::new();
-        let t = Instant::now();
-        let s = hit("auth");
-        assert!(ep.tick(Some(&s), t).is_some());
-        assert!(ep.tick(Some(&s), t).is_none());
-    }
-}
+#[path = "episode_tests.rs"]
+mod tests;

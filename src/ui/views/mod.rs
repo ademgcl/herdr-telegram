@@ -159,9 +159,9 @@ pub fn build_agent_card_text(a: &AgentDetail) -> String {
     )
 }
 
-/// Pinned identity card for forum topics (F2 + D7): shows pane, workspace,
+/// Identity card for forum topics (F2 + D7): shows pane, workspace,
 /// title (terminal/task), branch (if any), and live status.
-pub fn build_pinned_card_text(
+pub fn build_identity_card_text(
     kind: &str,
     pane: &str,
     space: &str,

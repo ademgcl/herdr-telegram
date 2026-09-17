@@ -160,7 +160,7 @@ impl TelegramClient {
         Ok(stickers)
     }
 
-    /// F9: Probe bot admin rights in the forum supergroup (`can_manage_topics`, `can_pin_messages`).
+    /// F9: Probe bot admin rights in the forum supergroup (`can_manage_topics`).
     pub async fn check_forum_permissions(&self, chat_id: i64) -> Res<BotPermissions> {
         let me = self.get_me().await?;
         let bot_id = me["id"]
@@ -176,12 +176,10 @@ impl TelegramClient {
         let status = member["status"].as_str().unwrap_or("");
         let is_admin = status == "administrator" || status == "creator";
         let can_manage_topics = member["can_manage_topics"].as_bool().unwrap_or(false);
-        let can_pin_messages = member["can_pin_messages"].as_bool().unwrap_or(false);
         let can_delete_messages = member["can_delete_messages"].as_bool().unwrap_or(false);
         Ok(BotPermissions {
             is_admin,
             can_manage_topics,
-            can_pin_messages,
             can_delete_messages,
         })
     }
@@ -191,7 +189,6 @@ impl TelegramClient {
 pub struct BotPermissions {
     pub is_admin: bool,
     pub can_manage_topics: bool,
-    pub can_pin_messages: bool,
     pub can_delete_messages: bool,
 }
 

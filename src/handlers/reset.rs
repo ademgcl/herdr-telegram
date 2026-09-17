@@ -180,7 +180,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     let mut migrated = 0;
     let mut failed = Vec::new();
 
-    // Step 1: Migrate agent topics (F6 copy recent msgs + F3 sweep pins + F2 pin identity card)
+    // Step 1: Migrate agent topics (F6 copy recent msgs + F2 identity card)
     for r in &agents {
         live_panes.insert(r.pane.clone());
         let space = ws_label(&spaces, &r.ws);

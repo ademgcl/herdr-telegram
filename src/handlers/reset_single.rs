@@ -1,5 +1,5 @@
 //! Single topic reset: deletes a single pane/topic on Telegram and recreates
-//! it fresh (preserving queue messages, resetting pins and updating mappings).
+//! it fresh (preserving queue messages and updating mappings).
 use crate::{
     handlers::title_rules::{naming_core, tab_census, tab_of},
     herdr::{

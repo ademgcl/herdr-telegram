@@ -3,7 +3,7 @@
 //! updates. Both sides compare against the stored title first, so edits
 //! converge instead of echo-looping. Title source is the user-visible
 //! herdr TAB name (`tab.rename`/`tab.list`) — never the terminal/agent
-//! title (that lives only in the pinned card). Tab missing/empty falls
+//! title (that lives only in the identity card). Tab missing/empty falls
 //! back to the stable tag (`[{space}] {tag} · {code}`, e.g. `[tg] o2 · o`).
 //! Pane labels are written only for split-tab user renames (a shared tab
 //! can't disambiguate); the watchdog formats everything else from the

@@ -65,7 +65,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // LIMIT_CLEAR_MISSES) or pane death/shell flip, so flicker preserves
     // the episode instead of restarting it.
 
-    // Agent identity once per observation — shared by pins, cards and
+    // Agent identity once per observation — shared by cards and
     // alerts below.
     let info = get_agent(&s.cfg.socket, pane).await.ok();
     let (kind, ws_id, title) = match &info {
@@ -94,7 +94,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             } else {
                 Some(title.as_str())
             };
-            let card = crate::ui::build_pinned_card_text(
+            let card = crate::ui::build_identity_card_text(
                 &kind, pane, raw_space, new_status, title_opt, branch,
             );
             let mut mid_opt = s.topics.get_pin(pane);
@@ -107,7 +107,6 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
                 && let Some(thread) = s.topics.all_mappings().get(pane).copied()
                 && let Some(new_mid) = s.tg.send_msg(forum, Some(thread), &card, None).await
             {
-                let _ = s.tg.pin_msg(forum, new_mid).await;
                 s.topics.set_pin(pane, new_mid);
             }
         }

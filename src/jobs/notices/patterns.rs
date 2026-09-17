@@ -68,7 +68,8 @@ pub(crate) const FATAL_PROVIDER_MARKERS: &[&str] = &[
 /// seconds later) — paging that as "usage limit hit" spams one card per
 /// flap and gives the wrong fix-it hint. True quota stalls carry
 /// quota-specific strings (STRONG above, or `rate limit`/`429`/billing
-/// below) and still buzz immediately as `rate-limit`.
+/// below) and page once they persist the stuck gate, like every other
+/// gated kind.
 pub(crate) const WEAK: &[(&str, &str)] = &[
     ("rate limit", "rate-limit"),
     ("ratelimit", "rate-limit"),
@@ -180,9 +181,8 @@ pub(crate) fn best_hit(
     best.map(|(_, i, kind)| (i, kind))
 }
 
-/// Immediate quota/STRONG-auth stalls page at once; WEAK `auth` and
-/// transient-prone banners (`provider`/`error`) are stuck-gated by the
-/// caller instead. Shared with `detect`'s cross-table pick so both
+/// STRONG-`auth` stalls page at once; every other kind is stuck-gated
+/// by the caller instead. Shared with `detect`'s cross-table pick so both
 /// tables rank by one rule.
 pub(crate) fn kind_priority(kind: &str, strong: bool) -> u8 {
     match (kind, strong) {

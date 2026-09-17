@@ -6,7 +6,7 @@ use super::types::LimitHit;
 /// stand alone; weak hits need screen-wide error context. Multiple
 /// banners can co-exist as the TUI scrolls (a stale transient retry line
 /// above a fresh quota banner): ranking is by (priority, freshness) —
-/// immediate kinds (`rate-limit`/STRONG-`auth`) outrank stuck-gated ones
+/// top-priority kinds (`rate-limit`/STRONG-`auth`) outrank stuck-gated ones
 /// across BOTH tables, ties break bottommost (freshest) — so the card
 /// quotes what the user saw last, never a scrolled-off transient.
 pub fn detect_limit(lines: &[String]) -> Option<LimitHit> {

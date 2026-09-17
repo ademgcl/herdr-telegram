@@ -83,7 +83,7 @@ fn test_transient_timeout_retry_is_provider_not_quota() {
     let hit = detect_limit(&screen).expect("must detect as stall");
     assert_eq!(hit.kind, "provider");
     assert!(is_stuck_gated(hit.kind));
-    assert!(!is_stuck_gated("rate-limit"));
+    assert!(is_stuck_gated("rate-limit"));
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn test_codex_usage_limit_is_rate_limit() {
     let hit = detect_limit(&screen).expect("codex limit banner must detect");
     assert_eq!(hit.kind, "rate-limit");
     assert!(hit.strong);
-    assert!(!super::super::types::needs_stuck_gate(&hit));
+    assert!(super::super::types::needs_stuck_gate(&hit));
     assert!(screen_has_provider_failure(&screen));
     assert!(is_provider_failure_line(&screen[0]));
 }
@@ -144,7 +144,7 @@ fn test_codex_usage_limit_is_rate_limit() {
 #[test]
 fn test_fresh_quota_beats_stale_transient() {
     // Scrollback keeps an old transient retry line above the fresh
-    // quota banner: the immediate kind must win, not topmost order.
+    // quota banner: the top-priority kind must win, not topmost order.
     let hit = detect_limit(&v(&[
         "⬝⬝⬝ Provider response headers timed out after 300000ms [retrying attempt #1]",
         "Free usage exceeded, subscribe to Go [retrying in 42s]",
@@ -210,10 +210,11 @@ fn test_auth_provenance_strong_vs_weak() {
 }
 
 #[test]
-fn test_weak_rate_limit_stays_immediate() {
-    // Gating is auth-specific: a WEAK quota signal still pages at
-    // once (quota stalls never self-heal) — and priority beats
-    // recency across lines (quota first, fresher provider second).
+fn test_weak_rate_limit_is_stuck_gated() {
+    // Gating is uniform now: a WEAK quota signal stays silent until it
+    // persists (transient 429/auto-retry flashes recover) — and priority
+    // still beats recency across lines (quota first, fresher provider
+    // second).
     let hit = detect_limit(&v(&[
         "error: upstream replied (429) trouble",
         "upstream error on attempt 9",
@@ -221,7 +222,7 @@ fn test_weak_rate_limit_stays_immediate() {
     .expect("must detect");
     assert_eq!(hit.kind, "rate-limit");
     assert!(!hit.strong);
-    assert!(!super::super::types::needs_stuck_gate(&hit));
+    assert!(super::super::types::needs_stuck_gate(&hit));
     assert!(hit.excerpt.contains("429"));
 }
 

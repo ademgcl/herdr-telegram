@@ -2,7 +2,6 @@ pub mod client;
 pub mod errors;
 pub mod forum;
 pub mod messages;
-pub mod pins;
 pub mod polling;
 pub mod reaction;
 pub mod router;

@@ -64,11 +64,15 @@ fn confirm_due(armed: &mut SettledArm, status: &str, now: Instant) -> bool {
 
 /// Commit rule for one settle sample: `blocked` commits at once (input
 /// is needed NOW; blocked is never a mid-run transient, and the 750ms
-/// recheck upstream already filtered blips) while other settled kinds
-/// still prove [`SETTLED_CONFIRM_SECS`] persistence. Never arms the
-/// timer for blocked, so no stale arm survives it.
-fn settle_commit(status: &str, armed: &mut SettledArm, now: Instant) -> bool {
-    if status == "blocked" {
+/// recheck upstream already filtered blips), and so does a stuck fatal
+/// provider error (the run is over — waiting out 5s of same-kind
+/// persistence while the status flaps around the error would loop the
+/// watcher forever on a frozen "working" card; finalize arbitration
+/// still picks the error screen, so nothing healthy is cut short).
+/// Other settled kinds still prove [`SETTLED_CONFIRM_SECS`] persistence.
+/// Never arms the timer for instant commits, so no stale arm survives them.
+fn settle_commit(status: &str, armed: &mut SettledArm, now: Instant, fatal_stuck: bool) -> bool {
+    if fatal_stuck || status == "blocked" {
         *armed = None;
         return true;
     }
@@ -92,6 +96,7 @@ pub async fn settle_step(
     acc: &mut Vec<String>,
     retry_wait: &mut u64,
     settled_since: &mut SettledArm,
+    fatal_stuck: bool,
 ) -> SettleStep {
     // Collapse done↔idle flapping before committing to a report. A
     // failed recheck is unknown, not settled: clear the timer (the
@@ -122,7 +127,7 @@ pub async fn settle_step(
     // transient gap. Blocked skips the 5s gate — input is needed NOW and
     // blocked is never a mid-run transient (the 750ms recheck above
     // already filtered blips).
-    if !settle_commit(status, settled_since, Instant::now()) {
+    if !settle_commit(status, settled_since, Instant::now(), fatal_stuck) {
         return SettleStep::Continue;
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
@@ -246,15 +251,28 @@ mod tests {
         // still prove 5s same-kind persistence; flips re-arm.
         let t0 = Instant::now();
         let mut since: SettledArm = None;
-        assert!(settle_commit("blocked", &mut since, t0));
+        assert!(settle_commit("blocked", &mut since, t0, false));
         assert!(since.is_none(), "blocked must not arm the timer");
         // A pre-armed idle does not survive a blocked commit either.
-        assert!(!settle_commit("idle", &mut since, t0));
-        assert!(settle_commit("blocked", &mut since, t0));
+        assert!(!settle_commit("idle", &mut since, t0, false));
+        assert!(settle_commit("blocked", &mut since, t0, false));
         assert!(since.is_none(), "blocked must clear a stale arm");
-        assert!(!settle_commit("idle", &mut since, t0));
-        assert!(!settle_commit("idle", &mut since, t0 + Duration::from_secs(4)));
-        assert!(settle_commit("idle", &mut since, t0 + Duration::from_secs(5)));
-        assert!(!settle_commit("done", &mut since, t0 + Duration::from_secs(6)));
+        assert!(!settle_commit("idle", &mut since, t0, false));
+        assert!(!settle_commit("idle", &mut since, t0 + Duration::from_secs(4), false));
+        assert!(settle_commit("idle", &mut since, t0 + Duration::from_secs(5), false));
+        assert!(!settle_commit("done", &mut since, t0 + Duration::from_secs(6), false));
+    }
+
+    #[test]
+    fn test_settle_commit_fatal_stuck_bypasses_gate() {
+        // A stuck fatal provider error commits any settled kind at once
+        // (flap around the error must not loop the watcher on "working");
+        // healthy runs still prove persistence.
+        let t0 = Instant::now();
+        let mut since: SettledArm = None;
+        assert!(settle_commit("idle", &mut since, t0, true));
+        assert!(since.is_none(), "fatal bypass must not arm the timer");
+        assert!(settle_commit("done", &mut since, t0, true));
+        assert!(!settle_commit("idle", &mut since, t0, false));
     }
 }

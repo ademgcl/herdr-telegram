@@ -1,15 +1,16 @@
-//! Topic lifecycle: reopen/close/delete, shell badging, pin retirement,
-//! mapping removal, and full-identity snapshot/restore (reset path).
+//! Topic lifecycle: reopen/close/delete, shell badging, card
+//! retirement, mapping removal, and full-identity snapshot/restore
+//! (reset path).
 //! Split from `manager` (300-line file limit).
 use super::TopicManager;
 use crate::topics::names;
 
 /// Naming inputs for a reset mint, split after the tab-name refactor:
-/// the pinned card keeps the pane/agent title while the topic itself is
+/// the identity card keeps the pane/agent title while the topic itself is
 /// named from the tab core (watchdog parity via `naming_core` — one
 /// source, so reset can never reformat a verbatim the watchdog keeps).
 pub struct ResetNames<'a> {
-    /// Pinned identity card subtitle (pane label ‖ agent title).
+    /// Identity card subtitle (pane label ‖ agent title).
     pub card: Option<&'a str>,
     /// Tab-derived core; None → stable tag default (never verbatim,
     /// matching the watchdog which never preserves a bare tag).
@@ -180,18 +181,6 @@ impl TopicManager {
         self.storage.clear_except(kept);
     }
 
-    /// F3: Unpin all messages in a topic thread.
-    #[allow(dead_code)]
-    pub async fn unpin_all(&self, pane: &str) -> bool {
-        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
-            return true;
-        };
-        self.tg
-            .unpin_all_forum_topic_messages(forum, thread)
-            .await
-            .is_ok()
-    }
-
     /// F6: Record recent message ID for this pane.
     pub fn record_msg(&self, pane: &str, mid: i64) {
         self.storage.record_msg(pane, mid);
@@ -202,7 +191,7 @@ impl TopicManager {
         self.storage.get_recent_msgs(pane)
     }
 
-    /// F6 + F3: Paced reset for a single pane:
+    /// F6 + F2: Paced reset for a single pane:
     /// 1. Look up existing thread and recent messages before deletion.
     /// 2. Mint new topic on Telegram.
     /// 3. Record the new mapping immediately (insert-before-delete: a
@@ -211,7 +200,7 @@ impl TopicManager {
     ///    mapping stays valid).
     /// 4. Set context icon (or preserve user icon).
     /// 5. Copy recent messages from the old topic to the new topic (F6).
-    /// 6. Sweep any pins and pin fresh identity card (F3 + F2).
+    /// 6. Post fresh identity card (F2, never pinned).
     /// 7. Delete old topic on Telegram (if one existed).
     pub async fn reset_topic(
         &self,
@@ -274,14 +263,10 @@ impl TopicManager {
             let _ = self.tg.copy_msg(forum, forum, mid, Some(new_thread)).await;
         }
 
-        // F3 + F2: sweep pins and pin fresh identity card
-        let _ = self
-            .tg
-            .unpin_all_forum_topic_messages(forum, new_thread)
-            .await;
-        let card = crate::ui::build_pinned_card_text(kind, pane, space, status, names.card, branch);
+        // F2: fresh identity card, tracked by id for status edits —
+        // never pinned.
+        let card = crate::ui::build_identity_card_text(kind, pane, space, status, names.card, branch);
         if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await {
-            let _ = self.tg.pin_msg(forum, mid).await;
             self.storage.set_pin(pane, mid);
         }
 

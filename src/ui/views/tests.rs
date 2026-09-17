@@ -81,8 +81,8 @@ fn test_build_agent_card_text_with_and_without_branch() {
 }
 
 #[test]
-fn test_build_pinned_card_text() {
-    let full = build_pinned_card_text(
+fn test_build_identity_card_text() {
+    let full = build_identity_card_text(
         "claude",
         "w1:p2",
         "shop",
@@ -96,7 +96,7 @@ fn test_build_pinned_card_text() {
     assert!(full.contains("Branch: 🌿 feature/login"));
     assert!(full.contains("Status: 🔄 working"));
 
-    let minimal = build_pinned_card_text("shell", "w1:p3", "infra", "idle", None, None);
+    let minimal = build_identity_card_text("shell", "w1:p3", "infra", "idle", None, None);
     assert!(minimal.contains("📌 **shell** · `w1:p3`"));
     assert!(minimal.contains("Workspace: `infra`"));
     assert!(!minimal.contains("Title:"));

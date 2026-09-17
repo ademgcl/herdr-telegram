@@ -144,14 +144,11 @@ async fn main() -> Res<()> {
                     eprintln!("[telegram] WARNING: bot is NOT an admin in the forum!");
                 } else {
                     println!(
-                        "[telegram] bot permissions: manage_topics={}, pin_messages={}, delete_messages={}",
-                        perms.can_manage_topics, perms.can_pin_messages, perms.can_delete_messages
+                        "[telegram] bot permissions: manage_topics={}, delete_messages={}",
+                        perms.can_manage_topics, perms.can_delete_messages
                     );
                     if !perms.can_manage_topics {
                         eprintln!("[telegram] WARNING: bot lacks 'can_manage_topics' admin right!");
-                    }
-                    if !perms.can_pin_messages {
-                        eprintln!("[telegram] WARNING: bot lacks 'can_pin_messages' admin right!");
                     }
                 }
             }

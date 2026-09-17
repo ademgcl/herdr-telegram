@@ -173,7 +173,7 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
          Pane Label:  {}\n\
          Workspace:   {ws_name}\n\
          Agent Kind:  {} (suffix {})\n\
-         Term Title:  {term_title} (pinned card only)\n\
+         Term Title:  {term_title} (identity card only)\n\
          Status:      {}\n\
          Recent Msgs: {:?}\n\
          ==============================\n",

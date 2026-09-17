@@ -21,13 +21,16 @@ pub const ERROR_KIND: &str = "error";
 
 /// Kinds that buzz mid-run only when stuck (transient blips recover on
 /// their own — e.g. `Provider response headers timed out … [retrying
-/// attempt #N]` succeeds on attempt #2). `rate-limit`/STRONG-`auth`
-/// still buzz immediately: quota stalls never self-heal and specific
-/// auth denials (`permission_denied`…) persist until the owner fixes
-/// login. WEAK `auth` (common words like `session expired` in prose or
-/// log dumps) is stuck-gated too — see [`needs_stuck_gate`].
+/// attempt #N]` succeeds on attempt #2, and transient 429/auto-retry
+/// flashes clear long before the gate). `rate-limit` joins the gate:
+/// quota-looking flashes that self-heal stay silent; only a banner that
+/// persists a full stuck window pages. STRONG-`auth` still buzzes
+/// immediately: specific denials (`permission_denied`…) persist until
+/// the owner fixes login. WEAK `auth` (common words like
+/// `session expired` in prose or log dumps) is stuck-gated too — see
+/// [`needs_stuck_gate`].
 pub fn is_stuck_gated(kind: &str) -> bool {
-    kind == ERROR_KIND || kind == "provider"
+    kind == ERROR_KIND || kind == "provider" || kind == "rate-limit"
 }
 
 /// Per-hit buzz gate: kind-gated kinds plus WEAK `auth`. A WEAK auth
