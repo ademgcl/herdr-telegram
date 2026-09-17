@@ -132,6 +132,9 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
                 None,
             )
             .await;
+            // Release the claim first: post_card refuses while blockop
+            // is held, and this tap already landed (nothing left to own).
+            drop(_op);
             post_card(s, chat, thread, pane).await;
         }
         TapResult::Unchanged => {

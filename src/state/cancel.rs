@@ -21,18 +21,19 @@ impl State {
         // Typing: ownership-checked (a live successor keeps its task).
         self.stop_typing_unless_owned(pane).await;
         let Some(job) = cur else {
-            // No job at snapshot: a successor inserted after still wins —
-            // leave it alone. Otherwise clear orphan/shell intent so a
-            // /cancel suppresses a settling shell card.
+            // No job: a successor inserted after still wins — leave it
+            // alone; otherwise clear orphan/shell intent (suppresses cards).
             if self.jobs.lock().await.contains_key(pane) {
                 return false;
             }
-            self.clear_pending(pane).await;
+            // A cleared shell pending is a real cancel (callers ack on bool).
+            // Single atomic take: no check-then-clear window for a racer.
+            let had_pending = self.clear_pending(pane).await;
             // No job: disarm waiters/debounce/episode (stale arms stay dead).
             self.clear_waiters(pane).await;
             self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
-            return false;
+            return had_pending;
         };
         let removed = Self::remove_if_same(&self.jobs, pane, &job).await;
         if !removed {
@@ -46,8 +47,8 @@ impl State {
         // Disarm a pending settle debounce (armed card must not land after).
         self.debounce.lock().await.remove(pane);
         job.mark_stopped();
-        // Bump the epoch: an in-flight finalize aborts at its next
-        // checkpoint instead of posting into a cancelled world.
+        // Bump the epoch: an in-flight finalize aborts at its next checkpoint
+        // instead of posting into a cancelled world.
         job.epoch.fetch_add(1, Ordering::Relaxed);
         job.cancel.notify_waiters();
         true

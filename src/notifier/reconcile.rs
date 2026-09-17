@@ -168,23 +168,29 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                             format!("agent quit to shell — last output:\n{tail}")
                                         };
                                         if report(s, pp.chat, pp.thread, &pane, &msg).await {
-                                            s.status
-                                                .lock()
-                                                .await
-                                                .insert(pane.clone(), "shell".to_string());
+                                            // CAS: an observation landing during
+                                            // the RPCs wins — never clobber it.
+                                            let mut st = s.status.lock().await;
+                                            if st.get(&pane).map(|v| v == "shell").unwrap_or(false) {
+                                                st.insert(pane.clone(), "shell".to_string());
+                                            }
                                         } else {
                                             // Intent was already cancelled above:
                                             // keep it so boot-recover retries
                                             // the notice instead of losing it.
-                                            // Restore the pre-claim status so
-                                            // the next tick retries the retire
-                                            // instead of going quiet.
-                                            match prev_status {
-                                                Some(p) => {
-                                                    s.status.lock().await.insert(pane.clone(), p);
-                                                }
-                                                None => {
-                                                    s.status.lock().await.remove(&pane);
+                                            // CAS restore so the next tick
+                                            // retries instead of going quiet.
+                                            {
+                                                let mut st = s.status.lock().await;
+                                                if st.get(&pane).map(|v| v == "shell").unwrap_or(false) {
+                                                    match prev_status {
+                                                        Some(p) => {
+                                                            st.insert(pane.clone(), p);
+                                                        }
+                                                        None => {
+                                                            st.remove(&pane);
+                                                        }
+                                                    }
                                                 }
                                             }
                                             s.remember_pending(

@@ -115,7 +115,13 @@ pub(crate) async fn handle_bare_prompt(
                 .await;
             }
             Err(_) => {
-                super::dialog::send_blocked_card(s, chat, None, &row.pane).await;
+                // A tap in flight owns the card: never double-post over it.
+                if s.blockop.lock().await.contains(&row.pane) {
+                    s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None)
+                        .await;
+                } else {
+                    super::dialog::send_blocked_card(s, chat, None, &row.pane).await;
+                }
             }
         }
         return;

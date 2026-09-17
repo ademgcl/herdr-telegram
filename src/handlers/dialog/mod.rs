@@ -102,8 +102,10 @@ async fn send_with(
     pane: &str,
     screen: &[String],
 ) -> bool {
-    let q = waiting_lines(screen);
-    let options = parse_options(&q.lines().map(str::to_string).collect::<Vec<_>>());
+    // Same source as taps (live_card Rule 5): options off the raw
+    // winner lines — cleaned text drops ❯-rows and would fall back
+    // to Confirm while the tap path shows real options.
+    let (q, options) = live_card(screen);
     let mid =
         s.tg.send_msg_with_effect(
             chat,

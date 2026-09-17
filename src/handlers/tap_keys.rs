@@ -24,6 +24,18 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
     // narrower turned-over dialog. Unreadable screens stay permissive:
     // outage must not brick real buttons.
     let before = read_screen_visible(socket, pane, 30).await;
+    // Winner-segment basis (mirrors live_card): a stale numbered list
+    // in scrollback must not flip the branch or the bounds check.
+    let win_raw: Vec<String> = if before.is_empty() {
+        Vec::new()
+    } else {
+        let lines: Vec<String> = before
+            .iter()
+            .map(|l| crate::jobs::filter::deframe(l))
+            .collect();
+        crate::jobs::segment::dialog_block(&lines).1
+    };
+    let probe = if win_raw.is_empty() { &before } else { &win_raw };
     let (nav, confirm, label): (Vec<&str>, Vec<&str>, String) =
         if let Some(rest) = action.strip_prefix("opt") {
             match rest.parse::<usize>() {
@@ -34,12 +46,12 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                 // indices are crafted callbacks, never real buttons.
                 Ok(i) if i < 4 => {
                     if !before.is_empty() {
-                        let live = crate::handlers::dialog::parse_options(&before);
+                        let live = crate::handlers::dialog::parse_options(probe);
                         if !live.is_empty() && i >= live.len() {
                             return TapCall::Unknown;
                         }
                     }
-                    let (full, confirm) = if crate::handlers::dialog::has_numbered_options(&before) {
+                    let (full, confirm) = if crate::handlers::dialog::has_numbered_options(probe) {
                         let num = match i {
                             0 => "1",
                             1 => "2",
@@ -64,8 +76,8 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                     // / Right would land in live work. (B:type arming never
                     // reaches here — it sends no keys.)
                     if !before.is_empty() {
-                        let live = crate::handlers::dialog::parse_options(&before);
-                        let sig = crate::handlers::dialog::dialog_sig(&before);
+                        let live = crate::handlers::dialog::parse_options(probe);
+                        let sig = crate::handlers::dialog::dialog_sig(probe);
                         if live.is_empty() && !sig.contains('?') {
                             return TapCall::Unknown;
                         }

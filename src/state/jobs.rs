@@ -33,15 +33,17 @@ impl State {
         persist::save_file(&persist::store_path(), &snap);
     }
 
-    pub async fn clear_pending(&self, pane: &str) {
+    /// Returns true when a pending intent was actually removed.
+    pub async fn clear_pending(&self, pane: &str) -> bool {
         let snap = {
             let mut map = self.pending.lock().await;
             if map.remove(pane).is_none() {
-                return;
+                return false;
             }
             map.clone()
         };
         persist::save_file(&persist::store_path(), &snap);
+        true
     }
 
     pub async fn clear_all_pending(&self) {

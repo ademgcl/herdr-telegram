@@ -282,7 +282,14 @@ pub(crate) async fn handle_topic_agent_message(
                 enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
             }
             Err(_) => {
-                super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await;
+                // A tap in flight owns the card: never double-post over
+                // it — the waiter stays for a beat-later retry.
+                if s.blockop.lock().await.contains(pane) {
+                    s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None)
+                        .await;
+                } else {
+                    super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await;
+                }
             }
         }
         return;
