@@ -51,6 +51,15 @@ pub fn naming_core(tab: Option<&str>, tag: &str, multi: bool) -> Option<String> 
     })
 }
 
+/// Watchdog-parity core: labeled splits use the pane label, else tab/tag.
+/// Single source for watchdog, reset, and inspect so they never drift.
+pub fn title_core_for(tab: Option<&str>, tag: &str, multi: bool, pane: Option<&str>) -> Option<String> {
+    if multi && let Some(pl) = pane.map(str::trim).filter(|l| !l.is_empty()) {
+        return Some(pl.to_string());
+    }
+    naming_core(tab, tag, multi)
+}
+
 /// Verbatim-preservation predicate: a stored topic title that already
 /// equals the herdr tab name (trim-compared) means a Telegram native
 /// rename just synced both sides — the watchdog must keep it exactly,
@@ -62,9 +71,15 @@ pub fn stored_matches_label(stored: Option<&str>, label: &str) -> bool {
 /// Chrome-tolerant keep predicate for split panes (stored raw vs herdr
 /// pane label): stored is the last-visible Telegram title, so shed
 /// Format-B chrome via `topic_core` before comparing to the label.
+/// Comparison is whitespace-collapsed + case-blind (`[TG] API · O`
+/// covers `api`), and `topic_core` sheds ANY pasted code (stale or
+/// current), so kind flips preserve the custom instead of discarding it.
 pub fn stored_covers_label(stored: Option<&str>, space: &str, kind: &str, label: &str) -> bool {
+    fn norm(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    }
     stored
-        .map(|s| crate::topics::names::topic_core(s, space, kind).trim() == label.trim())
+        .map(|s| norm(&crate::topics::names::topic_core(s, space, kind)) == norm(label))
         .unwrap_or(false)
 }
 
@@ -75,11 +90,12 @@ pub fn kind_bypass(last: Option<&str>, cur: &str) -> bool {
 }
 
 /// Reset title decision (single call-site for every reset loop, so the
-/// predicate can never drift): a pre-reset stored title equal to the
-/// tab core means the user set it verbatim — re-apply raw, else format.
-/// Split tabs re-suffix a stored title covering the pane label (fresh
-/// kind code, custom preserved — never the tab core, which would orphan
-/// it). Pure so unit-tested.
+/// predicate can never drift): 1:1 Format-B always — even a pre-reset
+/// stored title equal to the tab core re-renders with space + fresh kind
+/// code (user text preserved, never returned bare). Split tabs re-suffix
+/// a stored title covering the pane label (fresh kind code, custom
+/// preserved — never the tab core, which would orphan it). Pure so
+/// unit-tested.
 pub fn reset_desired_title(
     pre: Option<&str>,
     space: &str,
@@ -89,7 +105,7 @@ pub fn reset_desired_title(
     pane_label: Option<&str>,
 ) -> String {
     if !multi && stored_matches_label(pre, label) {
-        label.trim().to_string()
+        crate::topics::names::format_title(space, label, kind)
     } else if multi
         && let Some(pl) = pane_label.map(str::trim).filter(|l| !l.is_empty())
         && stored_covers_label(pre, space, kind, pl)
@@ -172,12 +188,20 @@ mod tests {
             "main"
         ));
         assert!(!stored_covers_label(None, "tg", "opencode", "main"));
-        // Old suffix under a new kind never covers (forces re-suffix).
-        assert!(!stored_covers_label(
+        // Stale suffix under a new kind still covers (custom preserved,
+        // watchdog re-suffixes with the fresh code).
+        assert!(stored_covers_label(
             Some("[tg] main · o"),
             "tg",
             "shell",
             "main"
+        ));
+        // Case-blind + whitespace-collapsed cover.
+        assert!(stored_covers_label(
+            Some("[TG]  API · O"),
+            "tg",
+            "opencode",
+            "api"
         ));
     }
 
@@ -199,14 +223,15 @@ mod tests {
 
     #[test]
     fn test_reset_desired_title_verbatim_or_formatted() {
-        // Verbatim when pre-reset stored equals the tab core (single only).
+        // 1:1 Format-B always: even a verbatim pre-reset custom gains
+        // space + fresh kind code (user text preserved, never bare).
         assert_eq!(
             reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false, None),
-            "My Title"
+            "[tg] My Title · o"
         );
         assert_eq!(
             reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false, None),
-            "My Title"
+            "[tg] My Title · o"
         );
         // Split tab cores format — a stored title covering the pane
         // label re-suffixes it (custom preserved, fresh kind code).

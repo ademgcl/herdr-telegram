@@ -15,10 +15,10 @@ fn test_title_format() {
         format_title("shop", "shop-backend", "claude"),
         "[shop] shop-backend · c"
     );
-    // Legacy bracketed titles freeze verbatim (stable: no rewrite loop).
+    // Pasted rendered chrome unwraps and re-syncs to short (never frozen).
     assert_eq!(
         format_title("shop", "[shop] shop-backend · claude", "claude"),
-        "[shop] shop-backend · claude"
+        "[shop] shop-backend · c"
     );
     assert_eq!(
         format_title("tg", "o2 · tg", "opencode"),
@@ -75,6 +75,15 @@ fn test_title_format() {
         "[shop] shop-backend · sh"
     );
     assert_eq!(format_title("ip", "ip: shell", "shell"), "[ip] ip: shell · sh");
+    // Unicode after alt seps never panics nor sheds (codes are ASCII).
+    assert_eq!(format_title("tg", "foo | é", "opencode"), "[tg] foo | é · o");
+    assert_eq!(format_title("tg", "main | é", "opencode"), "[tg] main | é · o");
+    // Alt spacing is consistent (single + double spaces shed alike).
+    assert_eq!(format_title("tg", "main | q", "opencode"), "[tg] main · o");
+    assert_eq!(format_title("tg", "main  |  q", "opencode"), "[tg] main · o");
+    // Bare `$` is part of the name; only `· $` sheds.
+    assert_eq!(format_title("tg", "main$", "opencode"), "[tg] main$ · o");
+    assert_eq!(format_title("tg", "main · $", "opencode"), "[tg] main · o");
 }
 
 #[test]

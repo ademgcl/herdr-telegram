@@ -8,7 +8,7 @@
 //! `pane.close`, `rename_pane`, or `send_keys`/`send_input`.
 
 use crate::{
-    handlers::title_rules::{naming_core, tab_census, tab_of},
+    handlers::title_rules::{tab_census, tab_of, title_core_for},
     herdr::{
         client::{list_agents, list_panes, list_workspaces},
         labels::{facts_contradict, pane_facts, tab_labels},
@@ -198,7 +198,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         s.cancel_jobs_for(&r.pane).await;
         let (tab, multi) = tab_of(&facts, &tabs, &census, &r.pane);
         let tag = s.topics.tag_for(&r.pane, &r.kind);
-        let core = naming_core(tab, &tag, multi);
+        let pane_label = facts.get(&r.pane).and_then(|f| f.label.as_deref());
+        let core = title_core_for(tab, &tag, multi, pane_label);
         let names = ResetNames {
             card: raw_title,
             core: core.as_deref(),
@@ -232,7 +233,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             s.cancel_jobs_for(&pane).await;
             let (tab, multi) = tab_of(&facts, &tabs, &census, &pane);
             let tag = s.topics.tag_for(&pane, "shell");
-            let core = naming_core(tab, &tag, multi);
+            let pane_label = facts.get(&pane).and_then(|f| f.label.as_deref());
+            let core = title_core_for(tab, &tag, multi, pane_label);
             let names = ResetNames {
                 card: raw_title,
                 core: core.as_deref(),

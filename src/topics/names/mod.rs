@@ -5,6 +5,7 @@
 //! set once at creation); live status surfaces in cards and the typing
 //! indicator (plus one unpinned identity card per topic).
 
+mod chrome;
 mod core;
 mod format;
 
@@ -13,9 +14,10 @@ pub use format::format_title;
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown
-/// kinds fall back to their first two alphanumerics.
+/// kinds fall back to their first two alphanumerics. Case-blind: herdr
+/// kinds are lowercase but callers may pass `SHELL`/`Opencode`.
 pub fn code(kind: &str) -> String {
-    match kind {
+    match kind.trim().to_lowercase().as_str() {
         "opencode" => "o",
         "claude" => "c",
         "codex" => "x",

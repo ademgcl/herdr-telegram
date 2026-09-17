@@ -1,7 +1,7 @@
 //! Single topic reset: deletes a single pane/topic on Telegram and recreates
 //! it fresh (preserving queue messages and updating mappings).
 use crate::{
-    handlers::title_rules::{naming_core, tab_census, tab_of},
+    handlers::title_rules::{tab_census, tab_of, title_core_for},
     herdr::{
         client::{get_agent, list_workspaces},
         labels::{pane_facts, tab_labels},
@@ -106,10 +106,12 @@ pub async fn run_single_topic_reset(
     let space = ws_label(&spaces, ws);
 
     // Same tab-core source as the watchdog: a verbatim the watchdog
-    // keeps survives the single-topic migration too.
+    // keeps survives the single-topic migration too (labeled splits
+    // use the pane label — `title_core_for` parity, no flap).
     let (tab, multi) = tab_of(&facts, &tabs, &census, &pane);
     let tag = s.topics.tag_for(&pane, &kind);
-    let core = naming_core(tab, &tag, multi);
+    let pane_label = facts.get(&pane).and_then(|f| f.label.as_deref());
+    let core = title_core_for(tab, &tag, multi, pane_label);
     let names = ResetNames {
         card: raw_title.as_deref(),
         core: core.as_deref(),

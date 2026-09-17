@@ -73,7 +73,7 @@ pub async fn handle_update(s: AppState, u: &Value) {
     }
 
     // User customized topic icon in Telegram: persist so bot never overwrites it.
-    if let Some((thread, icon)) = crate::handlers::titles::parse_topic_icon_edit(msg)
+    if let Some((thread, icon)) = crate::handlers::topic_edit::parse_topic_icon_edit(msg)
         && let Some(pane) = s.topics.pane_of_thread(thread)
     {
         println!("[topics] user customized icon for {pane}: {icon}");
@@ -84,7 +84,7 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // name back to the herdr pane label. Must run BEFORE the empty-text
     // return below. No stale gate: replays are idempotent via the
     // stored-title compare, and a redelivered rename heals the down-window.
-    if let Some((thread, name)) = crate::handlers::titles::parse_topic_edit(msg) {
+    if let Some((thread, name)) = crate::handlers::topic_edit::parse_topic_edit(msg) {
         if (chat_type == "supergroup" || chat_type == "group") && s.cfg.forum == Some(chat_id) {
             crate::handlers::titles::adopt_topic_title(s, chat_id, Some(thread), &name).await;
         }

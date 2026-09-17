@@ -34,6 +34,7 @@ pub mod tap_keys;
 pub mod target;
 pub mod title_rules;
 pub mod titles;
+pub mod topic_edit;
 
 pub use callback::handle_callback;
 pub use dm::handle_dm_message;

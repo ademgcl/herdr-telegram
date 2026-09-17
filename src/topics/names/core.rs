@@ -1,61 +1,48 @@
 //! Reverse of Format-B titles: recover the herdr tab/pane core from a
 //! Telegram topic name that may carry rendering chrome. Split from
 //! `format` (300-line file limit).
+use super::chrome::{shed_once, short_space_for, strip_space_prefix, trim_stray};
+use super::format::strip_leading_word;
 use super::code;
-use super::format::{strip_leading_word, strip_suffix_ci};
 
 #[cfg(test)]
 #[path = "core_tests.rs"]
 mod tests;
-
-/// One leading `[space]` prefix, case-blind, ONLY when the brackets name
-/// this space (full label or the displayed 20-char truncation) — custom
-/// `[bracket]` names never strip. Returns the remainder or `None`.
-/// `]` is ASCII so the slice boundary is always safe.
-fn strip_space_prefix<'a>(body: &'a str, space: &str, short: &str) -> Option<&'a str> {
-    let t = body.trim_start();
-    let inner = t.strip_prefix('[')?;
-    let close = inner.find(']')?;
-    let named = inner[..close].trim();
-    if named.is_empty() {
-        return None;
-    }
-    if named.eq_ignore_ascii_case(space.trim()) || named.eq_ignore_ascii_case(short) {
-        Some(inner[close + 1..].trim_start())
-    } else {
-        None
-    }
-}
 
 /// Recover the herdr tab/pane core from a Telegram topic name that may
 /// carry Format-B chrome — users edit the rendered title, so renames
 /// arrive decorated (`[space] main · o` must map back to `main`;
 /// herdr already shows the space). Suffix sheds + head-word collapse
 /// mirror the forward pass, so `topic_core(format_title(s, l, k)) == l`
-/// for plain labels. Legacy full-name suffixes (`· opencode` era) shed
-/// too, so pre-migration titles map back the same way. A leading
-/// `[bracket]` that does NOT name this space is a custom name: returned
-/// verbatim (the forward pass freezes such titles too, so both sides
-/// agree). Never empty: falls back to the trimmed input.
+/// for plain labels. 1:1 rule: space prefix (tolerant: case-blind,
+/// whitespace-collapsed, truncated) + ANY pasted code chrome shed
+/// (current, stale, `· agent`, `· $`, `· {space}`, legacy full kinds,
+/// `| : / -` spaced variants, dot variants without spaces); custom
+/// `[bracket]` text survives as core (it gains the wrap forward).
+/// Unclosed `[tg main` drops the stray bracket instead of freezing.
+/// Never empty: falls back to the trimmed input.
 pub fn topic_core(raw: &str, space: &str, kind: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return trimmed.to_string();
     }
     let sp = space.trim();
-    let short: String = if sp.is_empty() || sp == "?" {
-        "ws".to_string()
-    } else {
-        sp.chars().take(20).collect()
-    };
+    let short = short_space_for(sp);
     let mut body = match strip_space_prefix(trimmed, sp, &short) {
-        Some(rest) => rest,
-        // Custom `[bracket]` name, not this space: verbatim, exactly
-        // like the forward freeze — suffixes are part of the name.
-        None if trimmed.starts_with('[') => return trimmed.to_string(),
-        None => trimmed,
+        Some(rest) if !rest.trim().is_empty() => rest.trim(),
+        // Custom `[bracket]` (not this space): keep whole as core so a
+        // pasted ` · code` still sheds below; unclosed `[tg main`
+        // drops the stray `[` into the normal path below.
+        _ if trimmed.starts_with('[') && !trimmed.contains(']') => {
+            let b = trimmed.trim_start_matches(['[', ' ']).trim();
+            if b.is_empty() {
+                return trimmed.to_string();
+            }
+            b
+        }
+        _ => trimmed,
     };
-    if body.is_empty() {
+    if body.trim().is_empty() {
         return trimmed.to_string();
     }
     let kind_full = kind.trim().to_lowercase();
@@ -64,43 +51,17 @@ pub fn topic_core(raw: &str, space: &str, kind: &str) -> String {
         "" | "?" => "agent".to_string(),
         k => code(k),
     };
-    // Same shed order as the forward pass, to a fixed point (stacked
-    // pastes shed fully); each shed keeps a non-empty core, so the loop
-    // strictly shrinks and always terminates.
+    // Tolerant shed to a fixed point (stacked pastes, stale codes shed
+    // fully); each shed keeps a non-empty core, so the loop strictly
+    // shrinks and always terminates. `let`-chains need Rust 2024.
+    body = trim_stray(body);
     loop {
         let len = body.len();
-        let short_suffix = format!(" · {short_agent}");
-        if let Some(s) = strip_suffix_ci(body, &short_suffix)
-            && !s.is_empty()
+        body = trim_stray(body);
+        if let Some(s) = shed_once(body, &short, &kind_full, &short_agent)
+            && !s.trim().is_empty()
         {
-            body = s;
-        }
-        let space_suffix = format!(" · {short}");
-        if let Some(s) = strip_suffix_ci(body, &space_suffix)
-            && !s.is_empty()
-        {
-            body = s;
-        }
-        // Legacy full-kind suffix (`· opencode` era → short now).
-        if !kind_full.is_empty()
-            && kind_full != "?"
-            && kind_full != short_agent
-            && let Some(s) = strip_suffix_ci(body, &format!(" · {kind_full}"))
-            && !s.is_empty()
-        {
-            body = s;
-        }
-        // Legacy `· agent` (unknown-era titles re-labeled to a known kind).
-        if short_agent != "agent"
-            && let Some(s) = strip_suffix_ci(body, " · agent")
-            && !s.is_empty()
-        {
-            body = s;
-        }
-        if let Some(s) = strip_suffix_ci(body, " · $")
-            && !s.is_empty()
-        {
-            body = s;
+            body = s.trim();
         }
         if body.len() == len {
             break;

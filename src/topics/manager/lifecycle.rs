@@ -214,13 +214,10 @@ impl TopicManager {
         let forum = self.forum_id?;
         let old_thread = self.storage.get_thread(pane);
         let tag = self.storage.assign_tag(pane, kind);
-        // Verbatim user titles must survive reset: a stored title equal
-        // to the TAB core means a native rename synced both sides —
-        // re-apply raw instead of reformatting ("My Title" → "[space]
-        // My Title · o" would look like the bot reverting the rename).
-        // Split tabs additionally keep pane-label renames (`names.card`
-        // carries the label when set; a title-fallback coincidence
-        // self-heals on the next watchdog tick). Same `naming_core`
+        // 1:1 Format-B always: user text survives reset re-wrapped
+        // with space + fresh kind code (never bare). Split tabs keep
+        // pane-label renames (`names.core` already carries the label
+        // when set — watchdog parity, no flap). Same `naming_core`
         // source as the watchdog: no drift.
         let pre = self.storage.get_title(pane);
         let name = match names.core {

@@ -3,7 +3,7 @@
 //! Pure-dispatch branches (ping/unknown/usage) are unit-tested; success
 //! paths need a live herdr socket.
 use crate::{
-    handlers::{reset::run_single_topic_reset, title_rules::naming_core},
+    handlers::{reset::run_single_topic_reset, title_rules::title_core_for},
     herdr::{
         client::{get_agent, list_panes, list_workspaces},
         labels::{pane_facts, tab_labels},
@@ -150,7 +150,7 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
         && tab_id != "-"
         && facts.values().filter(|f| f.tab_id == tab_id).count() > 1;
     let tag_str = tag.as_deref().unwrap_or("?");
-    let core = naming_core(
+    let core = title_core_for(
         if tab_label == "-" {
             None
         } else {
@@ -158,6 +158,7 @@ async fn inspect_pane(s: &AppState, pane: &str) -> String {
         },
         tag_str,
         multi,
+        pf.and_then(|f| f.label.as_deref()),
     )
     .unwrap_or_else(|| tag_str.to_string());
     let desired = format_title(space, &core, kind);

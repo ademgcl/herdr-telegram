@@ -50,19 +50,11 @@ impl TopicManager {
 
     /// herdr→telegram half: rename the topic when the pane's desired
     /// title drifted. Silent; stores only on success so failures retry
-    /// on the next watchdog tick.
+    /// on the next watchdog tick. No time debounce: `stored==desired`
+    /// already suppresses echoes, and a time gate would defer a real
+    /// herdr rename behind a Telegram adopt (late reflection).
     pub async fn sync_title(&self, pane: &str, desired: &str) {
         if self.storage.get_title(pane).as_deref() == Some(desired) {
-            return;
-        }
-        if let Some(t) = self
-            .last_title_write
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(pane)
-            && t.elapsed() < std::time::Duration::from_secs(5)
-        {
-            println!("[topics] skip rename {pane}: recent title write");
             return;
         }
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {

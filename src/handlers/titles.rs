@@ -7,18 +7,18 @@
 //! back to the stable tag (`[{space}] {tag} · {code}`, e.g. `[tg] o2 · o`).
 //! Pane labels are written only for split-tab user renames (a shared tab
 //! can't disambiguate); the watchdog formats everything else from the
-//! tab core, preserving user-set names verbatim on both paths.
-//! Telegram→herdr renames shed Format-B chrome first (`[space]` prefix,
-//! `· agent` suffix via [`names::topic_core`]): users edit the rendered
-//! title, and herdr already shows the space — only the bare core is
-//! written. Both paths store the raw text (stored==visible, so the
-//! probe re-asserts what Telegram shows): single-pane bare renames
-//! verbatim-keep, chrome pastes converge via one format rename;
-//! split-pane keeps chrome-tolerantly via `stored_covers_label`.
+//! tab core. 1:1 Format-B always: every topic shows
+//! `[space] label · code`, so a Telegram rename to `Custom` converges to
+//! `[space] Custom · code` (space + agent code preserved, promptly —
+//! adopt re-asserts the formatted title right after the herdr rename,
+//! the watchdog converges herdr edits next tick).
+//! Telegram→herdr renames shed Format-B chrome tolerantly
+//! (`[space]` prefix case-blind/collapsed/truncated, any `·•⋅` code,
+//! `| : / -` spaced variants, stale codes — see [`names`]): users edit
+//! the rendered title, and herdr already shows the space — only the bare
+//! core is written.
 use crate::{
-    handlers::title_rules::{
-        naming_core, stored_covers_label, stored_matches_label, tab_census, tab_of,
-    },
+    handlers::title_rules::{stored_covers_label, stored_matches_label, tab_census, tab_of, title_core_for},
     herdr::{
         client::{list_agents, list_workspaces},
         labels::{pane_facts, rename_pane, rename_tab, tab_labels},
@@ -27,41 +27,10 @@ use crate::{
     topics::names,
     ui::ws_label,
 };
-use serde_json::Value;
 use std::collections::HashMap;
 
 /// Shared rename-failure text (fail-closed adopt paths).
 const STATE_READ_ERR: &str = "⚠️ rename failed: could not read herdr state — try again";
-
-/// Pure extract of a native topic rename: (thread, new name). Service
-/// messages carry no text, so the router must branch on this BEFORE its
-/// empty-text return (that ordering bug ate every rename once already).
-pub fn parse_topic_edit(msg: &Value) -> Option<(i64, String)> {
-    msg.get("forum_topic_edited")?;
-    let thread = msg["message_thread_id"].as_i64()?;
-    let name = msg["forum_topic_edited"]["name"]
-        .as_str()?
-        .trim()
-        .to_string();
-    if name.is_empty() {
-        return None;
-    }
-    Some((thread, name))
-}
-
-/// Extract user-edited topic icon custom-emoji ID from a `forum_topic_edited` service msg.
-pub fn parse_topic_icon_edit(msg: &Value) -> Option<(i64, String)> {
-    msg.get("forum_topic_edited")?;
-    let thread = msg["message_thread_id"].as_i64()?;
-    let icon = msg["forum_topic_edited"]["icon_custom_emoji_id"]
-        .as_str()?
-        .trim()
-        .to_string();
-    if icon.is_empty() {
-        return None;
-    }
-    Some((thread, icon))
-}
 
 /// Watchdog half: every mapped live pane's topic shows its herdr TAB
 /// name (or the tag default when the tab has none). Panes gone from
@@ -128,44 +97,28 @@ pub async fn sync_titles_with(
     let census = tab_census(facts);
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
-        let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
-        let kind_flip = s.topics.kind_changed(pane, kind);
+        // Degraded `list_workspaces`: an unmapped id would render as the
+        // raw id (`[w8] …`) — skip the pane, never corrupt the title.
+        if !spaces.iter().any(|w| w.id == f.ws) {
+            continue;
+        }
+        // Shells are invisible to `agent.list`: a missing row is shell
+        // ONLY when the last seen kind agrees — otherwise it is a
+        // transient dropout, and defaulting would flip `· o` → `· sh`.
+        let kind = match kind_of.get(pane.as_str()).copied() {
+            Some(k) => k,
+            None if s.topics.kind_changed(pane, "shell") => continue,
+            None => "shell",
+        };
         s.topics.note_kind(pane, kind);
         let space = ws_label(spaces, &f.ws);
         let (tab, multi) = tab_of(facts, tabs, &census, pane);
-        // Verbatim preservation (merged upstream): a stored title equal to
-        // the tab name means a Telegram native rename just synced both
-        // sides — keep it exactly, never reformat (single-pane; the
-        // split pane-label rule follows right below).
-        if !multi
-            && !kind_flip
-            && let Some(t) = tab
-            && stored_matches_label(s.topics.topic_title(pane).as_deref(), t)
-        {
-            continue;
-        }
-        // Split tabs share one tab label, so pane-level renames live in
-        // the pane label: a stored title equal to the pane's herdr label
-        // is user-set — keep it exactly like single-pane verbatim above,
-        // or the format below reverts it every tick.
-        if multi
-            && !kind_flip
-            && let Some(pl) = f.label.as_deref()
-            && !pl.trim().is_empty()
-            && stored_covers_label(s.topics.topic_title(pane).as_deref(), space, kind, pl)
-        {
-            continue;
-        }
         let tag = s.topics.tag_for(pane, kind);
-        // One naming source for watchdog and reset (`naming_core`): the
-        // two can never drift again. None → tag default, which the
+        // One naming source for watchdog and reset (`title_core_for`):
+        // the two can never drift again. None → tag default, which the
         // watchdog never preserves verbatim.
         let pane_label = f.label.as_deref().filter(|l| !l.trim().is_empty());
-        let mut core = naming_core(tab, &tag, multi);
-        // Labeled splits render the pane label (flips re-suffix, relabels converge).
-        if multi && let Some(pl) = pane_label {
-            core = Some(pl.to_string());
-        }
+        let core = title_core_for(tab, &tag, multi, pane_label);
         let formatted = names::format_title(space, core.as_deref().unwrap_or(&tag), kind);
         s.topics.sync_title(pane, &formatted).await;
     }
@@ -180,9 +133,9 @@ pub async fn sync_titles_with(
 /// echoes match the stored title and skip.
 pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name: &str) {
     // Reset owns migration: a native rename mid-reset would mutate herdr
-    // during the read-only window and fight re-sync. Dropped:
-    // reset rebuilds from herdr, re-apply post-reset.
+    // during the read-only window and fight re-sync.
     if crate::handlers::reset::is_resetting() {
+        s.tg.send_msg(chat, thread, "⚠️ reset in progress — rename again post-reset", None).await;
         return;
     }
     let Some(th) = thread else { return };
@@ -196,7 +149,8 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     }
     // Single-pane tab: the user-visible name is the tab — rename it so
     // herdr's tab bar follows Telegram. Split tabs share one tab label,
-    // so rename only the pane there.
+    // so rename only the pane there. census via shared helper would need
+    // tabs; the hand-count below matches `tab_census` on non-empty ids.
     let facts = pane_facts(&s.cfg.socket).await.ok();
     let tab_id = facts
         .as_ref()
@@ -214,10 +168,11 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
         return;
     }
     // Shed Format-B chrome users inherit from the rendered title
-    // (`[space] main · opencode` → `main`): herdr shows the space
-    // already, so only the bare core is written. Fail-closed: unreadable
-    // kind/space aborts with ⚠️ above (never a blind chrome write).
-    let (core, kind) = match (
+    // (`[space] main · o` → `main`): herdr shows the space already, so
+    // only the bare core is written. Fail-closed: unreadable/unmapped
+    // kind/space aborts with ⚠️ (never a blind chrome write); a missing
+    // agent row is shell only when the last kind agrees, else dropout.
+    let (core, kind, space) = match (
         list_workspaces(&s.cfg.socket).await.ok(),
         list_agents(&s.cfg.socket).await.ok(),
     ) {
@@ -227,22 +182,50 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                 .and_then(|m| m.get(&pane))
                 .map(|f| f.ws.as_str())
                 .unwrap_or("");
-            let kind = agents
-                .iter()
-                .find(|a| a.pane == pane)
-                .map(|a| a.kind.as_str())
-                .unwrap_or("shell");
-            (
-                names::topic_core(name, ws_label(&spaces, ws), kind),
-                kind.to_string(),
-            )
+            if !spaces.iter().any(|w| w.id == ws) {
+                s.tg.send_msg(chat, thread, STATE_READ_ERR, None).await;
+                return;
+            }
+            let space = ws_label(&spaces, ws).to_string();
+            let kind = match agents.iter().find(|a| a.pane == pane) {
+                Some(a) => a.kind.clone(),
+                None if s.topics.kind_changed(&pane, "shell") => {
+                    s.tg.send_msg(chat, thread, STATE_READ_ERR, None).await;
+                    return;
+                }
+                None => "shell".to_string(),
+            };
+            let core = names::topic_core(name, &space, &kind);
+            if core.trim().is_empty() {
+                s.tg.send_msg(chat, thread, "⚠️ rename ignored: empty after stripping title chrome", None).await;
+                return;
+            }
+            (core, kind, space)
         }
         _ => {
             s.tg.send_msg(chat, thread, STATE_READ_ERR, None).await;
             return;
         }
     };
-    if !multi && !tab_id.is_empty() {
+    // Redelivery/out-of-order guard: herdr already reflecting this core
+    // (stored formatted covering it) means a stale replay — skip the
+    // RPC + confirm spam (last-writer-wins, not first). Single and
+    // split alike: `stored_covers_label` sheds chrome, so a formatted
+    // stored title covers the bare core on both paths.
+    if stored_covers_label(s.topics.topic_title(&pane).as_deref(), &space, &kind, &core) {
+        return;
+    }
+    // Tab-less single pane has no tab to rename; a pane-label write
+    // would be reverted next tick (watchdog reads tabs). Fail-closed.
+    if !multi && tab_id.is_empty() {
+        s.tg.send_msg(chat, thread, "⚠️ rename failed: pane has no tab yet — try again", None).await;
+        return;
+    }
+    // 1:1 prompt converge: after herdr takes the core, re-assert the
+    // formatted title immediately (space + fresh code preserved) instead
+    // of waiting up to 60s for the watchdog.
+    let formatted = names::format_title(&space, &core, &kind);
+    if !multi {
         match rename_tab(&s.cfg.socket, &tab_id, &core).await {
             Ok(()) => {
                 // Same re-gate as the pane path below: a remint landing
@@ -255,6 +238,7 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                     return;
                 }
                 s.topics.note_kind(&pane, &kind);
+                s.topics.sync_title(&pane, &formatted).await;
                 println!("[titles] rename #{th} → tab {tab_id} ({pane}) {core:?}");
                 s.tg.send_msg(chat, thread, &format!("✏️ tab → `{core}`"), None)
                     .await;
@@ -269,21 +253,16 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     match rename_pane(&s.cfg.socket, &pane, Some(core.as_str())).await {
         Ok(()) => {
             // Re-gate after the await + CAS-store: a remint (reset /
-            // probe prune) landing mid-RPC must not gain a stale title —
-            // plain note_title would poison the fresh mapping and the
-            // watchdog would then preserve the wrong title forever.
+            // probe prune) landing mid-RPC must not gain a stale title.
             if crate::handlers::reset::is_resetting() {
                 return;
             }
-            // Stored==visible: keep the raw last-visible title so
-            // probe_deleted re-asserts exactly what Telegram shows;
-            // the watchdog chrome-tolerantly keeps it via
-            // stored_covers_label (raw stored vs herdr pane label).
             if !s.topics.note_title_if_thread(&pane, th, name) {
                 println!("[titles] stale rename dropped for {pane}");
                 return;
             }
             s.topics.note_kind(&pane, &kind);
+            s.topics.sync_title(&pane, &formatted).await;
             println!("[titles] rename #{th} → pane {pane} label {core:?}");
             s.tg.send_msg(chat, thread, &format!("✏️ pane label → `{core}` (tab shared by {shared} — rename the tab on the PC to rename all)"), None).await;
         }
@@ -293,7 +272,3 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
         }
     }
 }
-
-#[cfg(test)]
-#[path = "titles_tests.rs"]
-mod tests;

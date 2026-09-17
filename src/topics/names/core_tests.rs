@@ -26,25 +26,22 @@ fn test_topic_core_strips_chrome() {
     // Plain names pass through untouched.
     assert_eq!(topic_core("main", "herdr-telegram", "opencode"), "main");
     assert_eq!(topic_core("  api  ", "tg", "opencode"), "api");
-    // Custom [bracket] names survive verbatim — forward freezes them
-    // too, so suffixes are part of the name, never chrome.
+    // Custom [bracket] text survives as core, but pasted `· code`
+    // chrome still sheds (it gains the wrap forward — 1:1).
     assert_eq!(topic_core("[urgent] fix", "shop", "opencode"), "[urgent] fix");
     assert_eq!(
         topic_core("[urgent] fix · opencode", "shop", "opencode"),
-        "[urgent] fix · opencode"
+        "[urgent] fix"
     );
     assert_eq!(
         topic_core("[other] x · opencode", "tg", "opencode"),
-        "[other] x · opencode"
+        "[other] x"
     );
     assert_eq!(
         topic_core("[urgent] fix · shell", "shop", "shell"),
-        "[urgent] fix · shell"
+        "[urgent] fix"
     );
-    assert_eq!(
-        topic_core("[v2] o2 · o", "tg", "opencode"),
-        "[v2] o2 · o"
-    );
+    assert_eq!(topic_core("[v2] o2 · o", "tg", "opencode"), "[v2] o2");
     // Compounds survive; head-word echoes collapse like the forward pass.
     assert_eq!(
         topic_core("[shop] shop-backend · claude", "shop", "claude"),
@@ -78,6 +75,12 @@ fn test_topic_core_strips_chrome() {
     // Never empty: lone chrome falls back to the raw input.
     assert_eq!(topic_core("[tg]", "tg", "opencode"), "[tg]");
     assert_eq!(topic_core("   ", "tg", "opencode"), "");
+    // Unicode after alt seps never panics nor sheds (codes are ASCII).
+    assert_eq!(topic_core("foo | é", "tg", "opencode"), "foo | é");
+    assert_eq!(topic_core("main | é", "tg", "opencode"), "main | é");
+    // Bare `$` survives; `· $` sheds.
+    assert_eq!(topic_core("main$", "tg", "opencode"), "main$");
+    assert_eq!(topic_core("main · $", "tg", "opencode"), "main");
 }
 
 #[test]
