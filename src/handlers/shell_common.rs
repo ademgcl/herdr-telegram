@@ -76,6 +76,49 @@ pub fn shell_card_text(pane: &str) -> String {
     format!("💲 shell [{pane}]\ntype any shell command — or `opencode`, `claude`, … to re-enter.")
 }
 
+/// Fresh screen text since the pre-send snapshot: first result cards
+/// post only what the command added — the snapshot carries the whole
+/// scrollback, and reposting it dumps old output into every reply.
+/// Depth-independent (shallow windows delta the same way), so commands
+/// never bleed into each other. Screens only append + scroll: the new
+/// window opens with a baseline suffix, except the volatile prompt
+/// line (replaced by the typed echo once the command runs). Degrades
+/// to the trimmed snapshot when nothing aligns (resized redraw).
+pub fn fresh_since(out: &str, before: &str) -> String {
+    let new: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
+    let base: Vec<String> = before.lines().map(|l| l.trim_end().to_string()).collect();
+    // Whole-baseline suffix first (unchanged screens empty out exactly).
+    for j in 0..base.len() {
+        if new.len() >= base.len() - j && new[..base.len() - j] == base[j..] {
+            return new[base.len() - j..].join("\n");
+        }
+    }
+    // Then without the volatile prompt line (echo + output stay fresh).
+    if base.len() > 1 {
+        let core = &base[..base.len() - 1];
+        for j in 0..core.len() {
+            if new.len() >= core.len() - j && new[..core.len() - j] == core[j..] {
+                return new[core.len() - j..].join("\n");
+            }
+        }
+        // Scrolled-off fallback: cut after the newest surviving
+        // baseline line — except an end-anchored prompt line, which
+        // would swallow genuine output (it matches the new prompt).
+        for (bi, b) in base.iter().enumerate().rev() {
+            if b.trim().is_empty() {
+                continue;
+            }
+            if let Some(pos) = new.iter().rposition(|l| l == b) {
+                if pos + 1 == new.len() && bi == base.len() - 1 {
+                    continue;
+                }
+                return new[pos + 1..].join("\n");
+            }
+        }
+    }
+    out.trim().to_string()
+}
+
 /// Follow-up budget after the first unsettled card: ~20 rounds × ~15s
 /// ≈ 5 minutes. Never-ending runs (servers, watchers) stop here with a
 /// still-running card; `/read` covers the rest.
@@ -170,14 +213,11 @@ pub(crate) async fn settle_report_shell(
     } else {
         ShellNote::Following
     };
-    let mid =
-        s.tg.send_msg(
-            chat,
-            thread,
-            &shell_result_text(cmd, &out, first),
-            kb.clone(),
-        )
-        .await;
+    // Fresh-only: `out` is the whole scrollback — delta against the
+    // pre-send screen so one command's card never carries old output
+    // (follow-ups below already delta against the sent screen).
+    let fresh = shell_result_text(cmd, &fresh_since(&out, before), first);
+    let mid = s.tg.send_msg(chat, thread, &fresh, kb.clone()).await;
     s.remember(chat, mid, pane).await;
     if mid.is_none() {
         // Delivery-tracked: the intent survives for boot-recover instead
@@ -242,57 +282,5 @@ pub(crate) async fn settle_report_shell(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_shell_reply() {
-        assert_eq!(
-            format_shell_reply("pwd", "/home/user/projects").as_str(),
-            "$ pwd\n/home/user/projects"
-        );
-        assert_eq!(
-            format_shell_reply("true", "  \n ").as_str(),
-            "$ true\n(no output)"
-        );
-    }
-
-    #[test]
-    fn test_shell_card_text() {
-        let t = shell_card_text("w1:p1");
-        assert!(t.contains("w1:p1") && t.contains("re-enter"));
-    }
-
-    #[test]
-    fn test_shell_result_text_notes() {
-        let out = "line1\nline2";
-        let final_card = shell_result_text("make build", out, ShellNote::Final);
-        assert!(final_card.contains("$ make build"));
-        assert!(final_card.contains("line2"));
-        assert!(!final_card.contains("⏳") && !final_card.contains("✅"));
-        assert!(
-            shell_result_text("make build", out, ShellNote::Following).contains("following up")
-        );
-        assert!(shell_result_text("make build", out, ShellNote::Finished).contains("✅ finished"));
-        assert!(shell_result_text("make build", out, ShellNote::StillRunning).contains("/read"));
-        // Empty output never posts a bare prompt line.
-        assert!(shell_result_text("true", "  \n ", ShellNote::Final).contains("(no output)"));
-    }
-
-    #[test]
-    fn test_classify_shell_reuse() {
-        use ShellReuse::*;
-        // Live shell work: never touch (the long-run intent-eat bug).
-        assert_eq!(classify_shell_reuse(true, true, false), Ignore);
-        // Stale watcher on a live shell: job only, intent preserved.
-        assert_eq!(classify_shell_reuse(true, true, true), CancelJob);
-        assert_eq!(classify_shell_reuse(true, false, true), CancelJob);
-        // Fresh agent→shell flip: full retire + quit notice.
-        assert_eq!(classify_shell_reuse(false, true, false), RetireVanished);
-        assert_eq!(classify_shell_reuse(false, false, true), RetireVanished);
-        assert_eq!(classify_shell_reuse(false, true, true), RetireVanished);
-        // Nothing owed: ignore.
-        assert_eq!(classify_shell_reuse(false, false, false), Ignore);
-        assert_eq!(classify_shell_reuse(true, false, false), Ignore);
-    }
-}
+#[path = "shell_common_tests.rs"]
+mod tests;
