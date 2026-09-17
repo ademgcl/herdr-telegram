@@ -16,7 +16,8 @@
 //! (`[space]` prefix case-blind/collapsed/truncated, any `·•⋅` code,
 //! `| : / -` spaced variants, stale codes — see [`names`]): users edit
 //! the rendered title, and herdr already shows the space — only the bare
-//! core is written.
+//! core is written. A leading `[different]` bracket instead renames the
+//! SPACE (see `titles_space`) — never the tab (no `[old] [new]` dupes).
 use crate::{
     handlers::title_rules::{stored_covers_label, stored_matches_label, tab_census, tab_of, title_core_for},
     herdr::{
@@ -206,6 +207,17 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                 }
                 None => "shell".to_string(),
             };
+            // Bracket names the space: `[new] label` renames the
+            // workspace (pane keeps `label`), never the tab to
+            // `[new] label` (that duplication was the bug).
+            if let Some(fm) = facts.as_ref()
+                && super::titles_space::try_adopt_space_rename(
+                    &s, chat, th, &pane, name, fm, &spaces, ws, &space, &kind, multi, &tab_id,
+                )
+                .await
+            {
+                return;
+            }
             let core = names::topic_core(name, &space, &kind);
             if core.trim().is_empty() {
                 s.tg.send_msg(chat, thread, "⚠️ rename ignored: empty after stripping title chrome", None).await;

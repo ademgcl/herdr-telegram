@@ -1,6 +1,7 @@
 //! Pure title-decision rules (no I/O): tab→core picking, verbatim
-//! preservation, and the reset Step-4 choice. Split from `titles`
-//! (300-line file limit).
+//! preservation, `[new-space]` rename core + duplicate guard, and the
+//! reset Step-4 choice. Split from `titles` (300-line file limit).
+use crate::{topics::names::norm_title, types::WorkspaceInfo};
 use std::collections::HashMap;
 
 /// Count panes per tab_id (split-tab guard): siblings sharing one tab
@@ -75,11 +76,8 @@ pub fn stored_matches_label(stored: Option<&str>, label: &str) -> bool {
 /// covers `api`), and `topic_core` sheds ANY pasted code (stale or
 /// current), so kind flips preserve the custom instead of discarding it.
 pub fn stored_covers_label(stored: Option<&str>, space: &str, kind: &str, label: &str) -> bool {
-    fn norm(s: &str) -> String {
-        s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
-    }
     stored
-        .map(|s| norm(&crate::topics::names::topic_core(s, space, kind)) == norm(label))
+        .map(|s| norm_title(&crate::topics::names::topic_core(s, space, kind)) == norm_title(label))
         .unwrap_or(false)
 }
 
@@ -87,6 +85,29 @@ pub fn stored_covers_label(stored: Option<&str>, space: &str, kind: &str, label:
 /// (verbatim keeps must not hide an agent→shell icon change).
 pub fn kind_bypass(last: Option<&str>, cur: &str) -> bool {
     matches!(last, Some(l) if l != cur)
+}
+
+/// Pane core after a `[new-space]` rename: `None` when the remainder is
+/// blank (space-only rename — keep the herdr core). Otherwise the
+/// remainder shed of chrome against BOTH spaces (old suffixes like `·
+/// tg` shed via the old pass, head-word echoes collapse via the new),
+/// so the result round-trips through `format_title(new_space, core)`.
+pub fn space_rename_core(rest: &str, old_space: &str, new_space: &str, kind: &str) -> Option<String> {
+    if rest.trim().is_empty() {
+        return None;
+    }
+    let via_old = crate::topics::names::topic_core(rest, old_space, kind);
+    Some(crate::topics::names::topic_core(&via_old, new_space, kind))
+}
+
+/// True when another workspace already carries `new_space` (tolerant):
+/// renaming into it would duplicate space names and break the 1:1
+/// `[space] label` mapping — caller refuses fail-closed.
+pub fn space_label_taken(spaces: &[WorkspaceInfo], ws_id: &str, new_space: &str) -> bool {
+    let want = norm_title(new_space);
+    spaces
+        .iter()
+        .any(|w| w.id != ws_id && norm_title(&w.label) == want)
 }
 
 /// Reset title decision (single call-site for every reset loop, so the
@@ -116,183 +137,5 @@ pub fn reset_desired_title(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::herdr::labels::PaneFacts;
-
-    fn facts(rows: &[(&str, &str, &str)]) -> HashMap<String, PaneFacts> {
-        rows.iter()
-            .map(|(pane, tab, ws)| {
-                (
-                    pane.to_string(),
-                    PaneFacts {
-                        label: None,
-                        ws: ws.to_string(),
-                        tab_id: tab.to_string(),
-                    },
-                )
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_tab_census_counts_split_tabs() {
-        let f = facts(&[("w1:p1", "t1", "a"), ("w1:p2", "t1", "a"), ("w1:p3", "t2", "a")]);
-        let c = tab_census(&f);
-        assert_eq!(c.get("t1"), Some(&2));
-        assert_eq!(c.get("t2"), Some(&1));
-        assert_eq!(c.get("t9"), None);
-    }
-
-    #[test]
-    fn test_tab_of_resolves_split_flag() {
-        let f = facts(&[("w1:p1", "t1", "a"), ("w1:p2", "t1", "a"), ("w1:p3", "", "a")]);
-        let tabs = HashMap::from([("t1".to_string(), "console".to_string())]);
-        let c = tab_census(&f);
-        assert_eq!(tab_of(&f, &tabs, &c, "w1:p1"), (Some("console"), true));
-        assert_eq!(tab_of(&f, &tabs, &c, "w1:p9"), (None, false));
-        assert_eq!(tab_of(&f, &tabs, &c, "w1:p3"), (None, false));
-    }
-
-    #[test]
-    fn test_stored_matches_label_trims() {
-        assert!(stored_matches_label(Some("My Title"), "My Title"));
-        assert!(stored_matches_label(Some("My Title"), "  My Title  "));
-        assert!(stored_matches_label(Some("  My Title  "), "My Title"));
-        assert!(!stored_matches_label(Some("My Title"), "my title"));
-        assert!(!stored_matches_label(None, "My Title"));
-        assert!(!stored_matches_label(Some("[My Title]"), "My Title"));
-        assert!(!stored_matches_label(Some("[tg] api · opencode"), "api"));
-    }
-
-    #[test]
-    fn test_stored_covers_label_chrome_tolerant() {
-        assert!(stored_covers_label(
-            Some("[tg] main · o"),
-            "tg",
-            "opencode",
-            "main"
-        ));
-        assert!(stored_covers_label(Some("m"), "tg", "opencode", "m"));
-        assert!(stored_covers_label(
-            Some("[urgent] fix"),
-            "shop",
-            "opencode",
-            "[urgent] fix"
-        ));
-        assert!(!stored_covers_label(
-            Some("[tg] other · o"),
-            "tg",
-            "opencode",
-            "main"
-        ));
-        assert!(!stored_covers_label(None, "tg", "opencode", "main"));
-        // Stale suffix under a new kind still covers (custom preserved,
-        // watchdog re-wraps bare).
-        assert!(stored_covers_label(
-            Some("[tg] main · o"),
-            "tg",
-            "shell",
-            "main"
-        ));
-        // Case-blind + whitespace-collapsed cover.
-        assert!(stored_covers_label(
-            Some("[TG]  API · O"),
-            "tg",
-            "opencode",
-            "api"
-        ));
-    }
-
-    #[test]
-    fn test_reset_desired_title_raw_split_custom() {
-        // Raw-stored split custom re-wraps the pane label bare.
-        assert_eq!(
-            reset_desired_title(
-                Some("[tg] Custom"),
-                "tg",
-                "console o27",
-                "opencode",
-                true,
-                Some("Custom")
-            ),
-            "[tg] Custom"
-        );
-    }
-
-    #[test]
-    fn test_reset_desired_title_verbatim_or_formatted() {
-        // 1:1 Format-B always: even a verbatim pre-reset custom gains
-        // the space wrap (user text preserved, kind lives in the icon).
-        assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false, None),
-            "[tg] My Title"
-        );
-        assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false, None),
-            "[tg] My Title"
-        );
-        // Split tab cores format — a stored title covering the pane
-        // label re-wraps it bare.
-        assert_eq!(
-            reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true, None),
-            "[tg] console o27"
-        );
-        assert_eq!(
-            reset_desired_title(
-                Some("Custom Name"),
-                "tg",
-                "console o27",
-                "opencode",
-                true,
-                Some("Custom Name")
-            ),
-            "[tg] Custom Name"
-        );
-        // Formatted otherwise (new/changed cores, case-only changes).
-        assert_eq!(
-            reset_desired_title(
-                Some("[tg] api"),
-                "tg",
-                "backend",
-                "opencode",
-                false,
-                None
-            ),
-            "[tg] backend"
-        );
-        assert_eq!(
-            reset_desired_title(None, "tg", "backend", "opencode", false, None),
-            "[tg] backend"
-        );
-        assert_eq!(
-            reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false, None),
-            "[tg] my title"
-        );
-    }
-
-    #[test]
-    fn test_naming_core_none_on_tag_fallback() {
-        // Tab present → core (split tabs disambiguate); missing/blank →
-        // None so callers format the tag unconditionally, exactly like
-        // the watchdog (which never preserves a bare tag).
-        assert_eq!(
-            naming_core(Some("console"), "o27", false),
-            Some("console".to_string())
-        );
-        assert_eq!(
-            naming_core(Some("console"), "o27", true),
-            Some("console o27".to_string())
-        );
-        assert_eq!(naming_core(None, "o1", false), None);
-        assert_eq!(naming_core(Some("  "), "sh1", false), None);
-    }
-
-    #[test]
-    fn test_kind_bypass_flips_only() {
-        assert!(!kind_bypass(None, "shell"));
-        assert!(!kind_bypass(Some("shell"), "shell"));
-        assert!(kind_bypass(Some("opencode"), "shell"));
-        assert!(kind_bypass(Some("shell"), "opencode"));
-    }
-}
+#[path = "title_rules_tests.rs"]
+mod tests;

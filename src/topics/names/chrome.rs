@@ -1,6 +1,7 @@
-//! Tolerant Format-B chrome parsing (shared): space-prefix strip,
-//! code-suffix shedding, stray trims. Split from `format`
-//! (300-line file limit).
+//! Tolerant Format-B chrome parsing (shared): `[bracket]` split,
+//! space-prefix strip + space-rename intent, code-suffix shedding,
+//! stray trims. Split from `format` (300-line file limit).
+use super::KIND_CODES;
 
 /// Collapse whitespace + lowercase (unicode-aware): the single
 /// comparison basis for space names, codes, and cover checks, so
@@ -18,26 +19,55 @@ pub(crate) fn short_space_for(space: &str) -> String {
     t.chars().take(20).collect()
 }
 
-use super::KIND_CODES;
-
 const DOT_SEPS: [char; 3] = ['·', '•', '⋅'];
 const ALT_SEPS: [char; 9] = ['|', ':', '/', '-', '‐', '‑', '‒', '–', '—'];
+
+/// Split a leading `[bracket]` into (inner, remainder): `None` when the
+/// text doesn't open with a closed `[...]` pair. Dumb on purpose —
+/// callers decide what a match means (space rename vs custom title).
+/// `]` is ASCII so the slices are always boundary-safe.
+pub(crate) fn split_bracket(body: &str) -> Option<(&str, &str)> {
+    let inner = body.trim_start().strip_prefix('[')?;
+    let close = inner.find(']')?;
+    Some((inner[..close].trim(), inner[close + 1..].trim_start()))
+}
+
+/// Space-rename intent from a Telegram rename: `Some((new_space,
+/// pane_rest))` when the leading `[bracket]` names a DIFFERENT space
+/// (tolerant: case-blind, whitespace-collapsed, full or displayed
+/// 20-char truncation all count as "same"). `None` = no bracket, empty
+/// brackets, or the same space — caller takes the pane/tab path.
+/// The bracket names the space, the remainder names the pane: `[new]
+/// label` renames the workspace to `new` (pane keeps `label`), never
+/// the tab to `[new] label` (that duplication was the bug).
+pub(crate) fn space_rename_parts(new_name: &str, space: &str) -> Option<(String, String)> {
+    let sp = space.trim();
+    if sp.is_empty() || sp == "?" {
+        return None;
+    }
+    let (inner, rest) = split_bracket(new_name)?;
+    if inner.is_empty() {
+        return None;
+    }
+    let short = short_space_for(sp);
+    if norm_title(inner) == norm_title(sp) || norm_title(inner) == norm_title(&short) {
+        return None;
+    }
+    Some((inner.to_string(), rest.trim().to_string()))
+}
 
 /// Tolerant `[space]` prefix strip: case-blind, whitespace-collapsed,
 /// full label or displayed 20-char truncation. `]` is ASCII so the
 /// slice boundary is always safe. `None` = not this space (custom
 /// `[bracket]` — caller keeps brackets as core, never strips).
 pub(crate) fn strip_space_prefix<'a>(body: &'a str, space: &str, short: &str) -> Option<&'a str> {
-    let t = body.trim_start();
-    let inner = t.strip_prefix('[')?;
-    let close = inner.find(']')?;
-    let named = inner[..close].trim();
+    let (named, rest) = split_bracket(body)?;
     if named.is_empty() {
         return None;
     }
     let n = norm_title(named);
     if n == norm_title(space.trim()) || n == norm_title(short) {
-        Some(inner[close + 1..].trim_start())
+        Some(rest)
     } else {
         None
     }
@@ -224,3 +254,7 @@ pub(crate) fn trim_stray(body: &str) -> &str {
         DOT_SEPS.contains(&c) || ALT_SEPS.contains(&c) || c.is_whitespace()
     })
 }
+
+#[cfg(test)]
+#[path = "chrome_tests.rs"]
+mod tests;

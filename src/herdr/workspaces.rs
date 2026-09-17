@@ -23,6 +23,20 @@ pub async fn create_workspace(socket: &str, label: &str) -> Res<String> {
     Ok(r["workspace"]["workspace_id"].as_str().unwrap_or("").into())
 }
 
+/// Rename a workspace's display label (Telegram `[space]`-only renames
+/// map here — the bracket names the space, not the pane). Param shape
+/// verified live against herdr (`workspace_not_found` on bogus id proves
+/// the shape; `id`-keyed variants reject as `invalid_request`).
+pub async fn rename_workspace(socket: &str, ws_id: &str, label: &str) -> Res<()> {
+    rpc(
+        socket,
+        "workspace.rename",
+        json!({"workspace_id": ws_id, "label": label}),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Find the `tg` space, creating it when missing. Returns
 /// `(id, created)`: a just-created space ships a reusable root pane,
 /// so callers must prefer it over `tab.create` (else p1 orphans).
