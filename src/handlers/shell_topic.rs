@@ -1,5 +1,5 @@
 /// Message routing for agentless-topic panes: the shell command set.
-/// Bare text runs as a command (`opencode` re-enters by itself). Split
+/// Bare text runs as a command (any agent binary re-enters by itself). Split
 /// from shell.rs (ops) under the 300-line file cap.
 use crate::{
     handlers::forum::bare_cmd,
@@ -146,7 +146,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         s.tg.send_msg(
             chat,
             Some(thread_id),
-            "no agent here — type `opencode` to start one.",
+            "no agent here — run one (`opencode`, `claude`, …) to start it.",
             None,
         )
         .await;

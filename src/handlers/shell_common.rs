@@ -73,7 +73,7 @@ pub(crate) async fn await_shell_settle(
 }
 
 pub fn shell_card_text(pane: &str) -> String {
-    format!("💲 shell [{pane}]\ntype any shell command — or `opencode` to return.")
+    format!("💲 shell [{pane}]\ntype any shell command — or `opencode`, `claude`, … to re-enter.")
 }
 
 /// Follow-up budget after the first unsettled card: ~20 rounds × ~15s
@@ -260,8 +260,7 @@ mod tests {
     #[test]
     fn test_shell_card_text() {
         let t = shell_card_text("w1:p1");
-        assert!(t.contains("w1:p1"));
-        assert!(t.contains("opencode"));
+        assert!(t.contains("w1:p1") && t.contains("re-enter"));
     }
 
     #[test]

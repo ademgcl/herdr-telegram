@@ -30,6 +30,8 @@ fn test_topic_help_text() {
     let shell = shell_help_text("w1:p1");
     assert!(shell.contains("w1:p1"));
     assert!(shell.contains("opencode"));
+    assert!(shell.contains("claude"));
+    assert!(shell.contains("re-enter"));
 }
 
 #[test]

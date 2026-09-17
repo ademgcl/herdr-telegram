@@ -243,7 +243,7 @@ pub fn shell_help_text(pane: &str) -> String {
     format!(
         "💲 shell topic [{pane}]\n\n\
          • Plain text runs as a shell command\n\
-         • `opencode` — re-enter the agent\n\
+         • `opencode`, `claude`, … — run one to re-enter as agent\n\
          • `/read` — recent shell output (`/output` too)\n\
          • `/esc` — send Esc (vim toggles mode)\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
