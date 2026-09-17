@@ -203,7 +203,7 @@ pub fn help_text() -> &'static str {
      /spawn <kind> [space]   spawn a new agent\n\
      /space [name]   new space + shell topic\n\
      /model    current model + free-Zen picker (opencode)\n\
-     /quit     drop the agent to a shell (idle only)\n\
+     /quit     drop the agent to a shell (busy confirms)\n\
      /kill     close the pane completely (confirms first)\n\
      /shell    open a fresh shell pane\n\
      /read     recent output of focused agent (/output too)\n\
@@ -223,7 +223,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • Plain text sends a prompt to this agent\n\
          • `/read` or `/output` — fetch recent terminal output\n\
          • `/model` — current model + free-Zen picker (opencode)\n\
-         • `/quit` — drop the agent to a shell (idle only)\n\
+         • `/quit` — drop the agent to a shell (busy confirms)\n\
          • `/kill` — close this pane completely (confirms first)\n\
          • `/card` — re-post the question + buttons (never stuck)\n\
          • `/esc` — guarded Esc: dismiss, blocked-only\n\

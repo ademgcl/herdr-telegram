@@ -104,11 +104,16 @@ pub async fn sync_titles_with(
             continue;
         }
         // Shells are invisible to `agent.list`: a missing row is shell
-        // ONLY when the last seen kind agrees — otherwise it is a
-        // transient dropout, and defaulting would mis-mark the icon.
+        // ONLY when status/tag already says so (a transient dropout must
+        // never mis-mark the icon) — and then it proceeds, so the flip
+        // converges instead of skipping every tick forever.
         let kind = match kind_of.get(pane.as_str()).copied() {
             Some(k) => k,
-            None if s.topics.kind_changed(pane, "shell") => continue,
+            None if s.topics.kind_changed(pane, "shell")
+                && !super::shell::confirmed_shell(s, pane).await =>
+            {
+                continue
+            }
             None => "shell",
         };
         s.topics.note_kind(pane, kind);

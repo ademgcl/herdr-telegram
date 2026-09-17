@@ -242,13 +242,18 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
             super::callback_model::handle_model_tap(&s, chat, msg_id, thread, r).await
         }
-        // Pane kill confirm: X:<kill|keep>:<pane> — stateless buttons.
+        // Pane kill/quit confirm: X:<kill|quit|keep>:<pane> — stateless buttons.
         ("X", Some(r)) => {
             if !live_target(&s, chat, msg_id, r).await {
                 return;
             }
             if let Some((action, pane)) = split_action(r) {
-                super::kill::handle_kill_action(&s, chat, msg_id, action, pane).await;
+                // Keep is shared: both cards only need the kept ack.
+                if action == "quit" {
+                    super::shell::handle_quit_action(&s, chat, msg_id, thread, action, pane).await;
+                } else {
+                    super::kill::handle_kill_action(&s, chat, msg_id, action, pane).await;
+                }
             } else {
                 s.tg.edit_msg(
                     chat,
