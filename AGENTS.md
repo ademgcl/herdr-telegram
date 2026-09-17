@@ -6,9 +6,9 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 
 ## 1. Rules
 
-- No source file over **300 lines** — split near the limit (tests to sibling `*_tests.rs`).
+- No source file over **300 lines** — split near the limit (tests to sibling `*_tests.rs` or `tests.rs`).
 - Verify: `cargo test`, clippy clean, `wc -l $(find src -name '*.rs') AGENTS.md` before committing.
-- cargo; tokio multi-thread; `Res<T>`; no async mutex across sleep/RPC; herdr/telegram own I/O (except jobs EvStream subscription).
+- cargo; tokio multi-thread; `Res<T>`; no async mutex across sleep/RPC; I/O via herdr/telegram clients; jobs owns EvStream.
 - Min code, max greatness: smallest diff that fully fixes, zero dead code; A+ or rework.
 - Fail-closed: ambiguous reads/errors → no write, no buzz.
 - No personal identifiers in tracked files/commits; secrets in untracked files only.
