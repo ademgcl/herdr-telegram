@@ -18,6 +18,7 @@ pub struct TopicManager {
     pub(crate) storage: TopicStorage,
     pub(crate) tg: TelegramClient,
     pub(crate) last_title_write: Mutex<HashMap<String, Instant>>,
+    pub(crate) last_kind: Mutex<HashMap<String, String>>,
     pub(crate) creating: Mutex<HashSet<String>>,
     pub(crate) probe_cursor: Mutex<usize>,
 }
@@ -52,6 +53,7 @@ impl TopicManager {
             storage: TopicStorage::new(),
             tg,
             last_title_write: Mutex::new(HashMap::new()),
+            last_kind: Mutex::new(HashMap::new()),
             creating: Mutex::new(HashSet::new()),
             probe_cursor: Mutex::new(0),
         }

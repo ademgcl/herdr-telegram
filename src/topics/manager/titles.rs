@@ -14,6 +14,25 @@ impl TopicManager {
         self.storage.get_title(pane)
     }
 
+    /// Memory-only last seen kind per pane (kind-flip detector, no disk).
+    pub fn note_kind(&self, pane: &str, kind: &str) {
+        self.last_kind
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(pane.to_string(), kind.to_string());
+    }
+
+    /// True iff a kind was seen before AND differs (missing = false, no boot churn).
+    pub fn kind_changed(&self, pane: &str, kind: &str) -> bool {
+        let last = self
+            .last_kind
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(pane)
+            .cloned();
+        crate::handlers::title_rules::kind_bypass(last.as_deref(), kind)
+    }
+
     /// CAS record of a title the telegram side already shows (native
     /// rename): no API call, just the echo loop-guard. Thread-checked so
     /// a remint between resolve and store never gains a stale title.

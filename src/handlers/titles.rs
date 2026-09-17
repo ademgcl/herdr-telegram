@@ -11,12 +11,14 @@
 //! Telegram→herdr renames shed Format-B chrome first (`[space]` prefix,
 //! `· agent` suffix via [`names::topic_core`]): users edit the rendered
 //! title, and herdr already shows the space — only the bare core is
-//! written. Single-pane stores the raw text (bare renames verbatim-keep;
-//! chrome pastes converge via one format rename to house style);
-//! split-pane stores the core (the formatter renders from the shared
-//! tab+tag, so raw would revert every tick).
+//! written. Both paths store the raw text (stored==visible, so the
+//! probe re-asserts what Telegram shows): single-pane bare renames
+//! verbatim-keep, chrome pastes converge via one format rename;
+//! split-pane keeps chrome-tolerantly via `stored_covers_label`.
 use crate::{
-    handlers::title_rules::{naming_core, stored_matches_label, tab_census, tab_of},
+    handlers::title_rules::{
+        naming_core, stored_covers_label, stored_matches_label, tab_census, tab_of,
+    },
     herdr::{
         client::{list_agents, list_workspaces},
         labels::{pane_facts, rename_pane, rename_tab, tab_labels},
@@ -27,6 +29,9 @@ use crate::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Shared rename-failure text (fail-closed adopt paths).
+const STATE_READ_ERR: &str = "⚠️ rename failed: could not read herdr state — try again";
 
 /// Pure extract of a native topic rename: (thread, new name). Service
 /// messages carry no text, so the router must branch on this BEFORE its
@@ -124,6 +129,8 @@ pub async fn sync_titles_with(
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
         let kind = kind_of.get(pane.as_str()).copied().unwrap_or("shell");
+        let kind_flip = s.topics.kind_changed(pane, kind);
+        s.topics.note_kind(pane, kind);
         let space = ws_label(spaces, &f.ws);
         let (tab, multi) = tab_of(facts, tabs, &census, pane);
         // Verbatim preservation (merged upstream): a stored title equal to
@@ -131,6 +138,7 @@ pub async fn sync_titles_with(
         // sides — keep it exactly, never reformat (single-pane; the
         // split pane-label rule follows right below).
         if !multi
+            && !kind_flip
             && let Some(t) = tab
             && stored_matches_label(s.topics.topic_title(pane).as_deref(), t)
         {
@@ -141,9 +149,10 @@ pub async fn sync_titles_with(
         // is user-set — keep it exactly like single-pane verbatim above,
         // or the format below reverts it every tick.
         if multi
+            && !kind_flip
             && let Some(pl) = f.label.as_deref()
             && !pl.trim().is_empty()
-            && stored_matches_label(s.topics.topic_title(pane).as_deref(), pl)
+            && stored_covers_label(s.topics.topic_title(pane).as_deref(), space, kind, pl)
         {
             continue;
         }
@@ -151,7 +160,12 @@ pub async fn sync_titles_with(
         // One naming source for watchdog and reset (`naming_core`): the
         // two can never drift again. None → tag default, which the
         // watchdog never preserves verbatim.
-        let core = naming_core(tab, &tag, multi);
+        let pane_label = f.label.as_deref().filter(|l| !l.trim().is_empty());
+        let mut core = naming_core(tab, &tag, multi);
+        // Labeled splits render the pane label (flips re-suffix, relabels converge).
+        if multi && let Some(pl) = pane_label {
+            core = Some(pl.to_string());
+        }
         let formatted = names::format_title(space, core.as_deref().unwrap_or(&tag), kind);
         s.topics.sync_title(pane, &formatted).await;
     }
@@ -189,16 +203,21 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
         .and_then(|m| m.get(&pane))
         .map(|f| f.tab_id.clone())
         .unwrap_or_default();
-    let multi = !tab_id.is_empty()
-        && facts
-            .as_ref()
-            .map(|m| m.values().filter(|f| f.tab_id == tab_id).count() > 1)
-            .unwrap_or(false);
+    let shared = facts
+        .as_ref()
+        .map(|m| m.values().filter(|f| f.tab_id == tab_id).count())
+        .unwrap_or(0);
+    let multi = !tab_id.is_empty() && shared > 1;
+    // Fail-closed: no facts entry = degraded read — never rename blind.
+    if facts.as_ref().and_then(|m| m.get(&pane)).is_none() {
+        s.tg.send_msg(chat, thread, STATE_READ_ERR, None).await;
+        return;
+    }
     // Shed Format-B chrome users inherit from the rendered title
     // (`[space] main · opencode` → `main`): herdr shows the space
-    // already, so only the bare core is written. Fail-open: unreadable
-    // kind/space keeps the raw name (status quo, never a dropped rename).
-    let core = match (
+    // already, so only the bare core is written. Fail-closed: unreadable
+    // kind/space aborts with ⚠️ above (never a blind chrome write).
+    let (core, kind) = match (
         list_workspaces(&s.cfg.socket).await.ok(),
         list_agents(&s.cfg.socket).await.ok(),
     ) {
@@ -213,9 +232,15 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                 .find(|a| a.pane == pane)
                 .map(|a| a.kind.as_str())
                 .unwrap_or("shell");
-            names::topic_core(name, ws_label(&spaces, ws), kind)
+            (
+                names::topic_core(name, ws_label(&spaces, ws), kind),
+                kind.to_string(),
+            )
         }
-        _ => name.to_string(),
+        _ => {
+            s.tg.send_msg(chat, thread, STATE_READ_ERR, None).await;
+            return;
+        }
     };
     if !multi && !tab_id.is_empty() {
         match rename_tab(&s.cfg.socket, &tab_id, &core).await {
@@ -229,7 +254,10 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                     println!("[titles] stale rename dropped for {pane}");
                     return;
                 }
-                println!("[titles] topic #{th} renamed → tab {tab_id} ({pane}) {core:?} (raw {name:?})");
+                s.topics.note_kind(&pane, &kind);
+                println!("[titles] rename #{th} → tab {tab_id} ({pane}) {core:?}");
+                s.tg.send_msg(chat, thread, &format!("✏️ tab → `{core}`"), None)
+                    .await;
             }
             Err(e) => {
                 s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {e}"), None)
@@ -247,17 +275,17 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             if crate::handlers::reset::is_resetting() {
                 return;
             }
-            // Store the CORE (not the raw text): the formatter renders
-            // split topics from the shared tab+tag, so a raw chrome
-            // title would never verbatim-match the pane label and the
-            // watchdog would revert the topic every tick, orphaning this
-            // label. Stored==label verbatim-keeps, and the probe
-            // converges the topic onto the core instead of reverting.
-            if !s.topics.note_title_if_thread(&pane, th, &core) {
+            // Stored==visible: keep the raw last-visible title so
+            // probe_deleted re-asserts exactly what Telegram shows;
+            // the watchdog chrome-tolerantly keeps it via
+            // stored_covers_label (raw stored vs herdr pane label).
+            if !s.topics.note_title_if_thread(&pane, th, name) {
                 println!("[titles] stale rename dropped for {pane}");
                 return;
             }
-            println!("[titles] topic #{th} renamed → pane {pane} label {core:?} (raw {name:?})");
+            s.topics.note_kind(&pane, &kind);
+            println!("[titles] rename #{th} → pane {pane} label {core:?}");
+            s.tg.send_msg(chat, thread, &format!("✏️ pane label → `{core}` (tab shared by {shared} — rename the tab on the PC to rename all)"), None).await;
         }
         Err(e) => {
             s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {e}"), None)

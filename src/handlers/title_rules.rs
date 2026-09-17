@@ -59,14 +59,27 @@ pub fn stored_matches_label(stored: Option<&str>, label: &str) -> bool {
     stored.map(str::trim) == Some(label.trim())
 }
 
+/// Chrome-tolerant keep predicate for split panes (stored raw vs herdr
+/// pane label): stored is the last-visible Telegram title, so shed
+/// Format-B chrome via `topic_core` before comparing to the label.
+pub fn stored_covers_label(stored: Option<&str>, space: &str, kind: &str, label: &str) -> bool {
+    stored
+        .map(|s| crate::topics::names::topic_core(s, space, kind).trim() == label.trim())
+        .unwrap_or(false)
+}
+
+/// Kind-flip bypass: seen kind differing from current forces reformat
+/// (verbatim keeps must not hide an agent→shell `· code` change).
+pub fn kind_bypass(last: Option<&str>, cur: &str) -> bool {
+    matches!(last, Some(l) if l != cur)
+}
+
 /// Reset title decision (single call-site for every reset loop, so the
 /// predicate can never drift): a pre-reset stored title equal to the
 /// tab core means the user set it verbatim — re-apply raw, else format.
-/// Split tabs additionally keep a stored title equal to the pane label
-/// (`pane_label` carries the herdr label when set; the agent-title
-/// fallback in `names.card` ~never equals a stored topic title, and a
-/// coincidence self-heals on the next watchdog tick): the watchdog's
-/// verbatim rule preserves it, so reset must re-apply it too. Pure so unit-tested.
+/// Split tabs re-suffix a stored title covering the pane label (fresh
+/// kind code, custom preserved — never the tab core, which would orphan
+/// it). Pure so unit-tested.
 pub fn reset_desired_title(
     pre: Option<&str>,
     space: &str,
@@ -79,9 +92,9 @@ pub fn reset_desired_title(
         label.trim().to_string()
     } else if multi
         && let Some(pl) = pane_label.map(str::trim).filter(|l| !l.is_empty())
-        && stored_matches_label(pre, pl)
+        && stored_covers_label(pre, space, kind, pl)
     {
-        pl.to_string()
+        crate::topics::names::format_title(space, pl, kind)
     } else {
         crate::topics::names::format_title(space, label, kind)
     }
@@ -138,6 +151,53 @@ mod tests {
     }
 
     #[test]
+    fn test_stored_covers_label_chrome_tolerant() {
+        assert!(stored_covers_label(
+            Some("[tg] main · o"),
+            "tg",
+            "opencode",
+            "main"
+        ));
+        assert!(stored_covers_label(Some("m"), "tg", "opencode", "m"));
+        assert!(stored_covers_label(
+            Some("[urgent] fix"),
+            "shop",
+            "opencode",
+            "[urgent] fix"
+        ));
+        assert!(!stored_covers_label(
+            Some("[tg] other · o"),
+            "tg",
+            "opencode",
+            "main"
+        ));
+        assert!(!stored_covers_label(None, "tg", "opencode", "main"));
+        // Old suffix under a new kind never covers (forces re-suffix).
+        assert!(!stored_covers_label(
+            Some("[tg] main · o"),
+            "tg",
+            "shell",
+            "main"
+        ));
+    }
+
+    #[test]
+    fn test_reset_desired_title_raw_split_custom() {
+        // Raw-stored split custom re-suffixes the pane label (fresh code).
+        assert_eq!(
+            reset_desired_title(
+                Some("[tg] Custom · o"),
+                "tg",
+                "console o27",
+                "opencode",
+                true,
+                Some("Custom")
+            ),
+            "[tg] Custom · o"
+        );
+    }
+
+    #[test]
     fn test_reset_desired_title_verbatim_or_formatted() {
         // Verbatim when pre-reset stored equals the tab core (single only).
         assert_eq!(
@@ -148,8 +208,8 @@ mod tests {
             reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false, None),
             "My Title"
         );
-        // Split tab cores format — unless stored equals the pane label
-        // (a user rename the watchdog keeps verbatim).
+        // Split tab cores format — a stored title covering the pane
+        // label re-suffixes it (custom preserved, fresh kind code).
         assert_eq!(
             reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true, None),
             "[tg] console o27 · o"
@@ -163,7 +223,7 @@ mod tests {
                 true,
                 Some("Custom Name")
             ),
-            "Custom Name"
+            "[tg] Custom Name · o"
         );
         // Formatted otherwise (new/changed cores, case-only changes).
         assert_eq!(
@@ -202,5 +262,13 @@ mod tests {
         );
         assert_eq!(naming_core(None, "o1", false), None);
         assert_eq!(naming_core(Some("  "), "sh1", false), None);
+    }
+
+    #[test]
+    fn test_kind_bypass_flips_only() {
+        assert!(!kind_bypass(None, "shell"));
+        assert!(!kind_bypass(Some("shell"), "shell"));
+        assert!(kind_bypass(Some("opencode"), "shell"));
+        assert!(kind_bypass(Some("shell"), "opencode"));
     }
 }
