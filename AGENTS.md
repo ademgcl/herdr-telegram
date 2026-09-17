@@ -20,7 +20,7 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 ## 3. Behavior
 
 - One topic per pane; titles 1:1 with pane names (`[space] label · code`); renames converge both ways (≤60s watchdog, else last-writer-wins).
-- Icon = context only (💻/💬, set once); status in cards/typing (never pin). Buzz: answers, `blocked`, limit stalls.
+- Icon = live kind (per-agent glyph, user customs kept); status in cards/typing (never pin). Buzz: answers, `blocked`, limit stalls.
 - Blocked cards follow content; taps edit in place; `/card` reposts, `/esc` dismisses (blocked-only).
 - Topic: text = prompt + commands; General: `/agents` `/spawn` `/space` `/shell` `/model` `/start` `/reset` `/cancel` `/help`; DM: reply to target.
 - Down-window spontaneous completions stay silent.

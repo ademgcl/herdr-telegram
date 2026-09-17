@@ -111,6 +111,17 @@ pub async fn sync_titles_with(
             None => "shell",
         };
         s.topics.note_kind(pane, kind);
+        // Kind flips re-icon bot-owned topics (user customs skipped):
+        // the glyph is the at-a-glance kind signal next to the short
+        // suffix. RPC only on an actual flip; failures retry next tick.
+        if let Some(want) =
+            names::icon_needs_update(s.topics.storage.get_icon(pane).as_deref(), kind)
+            && let (Some(forum), Some(thread)) =
+                (s.cfg.forum, s.topics.all_mappings().get(pane).copied())
+            && s.tg.set_topic_icon(forum, thread, want).await.is_ok()
+        {
+            s.topics.storage.set_icon(pane, want);
+        }
         let space = ws_label(spaces, &f.ws);
         let (tab, multi) = tab_of(facts, tabs, &census, pane);
         let tag = s.topics.tag_for(pane, kind);
@@ -240,8 +251,6 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                 s.topics.note_kind(&pane, &kind);
                 s.topics.sync_title(&pane, &formatted).await;
                 println!("[titles] rename #{th} → tab {tab_id} ({pane}) {core:?}");
-                s.tg.send_msg(chat, thread, &format!("✏️ tab → `{core}`"), None)
-                    .await;
             }
             Err(e) => {
                 s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {e}"), None)
@@ -264,7 +273,6 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             s.topics.note_kind(&pane, &kind);
             s.topics.sync_title(&pane, &formatted).await;
             println!("[titles] rename #{th} → pane {pane} label {core:?}");
-            s.tg.send_msg(chat, thread, &format!("✏️ pane label → `{core}` (tab shared by {shared} — rename the tab on the PC to rename all)"), None).await;
         }
         Err(e) => {
             s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {e}"), None)

@@ -199,9 +199,10 @@ impl TopicManager {
                 self.storage
                     .insert_with_title(pane.to_string(), thread, &name);
 
-                // Icon once by context (never flips). A missing topic
-                // here means a human delete raced the create: prune so
-                // the next tick recreates instead of returning dead.
+                // Icon by live kind at mint (flips converge next
+                // watchdog tick). A missing topic here means a human
+                // delete raced the create: prune so the next tick
+                // recreates instead of returning dead.
                 let icon = names::context_icon_emoji_id(kind);
                 match self.tg.set_topic_icon(forum, thread, icon).await {
                     Ok(()) => {
@@ -236,9 +237,10 @@ impl TopicManager {
         }
     }
 
-    /// Sync topic: ensure the pane's topic exists (creation + one-time
-    /// context icon). Status is not reflected on the icon — it surfaces
-    /// in cards and the typing indicator instead.
+    /// Sync topic: ensure the pane's topic exists (creation stamps the
+    /// kind icon; flips converge on the watchdog tick). Status is not
+    /// reflected on the icon — it surfaces in cards and the typing
+    /// indicator instead.
     pub async fn sync_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         self.sync_inner(pane, kind, space, false).await
     }

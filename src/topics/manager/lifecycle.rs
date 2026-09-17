@@ -92,8 +92,8 @@ impl TopicManager {
         }
     }
 
-    /// Durable shell marker: creation tags (`sh<n>`) and the one-time
-    /// context icon survive restarts, unlike `status` (empty at boot).
+    /// Durable shell marker: creation tags (`sh<n>`) and the kind icon
+    /// survive restarts, unlike `status` (empty at boot).
     /// Guards the already-shell retire decision when status is unknown —
     /// without it the first tick after a restart misclassifies a live
     /// shell long-run as a fresh agent→shell flip (ghost quit card +
@@ -198,7 +198,7 @@ impl TopicManager {
     ///    crash must never leave the mapping pointing at a deleted
     ///    thread — a leftover old topic is just an orphan, while the
     ///    mapping stays valid).
-    /// 4. Set context icon (or preserve user icon).
+    /// 4. Set kind icon (or preserve user icon).
     /// 5. Copy recent messages from the old topic to the new topic (F6).
     /// 6. Post fresh identity card (F2, never pinned).
     /// 7. Delete old topic on Telegram (if one existed).
@@ -246,13 +246,16 @@ impl TopicManager {
         self.storage
             .insert_with_title(pane.to_string(), new_thread, &name);
 
-        // Icon: preserve user-customized icon if one was set, else context icon
+        // Icon: preserve user-customized icon if one was set, else kind
+        // icon — stored only on success so a failed write retries next
+        // tick instead of freezing a stale glyph.
         let icon = self
             .storage
             .get_icon(pane)
             .unwrap_or_else(|| names::context_icon_emoji_id(kind).to_string());
-        self.storage.set_icon(pane, &icon);
-        let _ = self.tg.set_topic_icon(forum, new_thread, &icon).await;
+        if self.tg.set_topic_icon(forum, new_thread, &icon).await.is_ok() {
+            self.storage.set_icon(pane, &icon);
+        }
 
         // F6: copy recent messages to the new topic before old topic is deleted
         let mids = self.storage.get_recent_msgs(pane);

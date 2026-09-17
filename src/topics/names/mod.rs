@@ -1,9 +1,9 @@
 //! Stable short tags per pane (`o2`): kept as persisted ids; the
 //! VISIBLE title formats in Format B `[ws] label · code` (e.g.
 //! `[tg] o2 · o`, shells `[space-1] sh1 · sh`) — see [`format_title`].
-//! The topic icon is context-only (agent vs shell,
-//! set once at creation); live status surfaces in cards and the typing
-//! indicator (plus one unpinned identity card per topic).
+//! The topic icon names the live kind (one glyph per agent, 💬 shell);
+//! live status surfaces in cards and the typing indicator (plus one
+//! unpinned identity card per topic).
 
 mod chrome;
 mod core;
@@ -11,6 +11,10 @@ mod format;
 
 pub use core::topic_core;
 pub use format::format_title;
+
+#[cfg(test)]
+#[path = "icon_tests.rs"]
+mod icon_tests;
 
 /// 1–2 char code per agent kind. Hand-mapped for all herdr-known agents
 /// (single letters collide: claude/cline/copilot/cursor/codex); unknown
@@ -69,27 +73,74 @@ pub fn assign(existing: &[String], kind: &str) -> String {
     }
 }
 
-/// Initial topic icon per pane context/kind, set once at topic creation.
-/// Never continually mutated on status change.
+/// One topic icon per mapped kind + generic fallback (custom emoji IDs from Telegram's
+/// fixed forum-topic set — no logos exist, so glyphs are associative:
+/// 💻 code, 💬 shell prompt, 🤖 bot, 🧠 big brain, 📝 writing, 🔮 crystal
+/// ball, 👀 watching). `shell` keeps 💬 forever: the shell detector
+/// cross-checks it. Unknown kinds fall back to 🤖 (never 💬, so unknowns
+/// can't read as shells). Case-blind like [`code`].
+const KIND_ICONS: &[(&str, &str)] = &[
+    ("opencode", "5350554349074391003"), // 💻
+    ("shell", "5417915203100613993"),    // 💬
+    ("agy", "5309832892262654231"),      // 🤖
+    ("claude", "5237889595894414384"),   // 🧠
+    ("codex", "5373251851074415873"),    // 📝
+    ("gemini", "5350367161514732241"),   // 🔮
+    ("cursor", "5357121491508928442"),   // 👀
+];
+
+/// Generic agent glyph for unmapped kinds.
+const FALLBACK_ICON: &str = "5309832892262654231"; // 🤖
+
+/// Topic icon for a pane kind: table hit or the generic bot glyph.
+/// Never mutates on status change — only kind flips re-icon (see
+/// `icon_needs_update`), and user-customized icons are never touched.
 pub fn context_icon_emoji_id(kind: &str) -> &'static str {
-    match kind {
-        "shell" | "?" => "5417915203100613993", // 💬 shell prompt
-        _ => "5350554349074391003",             // 💻 code agent
+    let k = kind.trim().to_lowercase();
+    KIND_ICONS
+        .iter()
+        .find(|(name, _)| *name == k)
+        .map(|(_, id)| *id)
+        .unwrap_or(FALLBACK_ICON)
+}
+
+/// True when the icon id is one of ours (table + fallback): a stored id
+/// outside this set is user-customized and must never be overwritten.
+pub fn is_bot_icon(id: &str) -> bool {
+    FALLBACK_ICON == id || KIND_ICONS.iter().any(|(_, known)| *known == id)
+}
+
+/// Icon to write when the pane's kind is `kind` and the stored icon is
+/// `stored`: `Some` only for bot-owned stale icons (kind flip since the
+/// last write) — `None` covers current, missing (creation path owns
+/// those), `?`/empty kinds, and user customs.
+pub fn icon_needs_update(stored: Option<&str>, kind: &str) -> Option<&'static str> {
+    let k = kind.trim().to_lowercase();
+    if k.is_empty() || k == "?" {
+        return None;
+    }
+    let want = context_icon_emoji_id(&k);
+    match stored {
+        Some(cur) if is_bot_icon(cur) && cur != want => Some(want),
+        _ => None,
     }
 }
 
-/// F4: Verify that hardcoded context icon custom emoji IDs exist
+/// F4: Verify that hardcoded icon custom emoji IDs exist
 /// in the sticker set returned by Telegram's `getForumTopicIconStickers`.
 /// Returns any missing emoji IDs (empty if all valid).
 pub fn check_context_icons(valid_stickers: &[String]) -> Vec<&'static str> {
     let mut missing = Vec::new();
-    let shell_icon = context_icon_emoji_id("shell");
-    let agent_icon = context_icon_emoji_id("agent");
-    if !valid_stickers.iter().any(|s| s == shell_icon) {
-        missing.push(shell_icon);
+    for (_, id) in KIND_ICONS {
+        if !valid_stickers.iter().any(|s| s == id) {
+            missing.push(*id);
+        }
     }
-    if !valid_stickers.iter().any(|s| s == agent_icon) {
-        missing.push(agent_icon);
+    // Fallback dupes a table entry today; keep the guard for table edits.
+    if !KIND_ICONS.iter().any(|(_, id)| *id == FALLBACK_ICON)
+        && !valid_stickers.iter().any(|s| s == FALLBACK_ICON)
+    {
+        missing.push(FALLBACK_ICON);
     }
     missing
 }
@@ -165,35 +216,6 @@ mod tests {
         assert_eq!(assign(&taken, "claude"), "c2");
         let gapped = ["o1".to_string(), "o3".to_string()];
         assert_eq!(assign(&gapped, "opencode"), "o2");
-    }
-
-    #[test]
-    fn test_context_icon_mapping() {
-        assert_eq!(context_icon_emoji_id("shell"), "5417915203100613993");
-        assert_eq!(context_icon_emoji_id("?"), "5417915203100613993");
-        assert_eq!(context_icon_emoji_id("opencode"), "5350554349074391003");
-    }
-
-    #[test]
-    fn test_check_context_icons() {
-        let valid = vec![
-            "5417915203100613993".to_string(),
-            "5350554349074391003".to_string(),
-            "1234567890".to_string(),
-        ];
-        assert!(check_context_icons(&valid).is_empty());
-
-        let missing_agent = vec!["5417915203100613993".to_string()];
-        assert_eq!(
-            check_context_icons(&missing_agent),
-            vec!["5350554349074391003"]
-        );
-
-        let none_valid: Vec<String> = vec![];
-        assert_eq!(
-            check_context_icons(&none_valid),
-            vec!["5417915203100613993", "5350554349074391003"]
-        );
     }
 
     #[test]

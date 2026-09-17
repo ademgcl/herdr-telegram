@@ -161,12 +161,12 @@ async fn main() -> Res<()> {
                 let missing = topics::names::check_context_icons(&stickers);
                 if missing.is_empty() {
                     println!(
-                        "[telegram] forum icon stickers verified ({} available; context 💻/💬 valid)",
+                        "[telegram] forum icon stickers verified ({} available; kind glyphs valid)",
                         stickers.len()
                     );
                 } else {
                     eprintln!(
-                        "[telegram] WARNING: context icon stickers missing in set: {missing:?}"
+                        "[telegram] WARNING: kind icon stickers missing in set: {missing:?}"
                     );
                 }
             }
