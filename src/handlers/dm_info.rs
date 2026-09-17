@@ -53,7 +53,8 @@ pub(crate) async fn handle_keys(
 
 async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
     // Never interleave with an owned key sequence (mirrors topic /keys).
-    if s.blockop.lock().await.contains(pane) || s.modelop.lock().await.contains(pane) {
+    // Self-healing peeks: stale corpses evict instead of blocking.
+    if s.block_held(pane).await || s.model_held(pane).await {
         s.tg.send_msg(chat, None, "tap/model op in flight — wait a beat", None)
             .await;
         return;

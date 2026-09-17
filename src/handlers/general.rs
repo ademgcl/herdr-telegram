@@ -143,8 +143,9 @@ pub(crate) async fn handle_general_forum_message(
     // eaten by General's fallback and leak onto a later unrelated message.
     // A race lost to a resume falls through to normal routing below.
     // Peek first (mirrors topics): failures keep the waiter for retry.
+    // Self-healing: a stale corpse evicts instead of bricking answers.
     if let Some(wpane) = s.typewait.lock().await.get(&(chat, thread_id)).cloned() {
-        if s.blockop.lock().await.contains(&wpane) {
+        if s.block_held(&wpane).await {
             s.tg.send_msg(
                 chat,
                 thread_id,

@@ -15,8 +15,9 @@ use std::time::Duration;
 
 /// Re-post the pane's live dialog card. Read-only: never sends keys,
 /// never clears waiters, refuses while a tap owns the pane.
+/// Self-healing peek: a stale corpse evicts so /card stays a way out.
 async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    if s.blockop.lock().await.contains(pane) {
+    if s.block_held(pane).await {
         s.tg.send_msg(
             chat,
             thread,
@@ -56,8 +57,9 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
 
 /// Guarded dismiss: Escape only while verifiably blocked, then verify
 /// on screen like a tap (resume / new dialog / still blocked).
+/// Self-healing peek: a stale corpse evicts instead of refusing /esc.
 async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    if s.blockop.lock().await.contains(pane) {
+    if s.block_held(pane).await {
         s.tg.send_msg(
             chat,
             thread,

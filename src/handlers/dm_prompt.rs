@@ -7,10 +7,11 @@ use crate::{jobs::enqueue_prompt, state::AppState, types::AgentRow};
 pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool {
     // Peek first (mirrors topics): a blockop race or failed send must
     // not consume the waiter — the retry is just sending again.
+    // Self-healing: a stale corpse evicts instead of bricking answers.
     let Some(wpane) = s.typewait.lock().await.get(&(chat, None)).cloned() else {
         return false;
     };
-    if s.blockop.lock().await.contains(&wpane) {
+    if s.block_held(&wpane).await {
         s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None)
             .await;
         return true;
@@ -116,8 +117,9 @@ pub(crate) async fn handle_bare_prompt(
             }
             Err(e) => {
                 // In-flight tap owns the card; a failed card post falls
-                // back to text so the error is never silent.
-                if s.blockop.lock().await.contains(&row.pane) {
+                // back to text so the error is never silent. Self-healing
+                // peek: a stale corpse evicts instead of refusing rescue.
+                if s.block_held(&row.pane).await {
                     s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None).await;
                 } else if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
                     s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;

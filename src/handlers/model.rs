@@ -16,7 +16,7 @@ use super::model_parse::{FREE_ZEN, footer_model, norm};
 use super::model_scan::picker_hit;
 use crate::{
     herdr::client::{get_agent, read_screen_visible, send_agent_keys, type_pane_text},
-    state::AppState,
+    state::{AppState, guard::MODELOP_STALE_SECS},
     types::Res,
 };
 
@@ -169,8 +169,9 @@ pub async fn switch_model(
     filter: &str,
     marker: &str,
 ) -> Res<String> {
-    // RAII claim: cancellation mid-switch must not wedge the pane.
-    let _op = crate::state::OpGuard::claim(&s.modelop, pane)
+    // RAII claim (model threshold: switches pile more RPCs than taps):
+    // cancellation mid-switch must not wedge the pane.
+    let _op = crate::state::OpGuard::claim_limited(&s.modelop, pane, MODELOP_STALE_SECS)
         .await
         .ok_or_else(|| "a model switch is already running here".to_string())?;
     switch_inner(s, pane, filter, marker).await

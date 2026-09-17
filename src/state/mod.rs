@@ -15,7 +15,10 @@ use std::{
 use tokio::sync::Mutex;
 
 pub(crate) mod cancel;
+pub(crate) mod guard;
 mod jobs;
+
+pub use self::guard::OpGuard;
 
 pub struct State {
     pub cfg: Cfg,
@@ -50,7 +53,7 @@ pub struct State {
     /// supersedes; the task posts only if still current when it fires.
     pub debounce: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Panes with a model switch in flight — second taps wait.
-    pub modelop: Mutex<HashSet<String>>,
+    pub modelop: Mutex<HashMap<String, std::time::Instant>>,
     /// Last rate-limit episode alert per pane: (kind, at). Shared by
     /// watchdog + watchers (atomic claim ⇒ handoffs page once); cleared
     /// after confirmed-clean reads, re-reminded while stalls persist.
@@ -75,47 +78,12 @@ pub struct State {
     pub blocked_sig: Mutex<HashMap<String, String>>,
     /// Panes with a button-tap in flight — observations skip posting
     /// while set (the tap owns the card update when it lands).
-    pub blockop: Mutex<HashSet<String>>,
+    pub blockop: Mutex<HashMap<String, std::time::Instant>>,
     /// Active background typing indicator tasks for working panes.
     pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
 
 pub type AppState = Arc<State>;
-
-/// RAII single-flight guard: the pane is removed from the set on drop —
-/// including task cancellation between insert and the manual remove —
-/// so a wedged insert can never brick the pane until restart.
-pub struct OpGuard<'a> {
-    set: &'a Mutex<HashSet<String>>,
-    pane: String,
-}
-
-impl<'a> OpGuard<'a> {
-    /// Atomically claim the pane; `None` means already in flight.
-    pub async fn claim(set: &'a Mutex<HashSet<String>>, pane: &str) -> Option<Self> {
-        if !set.lock().await.insert(pane.to_string()) {
-            return None;
-        }
-        Some(Self {
-            set,
-            pane: pane.to_string(),
-        })
-    }
-}
-
-impl Drop for OpGuard<'_> {
-    fn drop(&mut self) {
-        // No await in Drop and never blocks the executor: single
-        // try_lock, no sleep/retry (a wedged lock logs loud, never stalls
-        // the tokio thread). The guard is never held across awaits, so
-        // the try almost always lands.
-        if let Ok(mut set) = self.set.try_lock() {
-            set.remove(&self.pane);
-        } else {
-            eprintln!("[state] OpGuard drop wedged for {}", self.pane);
-        }
-    }
-}
 
 /// Directory holding bot state files (jobs/focus/offset/topics).
 /// `HERDR_STATE_DIR` overrides it; default is the launch CWD (historic
@@ -212,13 +180,13 @@ impl State {
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
             debounce: Mutex::new(HashMap::new()),
-            modelop: Mutex::new(HashSet::new()),
+            modelop: Mutex::new(HashMap::new()),
             limit_alert: Mutex::new(HashMap::new()),
             limit_seen: Mutex::new(HashMap::new()),
             limit_miss: Mutex::new(HashMap::new()),
             limit_send_cool: Mutex::new(HashMap::new()),
             blocked_sig: Mutex::new(HashMap::new()),
-            blockop: Mutex::new(HashSet::new()),
+            blockop: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
         }))
     }
@@ -294,6 +262,12 @@ impl State {
         self.debounce.lock().await.remove(pane);
         self.clear_limit_episode(pane).await;
         self.blocked_sig.lock().await.remove(pane);
+        // Fresh guards die with the pane (dead/kill/reset/shell-flip is
+        // an abort, not a flap): pane names are reminted, so preserving
+        // a fresh guard would brick the successor until stale. A single
+        // flapped list sample can race a live tap the same way it races
+        // jobs/waiters (pre-existing, shared) — the next tap then
+        // claims fresh and single-flight resumes.
         self.modelop.lock().await.remove(pane);
         self.blockop.lock().await.remove(pane);
     }

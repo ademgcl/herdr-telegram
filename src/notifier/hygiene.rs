@@ -41,6 +41,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     known.extend(s.keywait.lock().await.values().cloned());
     known.extend(s.runwait.lock().await.values().cloned());
     known.extend(s.typewait.lock().await.values().cloned());
+    // Guard-only wedges pin too: a tap that consumed its waiter (no
+    // job, no intent) must still reach the reap below, never idle-skip.
+    known.extend(s.blockop.lock().await.keys().cloned());
+    known.extend(s.modelop.lock().await.keys().cloned());
     if known.is_empty() {
         return;
     }
@@ -88,8 +92,31 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                 .retain(|p, _| live.contains(p));
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
-            s.modelop.lock().await.retain(|p| live.contains(p));
-            s.blockop.lock().await.retain(|p| live.contains(p));
+            // Corpse-tap reap: a wedged OpGuard (drop lost the lock race)
+            // must never brick answers until restart — every answer path
+            // refuses while blockop holds the pane. Legit taps hold
+            // minutes (bounded RPC timeouts, worst ≈3min stacked); anything
+            // older is dead. Model switches pile longer (own threshold),
+            // same guarantee. Peeks self-evict too — this tick is only
+            // the backstop. Log after drop (never hold a guard across I/O).
+            {
+                use crate::state::guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, reap_stale};
+                let now = std::time::Instant::now();
+                let reaped_tap = {
+                    let mut m = s.blockop.lock().await;
+                    reap_stale(&mut m, &live, now, BLOCKOP_STALE_SECS)
+                };
+                for p in reaped_tap {
+                    eprintln!("[hygiene] reaped stale tap guard for {p}");
+                }
+                let reaped_model = {
+                    let mut m = s.modelop.lock().await;
+                    reap_stale(&mut m, &live, now, MODELOP_STALE_SECS)
+                };
+                for p in reaped_model {
+                    eprintln!("[hygiene] reaped stale model guard for {p}");
+                }
+            }
             // Typing tasks for dead panes: ownership-checked stop, never raw
             // abort — a remint racing the tick keeps its task (a raw
             // extract_if+abort could kill a successor's task while its job
@@ -124,7 +151,14 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{jobs::job::Job, state::cancel::isolated_state};
+    use crate::{
+        jobs::job::Job,
+        state::{
+            cancel::isolated_state,
+            guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS},
+        },
+    };
+    use std::time::{Duration, Instant};
 
     #[tokio::test]
     async fn test_reap_keeps_live_clears_dead() {
@@ -169,5 +203,29 @@ mod tests {
         reap_orphans(&s, &mut cache).await;
         assert!(s.jobs.lock().await.contains_key("w1:p1"));
         assert!(!job.is_stopped());
+    }
+
+    #[tokio::test]
+    async fn test_reap_clears_stale_guards_keeps_fresh() {
+        // Prod wiring: live-stale corpses reap under their own
+        // threshold, live-fresh survives, dead entries vanish.
+        let (s, _dir) = isolated_state();
+        let now = Instant::now();
+        let old_tap = now - Duration::from_secs(BLOCKOP_STALE_SECS + 60);
+        let old_model = now - Duration::from_secs(MODELOP_STALE_SECS + 60);
+        s.blockop.lock().await.insert("live:p1".into(), old_tap);
+        s.blockop.lock().await.insert("live:p2".into(), now);
+        s.modelop.lock().await.insert("live:p1".into(), old_model);
+        s.modelop.lock().await.insert("live:p2".into(), now);
+        s.blockop.lock().await.insert("dead:p9".into(), now);
+        s.modelop.lock().await.insert("dead:p9".into(), now);
+        let mut cache = Some(HashSet::from(["live:p1".to_string(), "live:p2".to_string()]));
+        reap_orphans(&s, &mut cache).await;
+        assert!(!s.blockop.lock().await.contains_key("live:p1"));
+        assert!(s.blockop.lock().await.contains_key("live:p2"));
+        assert!(!s.modelop.lock().await.contains_key("live:p1"));
+        assert!(s.modelop.lock().await.contains_key("live:p2"));
+        assert!(!s.blockop.lock().await.contains_key("dead:p9"));
+        assert!(!s.modelop.lock().await.contains_key("dead:p9"));
     }
 }

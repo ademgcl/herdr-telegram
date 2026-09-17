@@ -143,7 +143,8 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     // Taps own the update: a tap in flight wins over an observation.
     // Refresh-refresh single-flight happens at send time below (claim +
     // sig re-check), so a slow watchdog read never rejects user taps.
-    if s.blockop.lock().await.contains(pane) {
+    // Self-healing peek: a stale corpse evicts instead of hiding cards.
+    if s.block_held(pane).await {
         return false;
     }
     match get_agent(&s.cfg.socket, pane).await {

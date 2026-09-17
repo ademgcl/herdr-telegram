@@ -96,8 +96,9 @@ pub(crate) async fn handle_topic_agent_message(
     // the waiting prompt — a literal "/kill" can itself be the answer
     // a dialog is waiting for. Peek first (a blockop race or failed
     // send must not consume the waiter); a resume race falls through.
+    // Self-healing: a stale corpse evicts instead of bricking answers.
     if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).cloned() {
-        if s.blockop.lock().await.contains(&wpane) {
+        if s.block_held(&wpane).await {
             s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
             return;
         }
@@ -198,8 +199,8 @@ pub(crate) async fn handle_topic_agent_message(
         let keys: Vec<&str> = arg.split_whitespace().collect();
         // Never interleave with an owned key sequence: a tap answer
         // (blockop) or model switch (modelop) in flight owns the pane's
-        // input until it lands.
-        if s.blockop.lock().await.contains(pane) || s.modelop.lock().await.contains(pane) {
+        // input until it lands. Self-healing peeks: stale evicts.
+        if s.block_held(pane).await || s.model_held(pane).await {
             s.tg.send_msg(
                 chat,
                 Some(thread_id),
@@ -273,8 +274,9 @@ pub(crate) async fn handle_topic_agent_message(
             }
             Err(e) => {
                 // In-flight tap owns the card; a failed card post falls
-                // back to text so the error is never silent.
-                if s.blockop.lock().await.contains(pane) {
+                // back to text so the error is never silent. Self-healing
+                // peek: a stale corpse evicts instead of refusing rescue.
+                if s.block_held(pane).await {
                     s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
                 } else if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
                     s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
