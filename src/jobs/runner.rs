@@ -291,6 +291,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         }
     }
     // Shared stop: only when nothing owns the pane (atomic — a
-    // successor starting concurrently adopts or re-mints).
-    s.stop_typing_unless_owned(&pane).await;
+    // successor starting concurrently adopts or re-mints). Shell-aware:
+    // an overlapping shell settle keeps its indicator.
+    s.stop_shell_typing(&pane).await;
 }

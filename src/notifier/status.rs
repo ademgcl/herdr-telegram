@@ -123,7 +123,9 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             s.start_typing(pane).await;
         }
     } else {
-        s.stop_typing_unless_owned(pane).await;
+        // Shell-aware: a shell settle (pending-owned, no job) must keep
+        // its indicator across these samples.
+        s.stop_shell_typing(pane).await;
     }
 
     // Single jobs snapshot for the whole observe (blocked repeat,

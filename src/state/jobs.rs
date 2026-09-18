@@ -174,17 +174,18 @@ impl State {
         let pane_str = pane.to_string();
         let handle = tokio::spawn(async move {
             let forum = s.cfg.forum;
-            // General-origin jobs never have a thread; topic jobs use
-            // theirs. 1:1 working↔typing: while unmapped (mid-job delete
-            // healing), type into General EVERY tick — a ~5s-expiry
-            // indicator must never see a gap (an earlier once-per-3-ticks
-            // throttle left exactly such a dropout mid-job).
+            // 1:1 working↔typing: fire-and-forget per tick — an awaited
+            // sendChatAction under a slow Telegram stretches the cycle
+            // past the ~5s expiry and the indicator flickers. Overlaps
+            // are idempotent refreshes. Pause while unmapped (mid-job
+            // delete healing): a topic indicator typed into General
+            // shows nowhere useful and misleads.
             while let Some(chat_id) = forum {
-                let thread = s.topics.all_mappings().get(&pane_str).copied();
-                if let Some(th) = thread {
-                    s.tg.typing(chat_id, Some(th)).await;
-                } else {
-                    s.tg.typing(chat_id, None).await;
+                if let Some(th) = s.topics.all_mappings().get(&pane_str).copied() {
+                    let tg = s.tg.clone();
+                    tokio::spawn(async move {
+                        tg.typing(chat_id, Some(th)).await;
+                    });
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(super::TYPING_TICK_SECS)).await;
             }
