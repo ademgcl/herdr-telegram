@@ -211,6 +211,7 @@ pub fn help_text() -> &'static str {
      /card     re-post the question + buttons (never stuck)\n\
      /esc      guarded Esc: dismiss, blocked-only\n\
      /status   refresh agent status card\n\
+      /reset    paced reset of all topics (re-sync from Herdr)\n\
       /cancel [all|<pane>] abort focused job(s), all = everything / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
      ↩️ reply to any bot message → talks to that agent\n\

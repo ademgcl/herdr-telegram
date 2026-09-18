@@ -35,6 +35,21 @@ fn test_topic_help_text() {
 }
 
 #[test]
+fn test_dm_help_lists_every_dm_command() {
+    // DM router (dm.rs) handles each of these — help must not hide one.
+    // (/start + /help are escape hatches, listed nowhere by design.)
+    let help = help_text();
+    for cmd in [
+        "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell", "/pane",
+        "/read", "/output", "/card", "/esc", "/status", "/reset", "/cancel", "/keys",
+    ] {
+        assert!(help.contains(cmd), "DM help missing {cmd}");
+    }
+    assert!(help.contains("[space]"), "DM help must use [space]");
+    assert!(!help.contains("[workspace]"), "DM help must not use [workspace]");
+}
+
+#[test]
 fn test_ws_label() {
     let spaces = vec![
         WorkspaceInfo {

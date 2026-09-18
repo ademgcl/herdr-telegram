@@ -139,6 +139,21 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    // Parity with General: bare resets all topics (paced), a target
+    // resets one. Forum-only underneath — DM-only answers gracefully.
+    if cmd == "/reset" || cmd == "/reset_topics" {
+        let s2 = s.clone();
+        let target = arg.to_string();
+        if !target.is_empty() {
+            tokio::spawn(async move {
+                let _ = super::reset::run_single_topic_reset(&s2, chat, None, &target).await;
+            });
+        } else {
+            tokio::spawn(async move { super::reset::run_paced_reset(&s2, chat, None).await });
+        }
+        return;
+    }
+
     if cmd.starts_with('/') {
         s.tg.send_msg(chat, None, "unknown command — /help", None)
             .await;

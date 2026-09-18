@@ -20,7 +20,7 @@ pub(crate) async fn handle_general_forum_message(
     if cmd == "/start" || cmd == "/help" {
         let msg = "🤖 **Herdr Telegram Bot**\n\n\
                    • `/agents` — open spaces & agents control panel\n\
-                   • `/spawn <kind> [workspace]` — spawn a new agent & topic\n\
+                   • `/spawn <kind> [space]` — spawn a new agent & topic\n\
                     • `/shell [space]` — open a fresh shell pane & topic\n\
                     • `/pane [space]` — shell tab in this space, stays here\n\
                     • `/space [name]` — new space + shell topic\n\
