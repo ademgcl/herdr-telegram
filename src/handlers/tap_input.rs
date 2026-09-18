@@ -44,7 +44,7 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
     // RAII: cancellation mid-type must not wedge the pane.
     let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
         return Err(TypeError::Failed(
-            "answer already in flight — wait a beat".into(),
+            crate::ui::ANSWER_IN_FLIGHT.into(),
         ));
     };
     // The agent may have resumed between the snapshot and now: typing
@@ -120,13 +120,43 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         // until it lands. The waiter stays armed — the retry is just
         // sending the message again (a stale corpse self-evicts here).
         if s.block_held(&pane).await || s.model_held(&pane).await {
-            s.tg.send_msg(chat, thread, "tap/model op in flight — send again in a beat", None)
+            s.tg.send_msg(chat, thread, crate::ui::TAP_MODEL_IN_FLIGHT, None)
                 .await;
             return true;
         }
         s.keywait.lock().await.remove(&(chat, thread));
+        // Bounded input (single source with every /keys arm): refuse
+        // empty/over-cap, never silently truncate a partial write.
         let keys: Vec<&str> = text.split_whitespace().collect();
-        let was_shell = get_agent(&s.cfg.socket, &pane).await.is_err();
+        if let Err(msg) = super::shell_validate::validate_keys_len(keys.len()) {
+            s.tg.send_msg(chat, thread, &msg, None).await;
+            return true;
+        }
+        // Classify without guessing: get_agent-ok means an agent owns
+        // the pane (agent keys); a confirmed live pane with no agent is
+        // a shell (pane keys). Anything unreadable refuses visibly —
+        // never sends blind. (A selective get_agent blip on an agent
+        // pane routes one batch as pane keys; the keys land in the same
+        // pane, and the waiter is consumed, so the blast radius is one
+        // mistyped batch, never cross-pane injection.)
+        let was_shell = match get_agent(&s.cfg.socket, &pane).await {
+            Ok(_) => false,
+            Err(_) => {
+                // Distinguish gone (shell or dead) from blip: a failed
+                // pane list must not read as anything — refuse visibly.
+                match crate::herdr::client::list_panes(&s.cfg.socket).await {
+                    Ok(l) if l.contains(&pane.to_string()) => true,
+                    Ok(_) => {
+                        s.tg.send_msg(chat, thread, &format!("pane {pane} is gone"), None).await;
+                        return true;
+                    }
+                    Err(_) => {
+                        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+                        return true;
+                    }
+                }
+            }
+        };
         let r = if !was_shell {
             send_agent_keys(&s.cfg.socket, &pane, &keys).await
         } else {

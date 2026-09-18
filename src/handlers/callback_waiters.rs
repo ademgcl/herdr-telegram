@@ -1,0 +1,90 @@
+//! Callback waiter arms (K/R): split from `callback` (300-line file limit).
+//! Exclusive arming: a sibling waiter for the same key would otherwise
+//! win the next message instead of the tapped one.
+use super::callback_parse::gone_card;
+use crate::{
+    herdr::client::{get_agent, list_panes, list_workspaces},
+    state::AppState,
+    ui::ws_label,
+};
+use std::time::Instant;
+
+/// `K:<pane>`: next message types as raw keys into the pane.
+/// Fail-closed on outage like the R arm: an unreadable herdr never arms
+/// a waiter, moves focus, or edits the card (ambiguous read → no write).
+/// Confirmed-dead panes retire the stale card; confirmed shells proceed.
+pub(crate) async fn handle_keys_arm(
+    s: &AppState,
+    chat: i64,
+    msg_id: i64,
+    thread: Option<i64>,
+    pane: &str,
+) {
+    if get_agent(&s.cfg.socket, pane).await.is_err() {
+        match list_panes(&s.cfg.socket).await {
+            Ok(l) if l.contains(&pane.to_string()) => {}
+            Ok(_) => {
+                gone_card(s, chat, msg_id, pane).await;
+                return;
+            }
+            Err(_) => {
+                s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return;
+            }
+        }
+    }
+    s.runwait.lock().await.remove(&(chat, thread));
+    s.typewait.lock().await.remove(&(chat, thread));
+    s.keywait
+        .lock()
+        .await
+        .insert((chat, thread), (pane.to_string(), Instant::now()));
+    s.set_focus(pane).await;
+    s.tg.edit_msg(
+        chat,
+        msg_id,
+        &format!("⌨️ send keys for {pane}\nnext message = keys (e.g. `y enter`, `esc`)"),
+        None,
+    )
+    .await;
+}
+
+/// `R:<ws>`: next message runs as a shell command in the workspace.
+/// Fail-closed on outage: an unreadable list never reads as "gone".
+pub(crate) async fn handle_run_arm(
+    s: &AppState,
+    chat: i64,
+    msg_id: i64,
+    thread: Option<i64>,
+    ws: &str,
+) {
+    let spaces = match list_workspaces(&s.cfg.socket).await {
+        Ok(sp) => sp,
+        Err(_) => {
+            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        }
+    };
+    if !spaces.iter().any(|w| w.id == *ws) {
+        s.tg.edit_msg(chat, msg_id, &format!("space {ws} is gone"), None)
+            .await;
+        s.forget_target(chat, msg_id).await;
+        return;
+    }
+    s.keywait.lock().await.remove(&(chat, thread));
+    s.typewait.lock().await.remove(&(chat, thread));
+    s.runwait
+        .lock()
+        .await
+        .insert((chat, thread), (ws.to_string(), Instant::now()));
+    let label = ws_label(&spaces, ws);
+    s.tg.edit_msg(
+        chat,
+        msg_id,
+        &format!("⌨️ send shell command for {label}\nnext message = command"),
+        None,
+    )
+    .await;
+}

@@ -14,7 +14,7 @@ pub fn limit_card_text(pane: &str, hit: &LimitHit) -> String {
         ),
         ERROR_KIND => (
             "⚠️ provider request failed",
-            "This run failed — it won't auto-retry. Prompt again; if it repeats, /new or /model.",
+            "This run failed — it won't auto-retry. Prompt again; if it repeats, /spawn or /model.",
         ),
         "provider" => (
             "⚠️ provider overloaded",
@@ -22,7 +22,7 @@ pub fn limit_card_text(pane: &str, hit: &LimitHit) -> String {
         ),
         _ => (
             "⚠️ usage limit hit — agent is auto-retrying",
-            "Wait for reset, or /model to switch to a free Zen model.",
+            "Wait for the quota window to reset, or /model to switch to a free Zen model.",
         ),
     };
     let mut text = format!("{head} [{pane}]");

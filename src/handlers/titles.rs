@@ -196,7 +196,7 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             }
             let core = names::topic_core(name, &space, &kind);
             if core.trim().is_empty() {
-                s.tg.send_msg(chat, thread, "⚠️ rename ignored: empty after stripping title chrome", None).await;
+                s.tg.send_msg(chat, thread, "⚠️ rename ignored: empty after stripping formatting", None).await;
                 return;
             }
             (core, kind, space)

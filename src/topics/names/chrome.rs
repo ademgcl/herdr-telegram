@@ -156,7 +156,13 @@ fn strip_alt_token<'a>(body: &'a str, token: &str) -> Option<&'a str> {
         return None;
     }
     let sep = parts[parts.len() - 2];
-    if sep.chars().count() != 1 || !ALT_SEPS.contains(&sep.chars().next().unwrap()) {
+    // Single ASCII letter check without unwrap: count==1 guarantees
+    // next() is Some, but `?` keeps the no-panic invariant under refactor.
+    if sep.chars().count() != 1 {
+        return None;
+    }
+    let sep_ch = sep.chars().next()?;
+    if !ALT_SEPS.contains(&sep_ch) {
         return None;
     }
     // Slice the original (preserve inner spacing): drop trailing
@@ -227,7 +233,12 @@ pub(crate) fn shed_once<'a>(
             let last = parts[parts.len() - 1];
             if last.len() == 1 && last.chars().all(|c| c.is_ascii_alphanumeric()) {
                 let sep = parts[parts.len() - 2];
-                if sep.chars().count() == 1 && ALT_SEPS.contains(&sep.chars().next().unwrap()) {
+                // No unwrap: `?` keeps the no-panic invariant under refactor.
+                if sep.chars().count() != 1 {
+                    return None;
+                }
+                let sep_ch = sep.chars().next()?;
+                if ALT_SEPS.contains(&sep_ch) {
                     // Safe: `t` ends with `last` (trimmed), so the cut
                     // lands on a char boundary; `trim_end` absorbs any
                     // spacing runs (`main  |  q` sheds like `main | q`).

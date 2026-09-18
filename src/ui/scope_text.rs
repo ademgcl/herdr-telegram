@@ -32,7 +32,7 @@ pub const USAGE_HISTORY_DM: &str =
 pub const USAGE_KEYS_TOPIC: &str =
     "usage: `/keys <key> [key...]` sends to this topic's pane — DM `/keys <pane>` targets others.";
 pub const USAGE_RESET_TOPIC: &str =
-    "usage: bare `/reset` resets this topic — General/DM `/reset <pane>` targets others.";
+    "usage: bare `/reset` resets this topic — General/DM `/reset <pane|#thread>` targets others.";
 
 /// Bare `/keys` usage (own pane, both flavors) — the target guard
 /// (`USAGE_KEYS_TOPIC`) covers pane-shaped first tokens.

@@ -51,6 +51,11 @@ pub(crate) async fn handle_topic_keys_agent(
         return;
     }
     let keys: Vec<&str> = arg.split_whitespace().collect();
+    // Bounded like every keys arm (single source): refuse, never truncate.
+    if let Err(msg) = super::shell_validate::validate_keys_len(keys.len()) {
+        s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
+        return;
+    }
     // Never interleave with an owned key sequence: a tap answer
     // (blockop) or model switch (modelop) in flight owns the pane's
     // input until it lands. Self-healing peeks: stale evicts.
@@ -59,7 +64,7 @@ pub(crate) async fn handle_topic_keys_agent(
             .send_msg(
                 chat,
                 Some(thread_id),
-                "tap/model op in flight — wait a beat",
+                crate::ui::TAP_MODEL_IN_FLIGHT,
                 None,
             )
             .await;

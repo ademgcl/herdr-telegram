@@ -4,7 +4,11 @@ use crate::{
     ui::{agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb, ws_label},
 };
 
-pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>) {
+/// True when a billable resource was minted (workspace / agent): the
+/// caller stamps the persistent spawn dedup so a sequential retap stands
+/// down. False (pre-mint failure) leaves the key unstamped — the same
+/// card stays retappable, and the error edit already explains why.
+pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>) -> bool {
     s.tg.edit_msg(chat, msg_id, "⏳ creating space…", None)
         .await;
     let label = super::space::next_label(s).await;
@@ -13,7 +17,7 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
         Ok(_) => {
             s.tg.edit_msg(chat, msg_id, "⚠️ space create returned no id", None)
                 .await;
-            return;
+            return false;
         }
         Err(e) => {
             s.tg.edit_msg(
@@ -23,7 +27,7 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
                 None,
             )
             .await;
-            return;
+            return false;
         }
     };
     super::shell::open_space_shell(s, chat, thread, &ws_id).await;
@@ -36,6 +40,7 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
         Some(main_menu_kb(&spaces, &agents)),
     )
     .await;
+    true
 }
 
 pub(crate) async fn handle_spawn(
@@ -44,7 +49,7 @@ pub(crate) async fn handle_spawn(
     msg_id: i64,
     kind: &str,
     ws: Option<&str>,
-) {
+) -> bool {
     let label = ws.unwrap_or("tg");
     s.tg.edit_msg(
         chat,
@@ -58,17 +63,17 @@ pub(crate) async fn handle_spawn(
             s.remember(chat, Some(msg_id), &row.pane).await;
             s.set_focus(&row.pane).await;
             if let Ok(agent) = get_agent(&s.cfg.socket, &row.pane).await {
+                let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+                let space = ws_label(&spaces, &agent.ws);
                 // Ensure topic exists in forum group if enabled
                 if s.cfg.forum.is_some() {
-                    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                    let sp = ws_label(&spaces, &agent.ws);
-                    s.topics.sync_topic(&agent.pane, &agent.kind, sp).await;
+                    s.topics.sync_topic(&agent.pane, &agent.kind, space).await;
                 }
                 s.tg.edit_msg(
                     chat,
                     msg_id,
-                    &build_agent_card_text(&agent),
-                    Some(agent_card_kb(&row.pane, &agent.ws)),
+                    &build_agent_card_text(&agent, space),
+                    Some(agent_card_kb(&row.pane, &agent.ws, space)),
                 )
                 .await;
             } else {
@@ -82,15 +87,18 @@ pub(crate) async fn handle_spawn(
                 s.tg.edit_msg(
                     chat,
                     msg_id,
-                    &format!("✅ Started {} [{}] (status unreadable — /card)", row.kind, row.pane),
+                    &format!("✅ Started {} [{}] (status unreadable — try /status)", row.kind, row.pane),
                     None,
                 )
                 .await;
             }
+            // Minted: the agent exists even when the status read blipped.
+            true
         }
         Err(e) => {
             s.tg.edit_msg(chat, msg_id, &format!("⚠️ spawn failed: {e}"), None)
                 .await;
+            false
         }
     }
 }

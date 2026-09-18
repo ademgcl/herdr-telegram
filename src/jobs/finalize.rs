@@ -4,11 +4,11 @@
 //! Stamps (baseline, done-mark, books) are epoch-gated: a submit landing
 //! mid-RPC owns the pane, and the old prompt must stamp nothing.
 use crate::{
-    handlers::dialog::{dialog_sig, send_blocked_card},
     herdr::client::read_screen_adaptive,
     jobs::{
         arbitrate::select_final_body,
         books::settle_books,
+        finalize_blocked::try_finalize_blocked,
         job::Job,
         report::{RUN_ENDED, fold_live},
     },
@@ -110,85 +110,22 @@ pub async fn finalize(
 
     // Blocked settle: never the stream body (↳ echoes + footer would
     // pre-empt the question card) — always the blocked-card path.
-    if settled == "blocked" {
-        // Boot seed already carded this exact dialog: observe + books
-        // only, or the same question buzzes twice with ❗.
-        if s.blocked_sig.lock().await.get(pane)
-            .map(|v| v == &dialog_sig(&snapshot))
-            .unwrap_or(false)
-        {
-            // Superseded mid-RPCs: observe nothing stale.
-            if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-                acc.clear();
-                return false;
-            }
-            observe_status(s, pane, settled, true, "job").await;
-            // Any live slot duplicates the already-buzzed question card:
-            // fold its streamed output, or the working card freezes next
-            // to the question.
-            fold_live(
-                s,
-                live_dest,
-                live_mid,
-                "⛔ blocked — see question card",
-            )
-            .await;
-            settle_books(s, pane, job, entry_epoch, entry_pending).await;
-            return false;
-        }
-        let (chat, th) = *job.dest.lock().await;
-        // Superseded mid-RPCs: post/consume nothing (the handoff retires
-        // the live slot; consuming it strands a stale ❗ with no owner).
-        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-            acc.clear();
-            return false;
-        }
-        // Retire the live working card in place (address from the slot,
-        // never job.dest): the question card posts fresh below.
-        // Fail-closed: mid without dest drops without editing rather
-        // than guessing the thread after a remap.
-        if let Some(mid) = live_mid.take() {
-            if let Some((lchat, _)) = live_dest.take() {
-                s.tg.edit_msg(lchat, mid, "⛔ blocked — needs input (see next message)", None)
-                    .await;
-            }
-        } else {
-            live_dest.take();
-        }
-        // Re-check after the retire edit: a submit during it owns the
-        // pane — the ❗ card below would buzz stale beside its prompt.
-        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-            acc.clear();
-            return false;
-        }
-        let posted = send_blocked_card(s, chat, th, pane).await;
-        // Silent icon sync (later observations dedupe via blocked_sig).
-        observe_status(s, pane, settled, true, "job").await;
-        if posted {
-            // A submit landing during the card post owns the pane now:
-            // stamp nothing, or the new prompt's fresh output anchors
-            // away into the old prompt's baseline.
-            if job.epoch.load(Ordering::Relaxed) == entry_epoch {
-                s.last_done
-                    .lock()
-                    .await
-                    .insert(pane.to_string(), std::time::Instant::now());
-                // Anchor the baseline so later settles don't repost the dialog.
-                s.seen.lock().await.insert(pane.to_string(), snapshot);
-            }
-            settle_books(s, pane, job, entry_epoch, entry_pending).await;
-            return false;
-        }
-        // Undelivered: retry while there is somewhere to post (a pruned
-        // topic mapping means the card can never land — retire instead
-        // of spinning forever).
-        let mappable = s.cfg.forum.is_none() || s.topics.all_mappings().contains_key(pane);
-        if mappable {
-            println!("[prompt] finalize {pane}: blocked card undelivered, retrying");
-            return true;
-        }
-        settle_books(s, pane, job, entry_epoch, entry_pending).await;
-        return false;
+    // Split to `finalize_blocked` (300-line file limit).
+    if let Some(r) = try_finalize_blocked(
+        s,
+        pane,
+        job,
+        settled,
+        live_mid,
+        live_dest,
+        snapshot.clone(),
+        entry_epoch,
+        entry_pending,
+        acc,
+    )
+    .await
+    {
+        return r;
     }
     // Empty non-blocked settle: post nothing, but anchor the screen so
     // the span never resurfaces as a stale "fresh" delta. A live card
@@ -230,6 +167,10 @@ pub async fn finalize(
         acc.clear();
         return false;
     }
+    // Snapshot the dialog sig before the observe RPCs: a fresh `blocked`
+    // episode stamping mid-window must survive below (generation-checked
+    // remove — a blind remove would wipe it and repost a ghost card).
+    let pre_sig = s.blocked_sig.lock().await.get(pane).cloned();
     observe_status(s, pane, settled, true, "job").await;
     let (chat, th) = *job.dest.lock().await;
     // And after: a submit during the observe RPCs above retargets.
@@ -240,9 +181,14 @@ pub async fn finalize(
     }
     // Leaving blocked state clears the dialog signature (blocked path
     // returns above, so this only runs for settled non-blocked).
-    // After the gate: a submit racing the RPCs above must keep its
-    // dedup, or its fresh question card double-buzzes with ❗.
-    s.blocked_sig.lock().await.remove(pane);
+    // Generation-checked: a new blocked episode stamped during the RPCs
+    // above keeps its dedup, or its fresh question card double-buzzes.
+    {
+        let mut m = s.blocked_sig.lock().await;
+        if m.get(pane) == pre_sig.as_ref() {
+            m.remove(pane);
+        }
+    }
     println!(
         "[prompt] finalize {pane}: {} part(s), body {} chars",
         parts.len(),

@@ -98,10 +98,17 @@ pub async fn answer_tap(
             // a stale tap on a LIVE pane must strip, never ghost: posting
             // blocked buttons for working output invites blind taps (the
             // gate already refuses them, but the card must not offer).
-            let live_blocked = get_agent(&s.cfg.socket, pane)
-                .await
-                .map(|a| a.status == "blocked")
-                .unwrap_or(true);
+            // Fail-closed: an unreadable status posts no buttons and no
+            // buzz — an outage must never mint live buttons from a guess.
+            let live_blocked = match get_agent(&s.cfg.socket, pane).await {
+                Ok(a) => a.status == "blocked",
+                Err(_) => {
+                    s.tg.strip_buttons(chat, msg_id).await;
+                    s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                }
+            };
             if !live_blocked {
                 s.blocked_sig.lock().await.remove(pane);
                 let no_kb = Some(Value::Array(Vec::new()));

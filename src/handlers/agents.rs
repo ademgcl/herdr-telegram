@@ -6,7 +6,7 @@
 use crate::{
     herdr::client::{list_agents, list_workspaces, spawn_agent},
     state::AppState,
-    ui::{build_menu_text, main_menu_kb, ws_label},
+    ui::{build_menu_text, main_menu_kb, open_topic_kb, ws_label},
 };
 
 /// Read-only panel: spaces + agents + spawn buttons. No focus change.
@@ -68,7 +68,7 @@ pub(crate) async fn spawn_with_arg(s: &AppState, chat: i64, thread: Option<i64>,
                 Some(ws_id.as_str())
             }
             None => {
-                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{w}`"), None)
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{w}` — see `/agents`"), None)
                     .await;
                 return;
             }
@@ -80,6 +80,9 @@ pub(crate) async fn spawn_with_arg(s: &AppState, chat: i64, thread: Option<i64>,
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             let space = ws_label(&spaces, &row.ws);
             if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space).await {
+                // One-tap jump like the shell opener (deep link beats a
+                // bare thread number).
+                let kb = open_topic_kb(chat, topic_th);
                 s.tg.send_msg(
                     chat,
                     thread,
@@ -87,7 +90,7 @@ pub(crate) async fn spawn_with_arg(s: &AppState, chat: i64, thread: Option<i64>,
                         "✅ Started {} [{}] in topic #{topic_th}",
                         row.kind, row.pane
                     ),
-                    None,
+                    kb,
                 )
                 .await;
             } else {

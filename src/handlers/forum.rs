@@ -25,11 +25,36 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
 
     // `/space [name]` works everywhere (General + any agent/shell topic):
     // new space + shell topic to keep chatting in. Blank auto-labels.
+    // Waiter precedence: an armed typed/keyed/run answer for THIS thread
+    // owns the next message (DM parity) — a literal "/space …" answer
+    // must answer, never mint a billable workspace mid-dialog.
     let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),
     };
     if bare_cmd(raw_cmd) == "/space" {
+        let armed_here = if let Some(th) = thread_id {
+            let k = (chat, Some(th));
+            s.typewait.lock().await.contains_key(&k)
+                || s.keywait.lock().await.contains_key(&k)
+                || s.runwait.lock().await.contains_key(&k)
+        } else {
+            false
+        };
+        if armed_here
+            && let Some(th) = thread_id
+            && let Some(pane) = s.topics.pane_of_thread(th)
+        {
+            if let Some(mid) = msg["message_id"].as_i64() {
+                s.topics.record_msg(&pane, mid);
+            }
+            println!(
+                "[forum] topic msg for {pane} ({} chars)",
+                text.chars().count()
+            );
+            super::forum_topic::handle_topic_agent_message(s, chat, th, &pane, text).await;
+            return;
+        }
         let label = if super::space::check_label(arg) {
             arg.to_string()
         } else {

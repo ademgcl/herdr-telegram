@@ -180,6 +180,11 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
             return;
         }
         let keys: Vec<&str> = arg.split_whitespace().collect();
+        // Bounded like every keys arm (single source): refuse, never truncate.
+        if let Err(msg) = super::shell_validate::validate_keys_len(keys.len()) {
+            s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
+            return;
+        }
         match send_pane_keys(&s.cfg.socket, pane, &keys).await {
             Ok(_) => {
                 // Keys may have launched an agent — same instant re-icon.

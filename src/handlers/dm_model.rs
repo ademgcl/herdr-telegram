@@ -17,7 +17,7 @@ pub(crate) async fn handle_model(
         Some((t, rest)) => match resolve_target(rows, Some(t)) {
             Some(r) => (Some(r.pane), rest.trim()),
             None if t.contains(':') => {
-                s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                     .await;
                 return;
             }
@@ -29,7 +29,7 @@ pub(crate) async fn handle_model(
             } else if let Some(r) = resolve_target(rows, Some(arg)) {
                 (Some(r.pane), "")
             } else if arg.contains(':') {
-                s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                     .await;
                 return;
             } else {

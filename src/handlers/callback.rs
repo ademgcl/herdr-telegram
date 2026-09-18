@@ -1,14 +1,18 @@
 use super::callback_parse::{gone_card, live_target, pane_live, split_action, split_head};
+use super::callback_waiters::{handle_keys_arm, handle_run_arm};
 use crate::{
     herdr::client::{get_agent, list_agents, list_workspaces, read_agent_output, read_pane_output},
-    state::AppState,
+    state::{
+        AppState, OpGuard,
+        guard::{SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS},
+    },
     ui::{
         agent_card_kb, btn, build_agent_card_text, build_menu_text, build_ws_text, main_menu_kb,
-        pane_output_kb, spawn_kb, workspace_kb,
+        pane_output_kb, spawn_kb, workspace_kb, ws_label,
     },
 };
+use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
     let Some(from) = cbq["from"]["id"].as_i64() else {
@@ -53,7 +57,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.tg.send_msg(
                 chat,
                 thread,
-                "⌛️ that card expired — /card for a fresh one",
+                "⌛️ that card expired — pick it again from `/agents`",
                 None,
             )
             .await;
@@ -77,57 +81,63 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             .await;
             s.forget_target(chat, msg_id).await;
         }
-        ("N", None) => super::callback_spawn::handle_new_space(&s, chat, msg_id, thread).await,
-        ("k", Some(r)) => match r.split_once(':') {
-            Some((ws, kind)) => {
-                super::callback_spawn::handle_spawn(&s, chat, msg_id, kind, Some(ws)).await
+        ("N", None) => {
+            // Single-flight: a double-tap would mint two spaces + agents
+            // (real billable resources). Own `spawnop` map — synthetic
+            // keys are never live panes, so pane-liveness hygiene must
+            // never touch them (age-only expiry in hygiene). Persistent
+            // `spawndone` dedup covers SEQUENTIAL double-taps too (the
+            // pump awaits each update: a transient guard drops between
+            // queued taps). Stamped on success only — a pre-mint failure
+            // keeps the same card retappable (the error edit explains).
+            let key = format!("spawn:{chat}:{msg_id}");
+            {
+                let done = s.spawndone.lock().await;
+                if let Some(at) = done.get(&key)
+                    && !crate::state::guard::claim_stale(*at, std::time::Instant::now(), SPAWNDEDUP_SECS)
+                {
+                    return;
+                }
             }
-            None => super::callback_spawn::handle_spawn(&s, chat, msg_id, r, None).await,
-        },
+            let _guard =
+                match OpGuard::claim_limited(&s.spawnop, &key, SPAWNOP_STALE_SECS).await {
+                    Some(g) => g,
+                    None => return,
+                };
+            if super::callback_spawn::handle_new_space(&s, chat, msg_id, thread).await {
+                s.spawndone.lock().await.insert(key, std::time::Instant::now());
+            }
+        }
+        ("k", Some(r)) => {
+            let key = format!("spawn:{chat}:{msg_id}");
+            {
+                let done = s.spawndone.lock().await;
+                if let Some(at) = done.get(&key)
+                    && !crate::state::guard::claim_stale(*at, std::time::Instant::now(), SPAWNDEDUP_SECS)
+                {
+                    return;
+                }
+            }
+            let _guard =
+                match OpGuard::claim_limited(&s.spawnop, &key, SPAWNOP_STALE_SECS).await {
+                    Some(g) => g,
+                    None => return,
+                };
+            let minted = match r.split_once(':') {
+                Some((ws, kind)) => {
+                    super::callback_spawn::handle_spawn(&s, chat, msg_id, kind, Some(ws)).await
+                }
+                None => super::callback_spawn::handle_spawn(&s, chat, msg_id, r, None).await,
+            };
+            if minted {
+                s.spawndone.lock().await.insert(key, std::time::Instant::now());
+            }
+        }
         ("K", Some(pane)) => {
-            if !pane_live(&s, pane).await {
-                gone_card(&s, chat, msg_id, pane).await;
-                return;
-            }
-            // Exclusive waiter: a sibling run/type waiter for this key
-            // would otherwise win the next message instead.
-            s.runwait.lock().await.remove(&(chat, thread));
-            s.typewait.lock().await.remove(&(chat, thread));
-            s.keywait
-                .lock()
-                .await
-                .insert((chat, thread), (pane.to_string(), Instant::now()));
-            s.set_focus(pane).await;
-            s.tg.edit_msg(
-                chat,
-                msg_id,
-                &format!("⌨️ send keys for {pane}\nnext message = keys (e.g. `y enter`, `esc`)"),
-                None,
-            )
-            .await;
+            handle_keys_arm(&s, chat, msg_id, thread, pane).await;
         }
         ("R", Some(ws)) => {
-            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-            if !spaces.iter().any(|w| w.id == *ws) {
-                s.tg.edit_msg(chat, msg_id, &format!("space {ws} is gone"), None)
-                    .await;
-                s.forget_target(chat, msg_id).await;
-                return;
-            }
-            // Exclusive waiter (see K arm).
-            s.keywait.lock().await.remove(&(chat, thread));
-            s.typewait.lock().await.remove(&(chat, thread));
-            s.runwait
-                .lock()
-                .await
-                .insert((chat, thread), (ws.to_string(), Instant::now()));
-            s.tg.edit_msg(
-                chat,
-                msg_id,
-                &format!("⌨️ send shell command for {ws}\nnext message = command"),
-                None,
-            )
-            .await;
+            handle_run_arm(&s, chat, msg_id, thread, ws).await;
         }
         ("p", Some(pane)) => {
             let Ok(out) = read_pane_output(&s.cfg.socket, pane, 120).await else {
@@ -174,11 +184,13 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 Ok(agent) => {
                     s.remember(chat, Some(msg_id), pane).await;
                     s.set_focus(pane).await;
+                    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+                    let space = ws_label(&spaces, &agent.ws);
                     s.tg.edit_msg(
                         chat,
                         msg_id,
-                        &build_agent_card_text(&agent),
-                        Some(agent_card_kb(pane, &agent.ws)),
+                        &build_agent_card_text(&agent, space),
+                        Some(agent_card_kb(pane, &agent.ws, space)),
                     )
                     .await;
                 }

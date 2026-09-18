@@ -119,11 +119,12 @@ fn read_tail_from(path: &std::path::Path, pos: u64, len: u64, cap: u64) -> Res<(
     Ok((buf, start))
 }
 
-/// Boot-time log rotation: bot.log grows unbounded over long prod runs
+/// Log rotation: bot.log grows unbounded over long prod runs
 /// (no rotation daemon watches it). Copy-truncate over 8MB into a
 /// single backup — same inode, so writers appending across the call
-/// never lose output. Boot-only (single-threaded, no race). Best
-/// effort throughout: rotation must never fail the boot.
+/// never lose output. Called at boot and on the 60s watchdog tick
+/// (size-check first, so the steady-state cost is one stat).
+/// Best effort throughout: rotation must never fail the boot/tick.
 pub(crate) fn rotate_log_if_huge() {
     const LIMIT: u64 = 8 << 20;
     let log = proc::log_path();

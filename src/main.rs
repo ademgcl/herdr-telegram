@@ -7,6 +7,7 @@ mod herdr;
 mod jobs;
 mod notifier;
 mod ops;
+mod shutdown;
 mod state;
 mod telegram;
 mod topics;
@@ -18,6 +19,7 @@ use crate::{
     herdr::{event_task, ping},
     jobs::recover_pending,
     notifier::reconcile,
+    shutdown::shutdown_signal,
     state::State,
     telegram::{get_updates, handle_update},
     types::{HERDR_PROTOCOL, Res, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
@@ -194,6 +196,7 @@ async fn main() -> Res<()> {
                 break;
             }
             _ = watchdog_tick.tick() => {
+                crate::ops::rotate_log_if_huge();
                 reconcile(&s, false, "watchdog").await;
             }
             updates = async {
@@ -238,6 +241,14 @@ async fn main() -> Res<()> {
                         let msg = s.tg.redact(&e.to_string());
                         // Backoff sleeps stay signal-aware: a deaf 30s
                         // sleep starves TERM into SIGKILL + replay.
+                        // Revoked-token 401 never recovers by retrying:
+                        // FATAL-break like menu sync so a fixed replacement
+                        // can bind instead of squatting the guard forever.
+                        if msg.contains("401") || msg.contains("Unauthorized") {
+                            eprintln!("[tg] FATAL: getUpdates unauthorized (401) — token revoked?");
+                            s.save_offset().await;
+                            break;
+                        }
                         if msg.contains("Conflict") {
                             eprintln!("[tg] poll conflict (overlap), backing off 30s: {msg}");
                             tokio::select! {
@@ -266,27 +277,4 @@ async fn main() -> Res<()> {
         }
     }
     Ok(())
-}
-
-/// SIGINT or SIGTERM (launchd/docker send TERM): break the poll loop so
-/// the offset flushes instead of replaying the batch on next boot.
-/// Pending intents are already durable per-write; topics/focus likewise.
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => tokio::select! {
-                _ = tokio::signal::ctrl_c() => {},
-                _ = term.recv() => {},
-            },
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
 }

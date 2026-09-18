@@ -5,13 +5,12 @@ use crate::{
     jobs::enqueue_prompt,
     state::AppState,
     ui::{
-        agent_card_kb, build_agent_card_text,
         scope_text::{READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC, parse_count},
         topic_help_text,
     },
 };
 
-use super::{forum::bare_cmd, topic_keys::handle_topic_keys_agent};
+use super::{forum::bare_cmd, forum_topic_status::{handle_model_topic, handle_status_topic}, topic_keys::handle_topic_keys_agent};
 
 pub(crate) async fn handle_topic_agent_message(
     s: AppState,
@@ -107,7 +106,7 @@ pub(crate) async fn handle_topic_agent_message(
     // answers.
     if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).map(|(p, _)| p.clone()) {
         if s.block_held(&wpane).await {
-            s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None).await;
             return;
         }
         match super::tap::type_text(&s, &wpane, text).await {
@@ -138,9 +137,8 @@ pub(crate) async fn handle_topic_agent_message(
         }
     }
 
-    // Control plane works in-thread (menus are chat-global): panel,
-    // spawn and own-pane reset land here, after the waiters (an armed
-    // waiter owns the next message — commands must not hijack answers).
+    // Control plane works in-thread, after the waiters (an armed
+    // waiter owns the next message).
     if cmd == "/agents" || cmd == "/spawn" {
         super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
         return;
@@ -233,19 +231,12 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     if cmd == "/status" {
-        let text = build_agent_card_text(&agent);
-        let kb = agent_card_kb(pane, &agent.ws);
-        s.tg.send_msg(chat, Some(thread_id), &text, Some(kb)).await;
+        handle_status_topic(&s, chat, thread_id, pane, &agent).await;
         return;
     }
 
     if cmd == "/model" {
-        if arg.is_empty() {
-            super::model::show_model(&s, chat, Some(thread_id), pane).await;
-        } else {
-            let filter = super::model::search_filter(arg);
-            super::model::switch_by_filter(&s, chat, Some(thread_id), pane, &filter, arg).await;
-        }
+        handle_model_topic(&s, chat, thread_id, pane, arg).await;
         return;
     }
 
@@ -286,7 +277,7 @@ pub(crate) async fn handle_topic_agent_message(
                 // back to text so the error is never silent. Self-healing
                 // peek: a stale corpse evicts instead of refusing rescue.
                 if s.block_held(pane).await {
-                    s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
+                    s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None).await;
                 } else if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
                     s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
                 }

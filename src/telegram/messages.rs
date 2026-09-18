@@ -113,13 +113,18 @@ impl TelegramClient {
                 Err(e) => {
                     let msg = e.to_string();
                     eprintln!("sendMessage failed: {}", self.redact(&msg));
-                    // If effect is rejected, strip message_effect_id and retry immediately
+                    // If effect is rejected, strip message_effect_id and retry immediately.
+                    // Fail-closed shape: params is locally built as an object —
+                    // a non-object here breaks the retry instead of panicking.
                     if params.get("message_effect_id").is_some()
                         && (msg.contains("EFFECT")
                             || msg.contains("effect")
                             || msg.contains("not allowed"))
                     {
-                        params.as_object_mut().unwrap().remove("message_effect_id");
+                        let Some(obj) = params.as_object_mut() else {
+                            break;
+                        };
+                        obj.remove("message_effect_id");
                         continue;
                     }
                     if let Some(wait) = Self::retry_after(&msg) {

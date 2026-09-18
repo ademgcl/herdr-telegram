@@ -117,7 +117,7 @@ pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
     json!(kb)
 }
 
-pub fn agent_card_kb(pane: &str, ws: &str) -> Value {
+pub fn agent_card_kb(pane: &str, ws_id: &str, ws_label: &str) -> Value {
     json!([
         [
             btn("📄 output", &format!("o:{pane}")),
@@ -127,7 +127,7 @@ pub fn agent_card_kb(pane: &str, ws: &str) -> Value {
             btn("🤖 model", &format!("M:list:{pane}")),
             btn("🔄 refresh", &format!("a:{pane}")),
         ],
-        [btn(format!("← {ws}"), &format!("w:{ws}")),],
+        [btn(format!("← {ws_label}"), &format!("w:{ws_id}")),],
     ])
 }
 

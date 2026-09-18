@@ -26,6 +26,8 @@ pub async fn settle_books(
     // a shell command (or a re-entered agent prompt) may have
     // overwritten the shared per-pane slot mid-finalize — wiping it
     // would eat their reply's intent while ours is already delivered.
+    // Match-guarded (same TOCTOU as the shell settle): the check above
+    // and the clear below span awaits.
     let prompt = job.prompt.lock().await.clone();
     let (chat, th) = *job.dest.lock().await;
     // Re-check after the snapshots above: a submit interleaving here
@@ -36,9 +38,7 @@ pub async fn settle_books(
         *p = p.saturating_sub(entry_pending);
         return;
     }
-    if s.pending_matches(pane, chat, th, &prompt).await {
-        s.clear_pending(pane).await;
-    }
+    s.clear_pending_if_matches(pane, chat, th, &prompt).await;
     // Re-check the epoch under the map guard with no await after: reuse
     // keeps the SAME Arc (ptr_eq alone cannot tell a successor apart),
     // so a submit landing between the checks above and this remove

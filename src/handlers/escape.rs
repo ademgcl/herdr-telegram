@@ -49,7 +49,7 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             .await;
         }
         Err(_) => {
-            s.tg.send_msg(chat, thread, "⚠️ herdr unreachable — try again", None)
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
         }
     }
@@ -63,7 +63,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         s.tg.send_msg(
             chat,
             thread,
-            "answer in flight — wait a beat, then /esc",
+            crate::ui::ESC_IN_FLIGHT,
             None,
         )
         .await;
@@ -72,12 +72,18 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if a.status == "blocked" => {}
         Ok(a) => {
+            // Remedy syntax differs by surface: topics send own-pane
+            // keys, DM must name the pane.
+            let keys_hint = match thread {
+                Some(_) => "`/keys esc`".to_string(),
+                None => format!("`/keys {pane} esc`"),
+            };
             s.tg
                 .send_msg(
                     chat,
                     thread,
                     &format!(
-                        "not blocked (status={}) — Esc would hit live work; use /keys esc if you really mean it",
+                        "not blocked (status={}) — Esc would hit live work; use {keys_hint} if you really mean it",
                         a.status
                     ),
                     None,
@@ -86,7 +92,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             return;
         }
         Err(_) => {
-            s.tg.send_msg(chat, thread, "⚠️ herdr unreachable — try again", None)
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
         }
@@ -95,7 +101,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         s.tg.send_msg(
             chat,
             thread,
-            "answer in flight — wait a beat, then /esc",
+            crate::ui::ESC_IN_FLIGHT,
             None,
         )
         .await;
@@ -166,14 +172,14 @@ async fn resolve_dm_pane(
     // below would otherwise show/dismiss the wrong dialog (bare commands
     // only; an explicit live arg already wins in the match).
     if arg.is_empty() && unmatched_reply(rows, reply_pane) {
-        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return None;
     }
     let mut row = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
         Some(r) => Some(r),
         None if !arg.is_empty() => {
-            s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                 .await;
             return None;
         }
@@ -195,7 +201,7 @@ async fn resolve_dm_pane(
     match row {
         Some(r) => Some(r.pane),
         None => {
-            s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                 .await;
             None
         }

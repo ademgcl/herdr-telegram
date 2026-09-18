@@ -55,7 +55,7 @@ pub(crate) async fn handle_general_forum_message(
             s.tg.send_msg(
                 chat,
                 thread_id,
-                "answer already in flight — wait a beat",
+                crate::ui::ANSWER_IN_FLIGHT,
                 None,
             )
             .await;

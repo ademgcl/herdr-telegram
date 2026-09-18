@@ -141,7 +141,7 @@ pub fn build_ws_text(ws: &str, spaces: &[WorkspaceInfo], agents: &[AgentRow]) ->
     text
 }
 
-pub fn build_agent_card_text(a: &AgentDetail) -> String {
+pub fn build_agent_card_text(a: &AgentDetail, space: &str) -> String {
     let branch_line = match &a.branch {
         Some(b) => format!("\nbranch: 🌿 {b}"),
         None => String::new(),
@@ -152,7 +152,7 @@ pub fn build_agent_card_text(a: &AgentDetail) -> String {
         a.kind,
         a.pane,
         a.status,
-        a.ws,
+        space,
         branch_line,
         a.cwd,
         a.title,
@@ -218,7 +218,7 @@ pub fn help_text() -> &'static str {
      `/keys <pane> y enter`   send raw keys\n\n\
      ↩️ reply to any bot message → talks to that agent\n\
      plain text → focused agent\n\n\
-      alerts fire on 🛑 needs-input / 🏆 finish — just reply to them"
+      alerts fire on ⛔ needs-input / ✅ finish — just reply to them"
 }
 
 /// General-topic help (extracted from the General router so parity
@@ -231,9 +231,9 @@ pub fn general_help_text() -> &'static str {
       • `/shell [space]` — open a fresh shell pane & topic\n\
       • `/pane [space]` — shell pane in this space, stays here\n\
       • `/space [name]` — new space + shell topic\n\
-     • `/model` — inside an agent topic: model picker\n\
-     • `/history [n]` — inside an agent topic: recent prompts\n\
-     • `/card` `/esc` — inside an agent topic: fresh buttons / guarded dismiss\n\
+     • `/model` — in an agent topic (or DM): model picker\n\
+     • `/history [n]` — in an agent topic (or DM): recent prompts\n\
+     • `/card` `/esc` — in an agent topic (or DM): fresh buttons / guarded dismiss\n\
      • `/quit` `/kill` `/split` `/read` `/output` `/status` `/keys` — inside the agent's topic (or DM)\n\
      • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
       • `/cancel [all|<pane>]` — abort focused job(s), all = everything\n\n\
@@ -246,7 +246,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
          • Plain text sends a prompt to this agent\n\
          • `/start` — show this help\n\
          • `/agents` — spaces & agents panel (here)\n\
-          • `/spawn <kind> [space]` — spawn here\n\
+          • `/spawn <kind> [space]` — spawn a new agent & topic\n\
          • `/read [n]` or `/output [n]` — fetch recent terminal output\n\
          • `/history [n]` — recent prompts you sent here\n\
          • `/model` — current model + free-Zen picker (opencode)\n\
@@ -276,7 +276,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • `opencode`, `claude`, … — run one to re-enter as agent\n\
          • `/start` — show this help\n\
          • `/agents` — spaces & agents panel (here)\n\
-          • `/spawn <kind> [space]` — spawn here\n\
+          • `/spawn <kind> [space]` — spawn a new agent & topic\n\
          • `/read [n]` — recent shell output (`/output [n]` too)\n\
          • `/history [n]` — recent shell commands\n\
          • `/esc` — send Esc (vim toggles mode)\n\

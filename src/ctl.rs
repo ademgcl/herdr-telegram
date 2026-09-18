@@ -10,7 +10,7 @@ use crate::{
     state::AppState,
     types::Res,
 };
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
 pub async fn run_control_server(s: AppState, listener: TcpListener) {
@@ -35,23 +35,54 @@ pub async fn run_control_server(s: AppState, listener: TcpListener) {
         let token2 = token.clone();
         tokio::spawn(async move {
             let (reader, mut writer) = socket.into_split();
-            let mut lines = BufReader::new(reader).lines();
-            // First line authenticates; the command follows. Wrong or
-            // missing token: refuse before touching any state.
-            let authed = match lines.next_line().await {
-                Ok(Some(l)) => auth_line_ok(&l, &token2),
-                _ => false,
+            let mut reader = BufReader::new(reader);
+            // Bounded reads: no timeout + no length cap lets any local uid
+            // hold tasks forever or OOM on a GB without `\n`. Commands are
+            // one short line — 10s + 4KB then drop (fail-closed). The cap
+            // is enforced DURING the read (`take`), never after buffering
+            // a full line (a post-hoc `len` check OOMs first).
+            async fn read_capped_line(
+                r: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+            ) -> Option<String> {
+                let mut buf = Vec::new();
+                let n = match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    r.take(4097).read_until(b'\n', &mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(n)) => n,
+                    _ => return None,
+                };
+                // `take(4097)` caps allocation during the read: anything
+                // over 4KB (or empty/EOF) refuses without ever buffering
+                // an unbounded line.
+                if n == 0 || buf.len() > 4096 {
+                    return None;
+                }
+                String::from_utf8(buf).ok().map(|s| {
+                    s.strip_suffix('\n')
+                        .unwrap_or(&s)
+                        .strip_suffix('\r')
+                        .unwrap_or(s.strip_suffix('\n').unwrap_or(&s))
+                        .to_string()
+                })
+            }
+            let authed = match read_capped_line(&mut reader).await {
+                Some(l) => auth_line_ok(&l, &token2),
+                None => false,
             };
             if !authed {
                 let _ = writer.write_all(b"ERR: unauthorized\n").await;
                 let _ = writer.flush().await;
                 return;
             }
-            if let Ok(Some(line)) = lines.next_line().await {
-                let resp = handle_cmd(&s2, line.trim()).await;
-                let _ = writer.write_all(resp.as_bytes()).await;
-                let _ = writer.flush().await;
-            }
+            let Some(cmd) = read_capped_line(&mut reader).await else {
+                return;
+            };
+            let resp = handle_cmd(&s2, cmd.trim()).await;
+            let _ = writer.write_all(resp.as_bytes()).await;
+            let _ = writer.flush().await;
         });
     }
 }

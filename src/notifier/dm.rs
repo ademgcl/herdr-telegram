@@ -2,7 +2,7 @@
 use crate::{
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
-    notifier::cards::post_spontaneous_card,
+    notifier::spontaneous::post_spontaneous_card,
     state::AppState,
 };
 use std::time::{Duration, Instant};

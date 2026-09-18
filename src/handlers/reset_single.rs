@@ -19,6 +19,36 @@ pub fn split_reset_target(target: &str) -> Result<i64, String> {
     clean.parse::<i64>().map_err(|_| clean.to_string())
 }
 
+/// Step-3 dead-topic prune: split from `reset` (300-line file limit).
+/// Deletes topics for panes gone from Herdr. Snapshot-id delete plus a
+/// generation gate before the retire: `mappings` predates minutes of
+/// paced sleeps, so a live foreign mapping now is a remint whose fresh
+/// jobs/state must survive (kill/reconcile_close parity).
+pub(crate) async fn prune_dead_topics(
+    s: &AppState,
+    mappings: std::collections::HashMap<String, i64>,
+    live_panes: &std::collections::HashSet<String>,
+) -> usize {
+    let mut dead_deleted = 0;
+    for (pane, thread) in mappings {
+        if !live_panes.contains(&pane) {
+            println!("[reset] deleting dead topic #{thread} for {pane}");
+            if s.topics.delete_topic_for_thread(&pane, thread).await {
+                dead_deleted += 1;
+            }
+            let cur = s.topics.all_mappings().get(&pane).copied();
+            if cur != Some(thread) && cur.is_some() {
+                tokio::time::sleep(super::reset::RESET_STEP_DELAY).await;
+                continue;
+            }
+            s.cancel_jobs_for(&pane).await;
+            s.clear_pane(&pane).await;
+            tokio::time::sleep(super::reset::RESET_STEP_DELAY).await;
+        }
+    }
+    dead_deleted
+}
+
 /// Spawned single-topic reset: ~6 Telegram RPCs + herdr reads must not
 /// stall the sequential pump behind the requesting surface. Owned
 /// target for 'static. Single source for the forum/General/DM arms.

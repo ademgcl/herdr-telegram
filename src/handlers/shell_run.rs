@@ -1,4 +1,5 @@
 use super::shell_common::{settle_report_shell, shell_snapshot};
+use super::shell_validate::validate_shell_cmd;
 use crate::{
     herdr::client::{create_tab, list_workspaces, send_pane_input},
     state::AppState,
@@ -9,6 +10,14 @@ use crate::{
 /// settles — plus a completion follow-up when a long run outlasts the
 /// first settle (see `settle_report_shell`).
 pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, cmd: &str) {
+    // Fail-closed before any RPC: shared cap with the fresh-tab path.
+    let cmd = match validate_shell_cmd(cmd) {
+        Ok(t) => t,
+        Err(msg) => {
+            s.tg.send_msg(chat, thread, msg, None).await;
+            return;
+        }
+    };
     let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         s.tg.send_msg(
@@ -38,6 +47,16 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
 /// shell status and focus like any shell — otherwise every run leaks an
 /// orphan tab nobody can see.
 pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws: &str, cmd: &str) {
+    // Fail-closed before minting: whitespace-only input must never mint a
+    // tab + topic + pending intent + settle loop for nothing. Shared cap
+    // with the existing-pane path (single source, never drift).
+    let cmd = match validate_shell_cmd(cmd) {
+        Ok(t) => t,
+        Err(msg) => {
+            s.tg.send_msg(chat, thread, msg, None).await;
+            return;
+        }
+    };
     let pane = match create_tab(&s.cfg.socket, ws).await {
         Ok(p) if !p.is_empty() => p,
         Ok(_) => {
@@ -61,11 +80,10 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     // tab whose first send fails must not pin focus on the orphan.
     // Fresh shells start slow (rc files, version managers) — settle first.
     let before = shell_snapshot(s, &pane).await;
-    let cmd = cmd.trim();
     s.tg.send_msg(
         chat,
         thread,
-        &format!("⏳ running in {ws} [{pane}]\n$ {cmd}"),
+        &format!("⏳ running in {space} [{pane}]\n$ {cmd}"),
         None,
     )
     .await;

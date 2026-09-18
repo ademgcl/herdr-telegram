@@ -50,32 +50,41 @@ impl TopicManager {
         self.sync_topic(pane, "shell", "?").await;
     }
 
-    pub async fn close_topic(&self, pane: &str) -> bool {
-        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+    /// Race-free close: RPCs the SNAPSHOT thread id directly, never
+    /// re-reading the mapping (a remint landing between check and RPC
+    /// must not have its fresh topic closed). Compare-deletes the mapping
+    /// only when it still equals the snapshot.
+    pub async fn close_topic_for_thread(&self, pane: &str, thread: i64) -> bool {
+        let Some(forum) = self.forum_id else {
             return true;
         };
-        match self.tg.close_forum_topic(forum, thread).await {
+        let ok = match self.tg.close_forum_topic(forum, thread).await {
             Ok(()) => true,
             Err(e) => {
                 if crate::telegram::topic_missing(&e.to_string()) {
-                    // Corpse pruned inside (unlike the old caller-removes):
-                    // the next ensure recreates instead of reusing dead.
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
                 eprintln!("[topics] close topic #{thread} ({pane}) failed: {e}");
                 false
             }
+        };
+        if ok {
+            self.remove_mapping_if_thread(pane, thread);
         }
+        ok
     }
 
-    pub async fn delete_topic(&self, pane: &str) -> bool {
-        let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
+    /// Race-free delete: RPCs the SNAPSHOT thread id directly, never
+    /// re-reading the mapping (parity with `close_topic_for_thread` — a
+    /// remint landing between snapshot and RPC must not have its fresh
+    /// topic deleted). Compare-deletes only when still current.
+    pub async fn delete_topic_for_thread(&self, pane: &str, thread: i64) -> bool {
+        let Some(forum) = self.forum_id else {
             return true;
         };
         match self.tg.delete_forum_topic(forum, thread).await {
             Ok(()) => {
-                // Compare-and-delete: a remint mid-RPC must survive.
                 self.remove_mapping_if_thread(pane, thread);
                 println!("[topics] deleted topic #{thread} ({pane})");
                 true

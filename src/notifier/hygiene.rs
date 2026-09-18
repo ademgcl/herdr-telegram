@@ -8,7 +8,7 @@ use crate::{
         AppState,
         guard::{
             BLOCKOP_STALE_SECS, KEYWAIT_STALE_SECS, MODELOP_STALE_SECS, RUNWAIT_STALE_SECS,
-            TYPEWAIT_STALE_SECS, claim_stale, reap_stale,
+            SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS, TYPEWAIT_STALE_SECS, claim_stale, reap_stale,
         },
     },
 };
@@ -94,7 +94,9 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // as a shell command. Fail-closed expiry, same corpse bound style
     // as the op guards. Key/type waiters expire by age too (a stale K
     // arm keys into live work, a stale Type arm answers a dead question)
-    // — pane-death reap above still applies first.
+    // — pane-death reap above still applies first. (Chat-keyed notice
+    // stamps self-prune on access with their own bounds — daily nag vs
+    // 10-min stale — so a shared reap here would corrupt the daily one.)
     {
         let now = std::time::Instant::now();
         s.runwait
@@ -112,6 +114,30 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     }
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.
+    // NOTE: `spawnop` is deliberately EXCLUDED — its keys are synthetic
+    // (`spawn:<chat>:<msg>`), never live panes, so pane-liveness reaping
+    // would wipe in-flight spawns and double-mint billable resources.
+    // Spawn guards expire by AGE only — pruned up front so the
+    // `known.is_empty()` early return below never strands them while idle.
+    {
+        let now = std::time::Instant::now();
+        {
+            let mut m = s.spawnop.lock().await;
+            if !m.is_empty() {
+                let before = m.len();
+                m.retain(|_, at| !claim_stale(*at, now, SPAWNOP_STALE_SECS));
+                if m.len() != before {
+                    eprintln!("[hygiene] reaped stale spawn guard");
+                }
+            }
+        }
+        {
+            let mut m = s.spawndone.lock().await;
+            if !m.is_empty() {
+                m.retain(|_, at| !claim_stale(*at, now, SPAWNDEDUP_SECS));
+            }
+        }
+    }
     known.extend(s.blockop.lock().await.keys().cloned());
     known.extend(s.modelop.lock().await.keys().cloned());
     if known.is_empty() {
@@ -195,6 +221,8 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // older is dead. Model switches pile longer (own threshold),
             // same guarantee. Peeks self-evict too — this tick is only
             // the backstop. Log after drop (never hold a guard across I/O).
+            // (Spawn guards pruned up front — single site, before the
+            // `known.is_empty()` early return — never pane-liveness.)
             {
                 let now = std::time::Instant::now();
                 let reaped_tap = {

@@ -5,6 +5,7 @@ pub mod enqueue;
 pub mod episode;
 pub mod filter;
 pub mod finalize;
+pub mod finalize_blocked;
 pub mod job;
 pub mod live;
 pub mod notices;

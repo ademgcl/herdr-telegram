@@ -1,11 +1,12 @@
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
-    herdr::client::{get_agent, read_agent_output, send_agent_keys},
+    herdr::client::{get_agent, list_workspaces, read_agent_output, send_agent_keys},
     state::AppState,
     types::AgentRow,
     ui::{
         agent_card_kb, build_agent_card_text,
         scope_text::{READ_CAP, TOPIC_READ_DEFAULT},
+        ws_label,
     },
 };
 
@@ -47,11 +48,16 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
     // Never interleave with an owned key sequence (mirrors topic /keys).
     // Self-healing peeks: stale corpses evict instead of blocking.
     if s.block_held(pane).await || s.model_held(pane).await {
-        s.tg.send_msg(chat, None, "tap/model op in flight — wait a beat", None)
+        s.tg.send_msg(chat, None, crate::ui::TAP_MODEL_IN_FLIGHT, None)
             .await;
         return;
     }
     let key_list: Vec<&str> = keys.split_whitespace().collect();
+    // Bounded like every keys arm (single source): refuse, never truncate.
+    if let Err(msg) = super::shell_validate::validate_keys_len(key_list.len()) {
+        s.tg.send_msg(chat, None, &msg, None).await;
+        return;
+    }
     match send_agent_keys(&s.cfg.socket, pane, &key_list).await {
         Ok(_) => {
             s.tg.send_msg(chat, None, "⌨️ sent", None).await;
@@ -96,14 +102,14 @@ pub(crate) async fn handle_read(
     // below would otherwise serve (and refocus) the wrong session.
     // Explicit targets keep their own unknown-target error.
     if target_arg.is_none() && unmatched_reply(rows, reply_pane) {
-        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return;
     }
     let mut row = match resolve_target(rows, target_arg) {
         Some(r) => Some(r),
         None if target_arg.is_some() => {
-            s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                 .await;
             return;
         }
@@ -123,7 +129,7 @@ pub(crate) async fn handle_read(
         }
     }
     let Some(row) = row else {
-        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return;
     };
@@ -155,7 +161,7 @@ pub(crate) async fn handle_status(
     // would otherwise serve (and refocus) the wrong session. Explicit
     // targets win over the reply, so only bare replies refuse here.
     if arg.is_empty() && unmatched_reply(rows, reply_pane) {
-        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return;
     }
@@ -163,7 +169,7 @@ pub(crate) async fn handle_status(
         Some(r) => Some(r.pane),
         // Explicit but unknown: never show a different agent's card.
         None if !arg.is_empty() => {
-            s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                 .await;
             return;
         }
@@ -181,18 +187,20 @@ pub(crate) async fn handle_status(
         }
     }
     let Some(pane) = pane else {
-        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return;
     };
     match get_agent(&s.cfg.socket, &pane).await {
         Ok(agent) => {
+            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
+            let space = ws_label(&spaces, &agent.ws);
             let mid =
                 s.tg.send_msg(
                     chat,
                     None,
-                    &build_agent_card_text(&agent),
-                    Some(agent_card_kb(&pane, &agent.ws)),
+                    &build_agent_card_text(&agent, space),
+                    Some(agent_card_kb(&pane, &agent.ws, space)),
                 )
                 .await;
             s.remember(chat, mid, &pane).await;

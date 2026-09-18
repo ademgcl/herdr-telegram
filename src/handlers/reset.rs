@@ -256,19 +256,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     }
 
-    // Step 3: Clean up dead topics (panes mapped previously that no longer exist in Herdr)
-    let mut dead_deleted = 0;
-    for (pane, thread) in mappings {
-        if !live_panes.contains(&pane) {
-            println!("[reset] deleting dead topic #{thread} for {pane}");
-            if s.topics.delete_topic(&pane).await {
-                dead_deleted += 1;
-            }
-            s.cancel_jobs_for(&pane).await;
-            s.clear_pane(&pane).await;
-            tokio::time::sleep(RESET_STEP_DELAY).await;
-        }
-    }
+    // Step 3: dead-topic prune (split to `reset_single`: 300-line limit).
+    let dead_deleted = super::reset_single::prune_dead_topics(s, mappings, &live_panes).await;
 
     let mut summary = format!(
         "✅ Paced reset complete: migrated {migrated} topic(s) (queue carried over), cleaned {dead_deleted} dead topic(s). Any running prompt was cancelled — re-prompt if it went quiet."

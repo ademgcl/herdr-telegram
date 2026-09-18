@@ -12,7 +12,7 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
         return false;
     };
     if s.block_held(&wpane).await {
-        s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None)
+        s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None)
             .await;
         return true;
     }
@@ -120,7 +120,7 @@ pub(crate) async fn handle_bare_prompt(
                 // back to text so the error is never silent. Self-healing
                 // peek: a stale corpse evicts instead of refusing rescue.
                 if s.block_held(&row.pane).await {
-                    s.tg.send_msg(chat, None, "answer already in flight — wait a beat", None).await;
+                    s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None).await;
                 } else if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
                     s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
                 }

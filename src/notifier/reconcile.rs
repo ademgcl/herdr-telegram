@@ -219,39 +219,9 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                         // Compare-and-delete: a remint between snapshot and
                         // close must survive the outer remove. Quiet retire:
                         // loud's "✋ cancelled" card would break the silence.
-                        } else {
-                            let thread = s.topics.all_mappings().get(&pane).copied();
-                            // Snapshot the owed intent: the silent close below
-                            // retires it, but boot-recover's gone-notice is
-                            // the designed reporter for dead panes — restore
-                            // it so the reply still arrives next boot
-                            // (bounded by recover's 24h stale drop). The flap
-                            // self-terminates: a successful close drops the
-                            // mapping, so this runs at most once more.
-                            let owed = s.pending.lock().await.get(&pane).cloned();
-                            if s.topics.close_topic(&pane).await {
-                                // Some(thread): compare-delete a remint-safe
-                                // prune. None: mapping already gone (pruned
-                                // inside or raced) — no-op, never wipe a
-                                // concurrent remint blindly.
-                                if let Some(t) = thread {
-                                    s.topics.remove_mapping_if_thread(&pane, t);
-                                }
-                            }
-                            s.cancel_jobs_for_quiet(&pane).await;
-                            s.clear_pane(&pane).await;
-                            // Restore only when nothing newer owns the slot:
-                            // a submit racing the close RPCs above must win
-                            // over the corpse's text (overwrite = lost reply).
-                            // Atomic check-and-set (see above).
-                            if let Some(pp) = owed {
-                                s.remember_pending_cas(
-                                    &pane,
-                                    (pp.chat, pp.thread, &pp.prompt),
-                                    (pp.chat, pp.thread, &pp.prompt),
-                                )
-                                .await;
-                            }
+                        // Split to `reconcile_close` (300-line file limit).
+                        } else if super::reconcile_close::close_dead_pane(s, &pane).await {
+                            continue;
                         }
                     }
                 }

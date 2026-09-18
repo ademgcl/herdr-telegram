@@ -109,6 +109,17 @@ pub struct State {
     /// Panes with a button-tap in flight — observations skip posting
     /// while set (the tap owns the card update when it lands).
     pub blockop: Mutex<HashMap<String, std::time::Instant>>,
+    /// Spawn taps in flight (`spawn:<chat>:<msg>`): never live panes, so
+    /// never in `blockop` (hygiene would reap them as dead panes and a
+    /// double-tap would mint two spaces + agents). Age-only expiry + prune
+    /// in hygiene, same bound as taps.
+    pub spawnop: Mutex<HashMap<String, std::time::Instant>>,
+    /// Completed spawn taps (`spawn:<chat>:<msg>` → done instant): the
+    /// pump runs queued taps sequentially, so a transient in-flight guard
+    /// alone still double-mints. Retaps within the window stand down;
+    /// retry-after-failure uses a fresh card (fresh key). Age-only expiry
+    /// + prune in hygiene, same bound.
+    pub spawndone: Mutex<HashMap<String, std::time::Instant>>,
     /// Posted blocked-card locations per pane: (chat, msg) — one per
     /// chat (forum once, each owner DM once). A PC-side answer strips
     /// these (buttons must not outlive the dialog); resolve consumes.
@@ -232,6 +243,8 @@ impl State {
             limit_send_cool: Mutex::new(HashMap::new()),
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashMap::new()),
+            spawnop: Mutex::new(HashMap::new()),
+            spawndone: Mutex::new(HashMap::new()),
             blocked_card: Mutex::new(HashMap::new()),
             history: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),

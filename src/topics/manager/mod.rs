@@ -73,8 +73,12 @@ impl TopicManager {
 
     /// Single-lock compare-and-delete (storage guard): only drops when
     /// the thread still matches — a stale probe must never delete a
-    /// fresh remint. Aux maps cleared only on prune (a remint keeps its
-    /// own creating/title-write state).
+    /// fresh remint. Aux kind memory dies with the mapping (a remint
+    /// must re-observe, never inherit a stale flip; dead panes must not
+    /// accumulate here unbounded). `creating` is deliberately UNTOUCHED:
+    /// a racing ensure may hold it mid-RPC (its CreatingGuard RAII owns
+    /// the lifecycle) — clearing here would let a second ensure claim
+    /// and double-mint an orphan topic.
     pub fn remove_mapping_if_thread(&self, pane: &str, thread: i64) -> bool {
         if !self.storage.remove_if_thread(pane, thread) {
             return false;
@@ -83,13 +87,6 @@ impl TopicManager {
         // never inherit a stale flip (and dead panes must not
         // accumulate here unbounded).
         self.last_kind
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(pane);
-        // Creating is per-pane in-flight: a successful CAS means no live
-        // remint holds it (its guard already removed on insert), so
-        // clearing a stale leftover is safe and idempotent.
-        self.creating
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(pane);

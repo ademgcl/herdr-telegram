@@ -1,13 +1,13 @@
 //! Debounced spontaneous pushes: a settle must hold before its answer
 //! buzzes (micro-settle flicker stays silent; blocked posts immediately).
 
+use super::spontaneous::post_spontaneous_card;
 use crate::{
-    herdr::client::{get_agent, list_workspaces, read_agent_output},
+    herdr::client::{get_agent, list_panes, list_workspaces, read_agent_output},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
     state::AppState,
-    types::MAX_MSG_UNITS,
-    ui::{chunks, emoji, ws_label},
+    ui::ws_label,
 };
 use std::{
     collections::HashMap,
@@ -46,8 +46,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     }
     {
         // Single guard: a newer arm must not be deleted with the stale
-        // one (dropped answer).
-        let mut db = s.debounce.lock().await;
+        // one (dropped answer). The arm stays until post/abort so a
+        // /cancel clearing debounce aborts before the first send —
+        // removing early would make the cancel invisible and post once.
+        let db = s.debounce.lock().await;
         let cur = db.get(&pane).cloned();
         if cur
             .as_ref()
@@ -56,7 +58,6 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         {
             return;
         }
-        db.remove(&pane);
     }
     if s.jobs.lock().await.contains_key(&pane) {
         return;
@@ -124,6 +125,24 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     if crate::handlers::reset::is_resetting() {
         return;
     }
+    // Pre-sync re-check (window = screen read above): a /cancel clearing
+    // debounce or a newer arm superseding must abort before sync_topic
+    // mints/posts. Exact-arm match — missing means cancelled.
+    {
+        let db = s.debounce.lock().await;
+        if db.get(&pane).map(|(st, at)| st != &settled || at != &armed_at).unwrap_or(true) {
+            return;
+        }
+    }
+    // Liveness before sync: a dead pane must never re-mint its topic
+    // (resurrection) nor buzz post-cancel. Fail-open on Err/empty.
+    if let Ok(live) = list_panes(&s.cfg.socket).await
+        && !live.is_empty()
+        && !live.contains(&pane)
+    {
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
+        return;
+    }
     let info = get_agent(&s.cfg.socket, &pane).await.ok();
     let (kind, ws_id) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone()),
@@ -136,12 +155,35 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // shorts ("ok", "done") do. Empty stays silent but advances the
     // baseline so the stray doesn't haunt future settles.
     if body.chars().count() < 2 {
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         s.seen.lock().await.insert(pane.clone(), screen);
         return;
     }
-    // Pre-post re-check (window = send RPC only): a job/final that
-    // landed during get_agent/spaces/sync owns the reply now.
+    // Pre-post re-check (window = read + sync RPCs above): a job/final
+    // that landed during get_agent/spaces/sync owns the reply now — and
+    // PC-side work starting mid-read owns the pane (moved-on stays
+    // silent): same idle↔done collapse as the arm check. A /cancel or a
+    // newer arm in the same window aborts too (exact-arm match).
     if s.jobs.lock().await.contains_key(&pane) {
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
+        return;
+    }
+    if s.debounce.lock().await.get(&pane).map(|(st, at)| st != &settled || at != &armed_at).unwrap_or(true) {
+        return;
+    }
+    if s.status
+        .lock()
+        .await
+        .get(&pane)
+        .map(|st| {
+            st != &settled
+                && !(matches!(settled.as_str(), "idle" | "done")
+                    && matches!(st.as_str(), "idle" | "done"))
+        })
+        .unwrap_or(true)
+    {
+        // Moved on: exact-consume only (a newer arm survives).
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
     if s.last_done
@@ -151,6 +193,8 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .map(|t| *t > armed_at)
         .unwrap_or(false)
     {
+        // Superseded by a delivered final: exact-consume only.
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
     // Bounded retry on SEND outage only (a blip must not eat a one-shot
@@ -179,8 +223,9 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         {
             break;
         }
-        // A newer arm owns the reply now (stale body must not beat it).
-        if s.debounce.lock().await.contains_key(&pane) {
+        // A newer arm owns the reply now, and a /cancel clearing the arm
+        // aborts too (stale body must not beat either). Exact-arm match.
+        if s.debounce.lock().await.get(&pane).map(|(st, at)| st != &settled || at != &armed_at).unwrap_or(true) {
             break;
         }
         // Spontaneous new work started mid-retry: down-window silence.
@@ -201,98 +246,9 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
     if delivered {
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         s.seen.lock().await.insert(pane.clone(), screen);
     }
-}
-
-/// Answer push: the body alone (never a status-word lead), plus the reply
-/// affordance when input is needed. Blocked keeps its urgent prefix.
-/// True when a part landed: drops must neither stamp `last_done` (it
-/// would suppress the next settle) nor consume the caller's baseline.
-/// `armed_at`: settle instant (Some) or None (DM immediate) — re-checked
-/// AFTER the sync RPC, right before the first send (window = send only).
-pub(crate) async fn post_spontaneous_card(
-    s: &AppState,
-    pane: &str,
-    kind: &str,
-    space: &str,
-    settled: &str,
-    body: &str,
-    armed_at: Option<std::time::Instant>,
-) -> bool {
-    // NOTE: deliberately NOT touching focus here — background pushes must
-    // never hijack where the owner's next plain-text message gets delivered.
-    let text = match settled {
-        "blocked" => format!(
-            "{} {body}\n↩️ reply or type in topic to answer",
-            emoji("blocked")
-        ),
-        _ => body.to_string(),
-    };
-    let parts = chunks(&text, MAX_MSG_UNITS);
-    println!(
-        "[alert] spontaneous card {pane}: {} part(s), body {} chars",
-        parts.len(),
-        body.len()
-    );
-
-    let mut delivered = false;
-    if let Some(forum) = s.cfg.forum {
-        if let Some(thread) = s.topics.sync_topic(pane, kind, space).await {
-            // Inside-post re-check: a job/final landing during the sync
-            // above owns the reply now — send nothing (window is now the
-            // send RPC only, no sync between check and send).
-            if s.jobs.lock().await.contains_key(pane) {
-                return false;
-            }
-            if let Some(at) = armed_at
-                && let Some(t) = s.last_done.lock().await.get(pane)
-                && *t > at
-            {
-                return false;
-            }
-            for part in &parts {
-                let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
-                if let Some(m) = mid {
-                    delivered = true;
-                    if settled == "done" {
-                        let _ = s.tg.set_reaction(forum, m, Some("✅")).await;
-                    }
-                }
-                s.remember(forum, mid, pane).await;
-            }
-        }
-    } else {
-        // DM immediate: no sync RPC, check immediately before sends.
-        if s.jobs.lock().await.contains_key(pane) {
-            return false;
-        }
-        if let Some(at) = armed_at
-            && let Some(t) = s.last_done.lock().await.get(pane)
-            && *t > at
-        {
-            return false;
-        }
-        for id in &s.cfg.owners {
-            for part in &parts {
-                let mid = s.tg.send_msg(*id, None, part, None).await;
-                if let Some(m) = mid {
-                    delivered = true;
-                    if settled == "done" {
-                        let _ = s.tg.set_reaction(*id, m, Some("✅")).await;
-                    }
-                }
-                s.remember(*id, mid, pane).await;
-            }
-        }
-    }
-    if delivered {
-        s.last_done
-            .lock()
-            .await
-            .insert(pane.to_string(), std::time::Instant::now());
-    }
-    delivered
 }
 
 #[cfg(test)]

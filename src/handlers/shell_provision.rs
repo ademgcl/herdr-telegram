@@ -89,7 +89,7 @@ pub async fn open_pane_here(s: &AppState, chat: i64, thread: Option<i64>, pane: 
         match super::space::resolve_ws(s, arg).await {
             Some(id) => open_pane(s, chat, thread, &id).await,
             None => {
-                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{arg}`"), None).await;
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{arg}` — see `/agents`"), None).await;
             }
         }
         return;
@@ -109,7 +109,7 @@ pub async fn open_pane_general(s: &AppState, chat: i64, thread: Option<i64>, arg
         match super::space::resolve_ws(s, arg).await {
             Some(id) => open_pane(s, chat, thread, &id).await,
             None => {
-                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{arg}`"), None).await;
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{arg}` — see `/agents`"), None).await;
             }
         }
         return;
@@ -136,7 +136,7 @@ async fn open_shell_inner(
         Some(w) if !w.is_empty() => match super::space::resolve_ws(s, w).await {
             Some(id) => (id, None),
             None => {
-                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{w}`"), None)
+                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{w}` — see `/agents`"), None)
                     .await;
                 return;
             }

@@ -170,25 +170,27 @@ fn test_build_agent_card_text_with_and_without_branch() {
         pane: "w1:p1".into(),
         title: "backend".into(),
         status: "working".into(),
-        ws: "shop".into(),
+        ws: "w8".into(),
         cwd: "/tmp/project".into(),
         branch: Some("main".into()),
     };
-    let card_with = build_agent_card_text(&with_branch);
+    let card_with = build_agent_card_text(&with_branch, "shop");
     assert!(card_with.contains("branch: 🌿 main"));
     assert!(card_with.contains("status: working"));
     assert!(card_with.contains("cwd: /tmp/project"));
+    assert!(card_with.contains("space: shop"));
+    assert!(!card_with.contains("w8"));
 
     let without_branch = AgentDetail {
         kind: "opencode".into(),
         pane: "w1:p1".into(),
         title: "backend".into(),
         status: "working".into(),
-        ws: "shop".into(),
+        ws: "w8".into(),
         cwd: "/tmp/project".into(),
         branch: None,
     };
-    let card_without = build_agent_card_text(&without_branch);
+    let card_without = build_agent_card_text(&without_branch, "shop");
     assert!(!card_without.contains("branch:"));
 }
 

@@ -33,8 +33,13 @@ impl TelegramClient {
                 let msg = e.to_string();
                 // Case-insensitive: Telegram sends `COLOR_INVALID`,
                 // `Icon_color_invalid`, etc. depending on the endpoint.
+                // Fail-closed shape: body is locally built as an object —
+                // a non-object here returns the error instead of panicking.
                 if body.get("icon_color").is_some() && msg.to_lowercase().contains("color") {
-                    body.as_object_mut().unwrap().remove("icon_color");
+                    let Some(obj) = body.as_object_mut() else {
+                        return Err(e);
+                    };
+                    obj.remove("icon_color");
                     self.call_retrying("createForumTopic", body, Duration::from_secs(15))
                         .await?
                 } else {

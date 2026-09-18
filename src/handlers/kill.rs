@@ -65,26 +65,60 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
     if action != "kill" {
         return;
     }
+    // Snapshot the topic thread BEFORE any RPC: a remint racing the
+    // close keeps its fresh topic (snapshot-id RPC + compare-delete
+    // below never touch it).
+    let thread = s.topics.all_mappings().get(pane).copied();
     match close_pane(&s.cfg.socket, pane).await {
         Ok(()) => {
             // Quiet: the "☠️ killed" edit below is the ack — a loud
             // cancel would add a stray "✋ cancelled" card next to it.
+            // Generation gate: a remint racing the close RPC owns the
+            // slot now — bail before touching fresh state (the watchdog
+            // reconciles the closed pane next tick).
+            let cur = s.topics.all_mappings().get(pane).copied();
+            if cur != thread && cur.is_some() {
+                s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None)
+                    .await;
+                return;
+            }
             s.cancel_jobs_for_quiet(pane).await;
+            // Second generation gate (mirrors reconcile_close): a remint
+            // landing in the cancel awaits above keeps its fresh state —
+            // clear only the corpse's (live foreign mapping bails; the
+            // watchdog reconciles the closed pane next tick).
+            let cur2 = s.topics.all_mappings().get(pane).copied();
+            if cur2 != thread && cur2.is_some() {
+                s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None)
+                    .await;
+                return;
+            }
             s.clear_pane(pane).await;
-            // Compare-and-delete: a remint between snapshot and close
-            // must survive. None (already pruned inside/ raced) → no-op.
-            let thread = s.topics.all_mappings().get(pane).copied();
-            if s.topics.close_topic(pane).await
-                && let Some(t) = thread
-            {
-                s.topics.remove_mapping_if_thread(pane, t);
+            // Race-free: the snapshot id rides the RPC directly (no
+            // re-read); the mapping compare-deletes only when still
+            // current. Snapshot None means no known thread: skip — any
+            // mapping present now is a remint whose topic must survive.
+            if let Some(t) = thread {
+                s.topics.close_topic_for_thread(pane, t).await;
             }
             s.tg.edit_msg(chat, msg_id, &format!("☠️ killed {pane}."), None)
                 .await;
         }
         Err(e) => {
-            s.tg.edit_msg(chat, msg_id, &format!("⚠️ kill failed: {e}"), None)
-                .await;
+            // Double-tap lands here (first tap closed it): confirm gone
+            // via the pane list so the ack reads "already closed", not a
+            // failure. List errors stay a failure (fail-open would lie).
+            let gone = list_panes(&s.cfg.socket)
+                .await
+                .map(|l| !l.contains(&pane.to_string()))
+                .unwrap_or(false);
+            if gone {
+                s.tg.edit_msg(chat, msg_id, &format!("☠️ {pane} already closed."), None)
+                    .await;
+            } else {
+                s.tg.edit_msg(chat, msg_id, &format!("⚠️ kill failed: {e}"), None)
+                    .await;
+            }
         }
     }
 }
