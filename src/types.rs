@@ -2,6 +2,9 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub const TG_POLL_SECS: i64 = 25;
 pub const STALE_SECS: u64 = 600;
+/// Setup-note window: an unconfigured group reminds once a day —
+/// time-bounded like stale notices, never forever-mute, never spam.
+pub const NAGGED_SECS: u64 = 86400;
 pub const LIVE_EDIT_COOLDOWN_SECS: u64 = 4;
 pub const MAX_MSG_UNITS: usize = 3900;
 pub const SINGLE_INSTANCE_PORT: u16 = 47319;

@@ -40,6 +40,7 @@ impl TopicStorage {
         disk::write_store(&self.file_path, s, true);
     }
 
+    #[cfg(test)]
     fn save_no_backup(&self, s: &Store) {
         disk::write_store(&self.file_path, s, false);
     }
@@ -61,7 +62,7 @@ impl TopicStorage {
     }
 
     /// Test-only surface (roundtrip + wipe tests pin the disk format).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn insert(&self, pane: String, thread: i64) {
         let mut s = self.lock();
         s.topics.insert(pane, thread);
@@ -77,9 +78,9 @@ impl TopicStorage {
         self.save(&s);
     }
 
-    /// Full remove (tests / manual repair). Hot paths use atomic
+    /// Full remove for tests. Hot paths use atomic
     /// `remove_if_thread` instead.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn remove(&self, pane: &str) -> Option<i64> {
         let mut s = self.lock();
         let prev = s.topics.remove(pane);
@@ -147,7 +148,7 @@ impl TopicStorage {
     }
 
     /// Test-only surface (roundtrip + wipe tests pin the disk format).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn set_title(&self, pane: &str, title: &str) {
         let mut s = self.lock();
         if s.titles.get(pane).map(|t| t.as_str()) == Some(title) {
@@ -224,7 +225,7 @@ impl TopicStorage {
     }
 
     /// Test-only surface (wipe test pins the empty-store format).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn clear_all(&self) {
         let mut s = self.lock();
         s.topics.clear();

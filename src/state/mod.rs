@@ -7,7 +7,7 @@ use crate::{
     types::Res,
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -40,7 +40,10 @@ pub struct State {
     /// Next message in this chat is typed into the pane's waiting prompt
     /// (blocked interactive input) + Enter. Set by the ⌨️ button.
     pub typewait: Mutex<HashMap<(i64, Option<i64>), String>>,
-    pub nagged: Mutex<HashSet<i64>>,
+    /// Setup-note stamp per chat (see NAGGED_SECS): time-bounded like
+    /// stale notices — an unconfigured group reminds daily, never
+    /// forever-mute, never spam.
+    pub nagged: Mutex<HashMap<i64, std::time::Instant>>,
     /// Last stale-arrival notice per (chat, thread): a boot burst queues
     /// N stale messages and each must not send its own "please resend".
     /// Time-bounded (STALE_SECS), never forever — a later genuine stall
@@ -196,7 +199,7 @@ impl State {
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
             typewait: Mutex::new(HashMap::new()),
-            nagged: Mutex::new(HashSet::new()),
+            nagged: Mutex::new(HashMap::new()),
             stale_nagged: Mutex::new(HashMap::new()),
             last_done: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),

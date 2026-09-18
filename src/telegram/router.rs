@@ -1,7 +1,7 @@
 use crate::{
     handlers::{handle_callback, handle_dm_message, handle_forum_message},
     state::AppState,
-    types::STALE_SECS,
+    types::{NAGGED_SECS, STALE_SECS},
 };
 use serde_json::Value;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -12,6 +12,13 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// STALE_SECS; a later genuine stall still notifies. Pure for tests.
 fn stale_notice_due(last: Option<Instant>, now: Instant) -> bool {
     last.map(|t| now.duration_since(t).as_secs() >= STALE_SECS)
+        .unwrap_or(true)
+}
+
+/// Setup-note guard: same shape, daily window — an unconfigured group
+/// reminds once a day, never spams, never mutes forever. Pure for tests.
+fn setup_note_due(last: Option<Instant>, now: Instant) -> bool {
+    last.map(|t| now.duration_since(t).as_secs() >= NAGGED_SECS)
         .unwrap_or(true)
 }
 
@@ -150,7 +157,19 @@ pub async fn handle_update(s: AppState, u: &Value) {
                 "[telegram] message in group '{}' without TELEGRAM_FORUM_CHAT_ID (see the setup note posted there)",
                 log_safe(msg["chat"]["title"].as_str().unwrap_or(""))
             );
-            if !s.nagged.lock().await.insert(chat_id) {
+            // Daily-bounded (see setup_note_due): short lock, prune
+            // rides along, send outside it.
+            let due = {
+                let at = Instant::now();
+                let mut nagged = s.nagged.lock().await;
+                nagged.retain(|_, t| at.duration_since(*t).as_secs() < NAGGED_SECS);
+                let due = setup_note_due(nagged.get(&chat_id).copied(), at);
+                if due {
+                    nagged.insert(chat_id, at);
+                }
+                due
+            };
+            if !due {
                 return;
             }
             let th = msg["message_thread_id"].as_i64();
@@ -182,5 +201,16 @@ mod tests {
         assert!(!stale_notice_due(Some(recent), now));
         let old = now - std::time::Duration::from_secs(STALE_SECS + 1);
         assert!(stale_notice_due(Some(old), now));
+    }
+
+    #[test]
+    fn test_setup_note_due_daily_window() {
+        let now = Instant::now();
+        assert!(setup_note_due(None, now));
+        assert!(!setup_note_due(Some(now), now));
+        let hour = now - std::time::Duration::from_secs(3600);
+        assert!(!setup_note_due(Some(hour), now));
+        let old = now - std::time::Duration::from_secs(NAGGED_SECS + 1);
+        assert!(setup_note_due(Some(old), now));
     }
 }

@@ -22,9 +22,11 @@ cp .env.example .env  # fill in below
 | Env | What |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | token from @BotFather |
-| `TELEGRAM_CHAT_ID` | your numeric id ([@userinfobot](https://t.me/userinfobot)) |
-| `TELEGRAM_FORUM_CHAT_ID` | supergroup id, full negative form (omit for DM-only) |
+| `TELEGRAM_CHAT_ID` | your numeric id ([@userinfobot](https://t.me/userinfobot); `TELEGRAM_CHAT_ID_*` adds co-owners) |
+| `TELEGRAM_FORUM_CHAT_ID` | supergroup id, full negative form (omit for DM-only; alias `TELEGRAM_GROUP_CHAT_ID`) |
 | `HERDR_SOCKET` | optional, default `~/.config/herdr/herdr.sock` |
+| `HERDR_STATE_DIR` | optional, state dir (default: launch directory — all runs must share one) |
+| `HERDR_TG_PORT` | optional, guard port (default `47319`) |
 
 ## Run
 
