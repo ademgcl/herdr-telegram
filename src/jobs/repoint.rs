@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// Repoint dest at the live thread, or delivery retries into the corpse
-/// forever. Drops the old-thread live id; write-back keeps runner ticks,
+/// forever. Folds the old-thread live card (or it freezes on "working…")
+/// and drops its address; write-back keeps runner ticks,
 /// settle_books and durable intent on the same address.
 /// Forum-topic jobs only (DM dests must never gain a thread); epoch +
 /// pending guarded like the reconcile restores so a submit racing the
@@ -15,6 +16,7 @@ pub async fn repoint_dest_if_remapped(
     pane: &str,
     job: &Arc<Job>,
     live_mid: &mut Option<i64>,
+    live_dest: &mut Option<(i64, Option<i64>)>,
     epoch_before: u64,
 ) {
     let Some(forum) = s.cfg.forum else {
@@ -48,7 +50,19 @@ pub async fn repoint_dest_if_remapped(
     }
     *dest = (chat, Some(cur));
     drop(dest);
-    *live_mid = None;
+    // Retire the old-thread card where it lives (live_dest), never the
+    // new dest — or the old thread freezes on "working…" while the reply
+    // lands in the new one. Fail-closed: mid without dest drops.
+    if let Some(mid) = live_mid.take() {
+        if let Some((lchat, _)) = live_dest.take() {
+            let _ = s
+                .tg
+                .try_edit_msg(lchat, mid, "🔄 continued in new topic", None)
+                .await;
+        }
+    } else {
+        live_dest.take();
+    }
     let prompt = job.prompt.lock().await.clone();
     if job.epoch.load(Ordering::Relaxed) != epoch_before {
         return;

@@ -75,6 +75,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             }
             s.seen.lock().await.retain(|p, _| live.contains(p));
             s.last_done.lock().await.retain(|p, _| live.contains(p));
+            // History is RAM-only + bounded per pane, but history-only
+            // panes (no job/intent) never enter `known` above — retain
+            // live-only or dead panes leak 20 rows each forever.
+            s.history.lock().await.retain(|p, _| live.contains(p));
             // status+last_change under one scope (order status→last_change,
             // no awaits inside): an event inserting between torn retains
             // would orphan status without its change instant and skip

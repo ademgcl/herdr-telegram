@@ -8,6 +8,7 @@ use crate::{
     jobs::finalize::{edit_live, finalize},
     jobs::job::Job,
     jobs::repoint::repoint_dest_if_remapped,
+    jobs::report::CANCELLED,
     state::AppState,
 };
 use std::sync::Arc;
@@ -92,7 +93,6 @@ pub async fn settle_step(
     job: &Arc<Job>,
     status: &str,
     live_mid: &mut Option<i64>,
-    live_has_content: bool,
     live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
     retry_wait: &mut u64,
@@ -132,8 +132,8 @@ pub async fn settle_step(
         return SettleStep::Continue;
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
-    repoint_dest_if_remapped(s, pane, job, live_mid, epoch_before).await;
-    let retry = finalize(s, pane, job, status, live_mid, live_has_content, acc).await;
+    repoint_dest_if_remapped(s, pane, job, live_mid, live_dest, epoch_before).await;
+    let retry = finalize(s, pane, job, status, live_mid, live_dest, acc).await;
     // finalize consumes the live slot on success — drop its
     // address too, or a later reset would edit the final card.
     if live_mid.is_none() {
@@ -160,7 +160,7 @@ pub async fn settle_step(
                     s.clear_pending(pane).await;
                 }
                 let (chat, th) = *job.dest.lock().await;
-                edit_live(s, chat, th, pane, live_mid, "✋ cancelled").await;
+                edit_live(s, chat, th, pane, live_mid, live_dest, CANCELLED).await;
                 return SettleStep::Break;
             }
             _ = sleep_or_superseded(job, epoch_now, Duration::from_secs(*retry_wait)) => {}

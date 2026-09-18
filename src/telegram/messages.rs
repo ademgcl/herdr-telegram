@@ -1,3 +1,4 @@
+//! Telegram send-message params + silent/buzz sends.
 use super::client::TelegramClient;
 use crate::{types::Res, ui::fit_msg};
 use serde_json::{Value, json};

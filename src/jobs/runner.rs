@@ -3,10 +3,12 @@
 //! from `finalize`/`settle` (300-line file limit). One task per prompt;
 //! supersede/cancel retire via epoch + cancel signal, never by killing.
 use crate::jobs::episode::BuzzEpisode;
+use crate::jobs::live::LIVE_RPC_TIMEOUT_SECS;
+use crate::jobs::report::{CANCELLED, RUN_ENDED, fold_live};
 use crate::jobs::stall::watch_stall;
 use crate::{
     herdr::client::get_agent,
-    jobs::finalize::{edit_live, fold_live},
+    jobs::finalize::edit_live,
     jobs::job::Job,
     jobs::settle::{SettleStep, SettledArm, settle_step, sleep_or_superseded},
     jobs::stream::{EvStream, WatchEvent},
@@ -29,8 +31,8 @@ const REOPEN_COOLDOWN_SECS: u64 = 5;
 /// Watch the agent via herdr push-events: every output burst updates one live
 /// Telegram message; settle turns it into the final result card.
 pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
-    // Live card slot: address + content flag + edit throttle travel
-    // together (see live.rs) so the address can never split.
+    // Live card slot: address + edit throttle travel together (see
+    // live.rs) so the address can never split.
     let mut live = super::live::LiveSlot::new();
     // Raw output since the prompt — the fresh reply is extracted from
     // this at display time (last segment only, see segment::final_block)
@@ -86,7 +88,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if job.is_stopped() {
             // Quiet retire: no cancel card by design, but never freeze a
             // live "working…" card — fold it in place, buzz nothing.
-            fold_live(&s, &mut live.dest, &mut live.mid, "⏹️ run ended").await;
+            fold_live(&s, &mut live.dest, &mut live.mid, RUN_ENDED).await;
             break;
         }
         // New prompt on a reused watcher restarts all episode timers
@@ -99,11 +101,11 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             settled_since = None;
             acc.clear();
             retry_wait = FALLBACK_TICK_SECS;
-            // New turn re-arms the debounced ack + content flag with it:
-            // a reused watcher owes the new prompt its own feedback.
+            // New turn re-arms the debounced ack with it: a reused
+            // watcher owes the new prompt its own feedback.
             acked = false;
             ack_due = Instant::now() + Duration::from_millis(ACK_DEBOUNCE_MILLIS);
-            live.has_content = false;
+            live.rearm();
             // Retire the old live card instead of orphaning it frozen.
             if let Some(mid) = live.mid.take() {
                 if let Some((chat, _)) = live.dest.take() {
@@ -141,7 +143,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     s.clear_pending(&pane).await;
                 }
                 let (chat, th) = *job.dest.lock().await;
-                edit_live(&s, chat, th, &pane, &mut live.mid, "✋ cancelled").await;
+                edit_live(&s, chat, th, &pane, &mut live.mid, &mut live.dest, CANCELLED).await;
                 break;
             }
             _ = typing_tick.tick() => {
@@ -150,12 +152,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 tokio::spawn(async move {
                     tg.typing(dchat, dth).await;
                 });
-                // One-shot debounced ack (see above): skip when stopped,
-                // answered, settling, or already acked — a settling run
-                // finishes fresh (buzzing) within seconds, no corpse row.
-                if !acked && settled_since.is_none() && Instant::now() >= ack_due && live.mid.is_none() && !job.is_stopped() {
-                    acked = true;
-                    super::report::post_silent_ack(&s, dchat, dth, &mut live.mid, &mut live.dest).await;
+                // One-shot debounced ack: silent row for slow runs, instant
+                // answers skip it. Bounded; only a landed row arms it.
+                if !acked && settled_since.is_none() && live.mid.is_none() && !job.is_stopped() && Instant::now() >= ack_due
+                {
+                    let ok = tokio::time::timeout(Duration::from_secs(LIVE_RPC_TIMEOUT_SECS), super::report::post_silent_ack(&s, dchat, dth, &mut live.mid, &mut live.dest)).await.unwrap_or(false);
+                    acked = ok;
                 }
                 // Falls through to a poll cycle below (no `continue`):
                 // restarting the 5s fallback sleep on every typing tick
@@ -203,7 +205,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                                 s.clear_pending(&pane).await;
                             }
                             let (chat, th) = *job.dest.lock().await;
-                            edit_live(&s, chat, th, &pane, &mut live.mid, "✋ cancelled").await;
+                            edit_live(&s, chat, th, &pane, &mut live.mid, &mut live.dest, CANCELLED).await;
                             break;
                         }
                         _ = sleep_or_superseded(&job, backoff_epoch, Duration::from_secs(60)) => {}
@@ -224,7 +226,6 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 &job,
                 &agent.status,
                 &mut live.mid,
-                live.has_content,
                 &mut live.dest,
                 &mut acc,
                 &mut retry_wait,

@@ -6,16 +6,17 @@
 use crate::{
     handlers::dialog::send_blocked_card,
     herdr::client::read_screen_adaptive,
-    jobs::{arbitrate::select_final_body, job::Job},
+    jobs::{
+        arbitrate::select_final_body,
+        books::settle_books,
+        job::Job,
+        report::{RUN_ENDED, fold_live},
+    },
     notifier::observe_status,
     state::AppState,
     types::MAX_MSG_UNITS,
     ui::chunks,
 };
-/// Prompt result finalization.
-/// Returns true when nothing was delivered (read outage OR every card
-/// part failed to send) so the watcher loop retries instead of retiring
-/// the intent.
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -24,13 +25,16 @@ use std::sync::atomic::Ordering;
 /// read (see select_final_body).
 /// (herdr exposes only raw TUI text for every provider — no clean-text
 /// API — so answers ride on the chrome-filtered stream, never raw tails.)
+/// Returns true when nothing was delivered (read outage OR every card
+/// part failed to send) so the watcher loop retries instead of retiring
+/// the intent.
 pub async fn finalize(
     s: &AppState,
     pane: &str,
     job: &Arc<Job>,
     settled: &str,
     live_mid: &mut Option<i64>,
-    live_has_content: bool,
+    live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
 ) -> bool {
     // Fresh reply only: the last segment after tool calls, reasoning
@@ -86,11 +90,9 @@ pub async fn finalize(
             s.seen.lock().await.insert(pane.to_string(), snapshot);
             // Fold the live slot: retiring with it set would orphan a
             // frozen "working…" card (the caller only drops the address
-            // when the slot is already consumed).
-            if let Some(mid) = live_mid.take() {
-                let (chat, _) = *job.dest.lock().await;
-                let _ = s.tg.try_edit_msg(chat, mid, "⏹️ run ended", None).await;
-            }
+            // when the slot is already consumed). Address comes from the
+            // live slot itself, never job.dest (remap race).
+            fold_live(s, live_dest, live_mid, RUN_ENDED).await;
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -118,27 +120,36 @@ pub async fn finalize(
             .unwrap_or(false)
         {
             observe_status(s, pane, settled, true, "job").await;
-            // Ack-only slot (no output ever streamed): fold it — the
-            // question card it duplicates already buzzed.
-            if !live_has_content
-                && let Some(mid) = live_mid.take()
-            {
-                let (chat, _) = *job.dest.lock().await;
-                let _ = s.tg.try_edit_msg(chat, mid, "⛔ blocked — see question card", None).await;
-            }
+            // Any live slot duplicates the already-buzzed question card:
+            // fold it whether it holds streamed output or only the silent
+            // ack, or the working card freezes next to the question.
+            fold_live(
+                s,
+                live_dest,
+                live_mid,
+                "⛔ blocked — see question card",
+            )
+            .await;
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
         let (chat, th) = *job.dest.lock().await;
-        // Reuse the live message slot when there is one.
+        // Retire the live working card in place (address from the slot,
+        // never job.dest): the question card posts fresh below.
+        // Fail-closed: mid without dest drops without editing rather
+        // than guessing the thread after a remap.
         if let Some(mid) = live_mid.take() {
-            s.tg.edit_msg(
-                chat,
-                mid,
-                "⛔ blocked — needs input (see next message)",
-                None,
-            )
-            .await;
+            if let Some((lchat, _)) = live_dest.take() {
+                s.tg.edit_msg(
+                    lchat,
+                    mid,
+                    "⛔ blocked — needs input (see next message)",
+                    None,
+                )
+                .await;
+            }
+        } else {
+            live_dest.take();
         }
         let posted = send_blocked_card(s, chat, th, pane).await;
         // Silent icon sync (later observations dedupe via blocked_sig).
@@ -176,11 +187,16 @@ pub async fn finalize(
     // is retired, not orphaned frozen on "working…".
     if body.is_empty() {
         observe_status(s, pane, settled, true, "job").await;
+        // Address from the slot (remap-safe); mid without dest drops
+        // without editing (fail-closed, never wrong thread).
         if let Some(mid) = live_mid.take() {
-            let (chat, _) = *job.dest.lock().await;
-            s.tg.edit_msg(chat, mid, "✅ settled — no fresh output", None)
-                .await;
-            let _ = s.tg.set_reaction(chat, mid, Some("✅")).await;
+            if let Some((lchat, _)) = live_dest.take() {
+                s.tg.edit_msg(lchat, mid, "✅ settled — no fresh output", None)
+                    .await;
+                let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
+            }
+        } else {
+            live_dest.take();
         }
         // Superseded during the RPCs above: stamp nothing (blocked-path rule).
         if job.epoch.load(Ordering::Relaxed) == entry_epoch {
@@ -209,13 +225,11 @@ pub async fn finalize(
         parts.len(),
         body.len()
     );
+    // Finals buzz; progress stayed silent in place. Fold the working
+    // card only after a part lands — a total failure keeps the slot for
+    // retry, a mid-post supersede leaves it for the handoff's retire
+    // instead of stranding a "✅ done" corpse with no reply.
     let mut delivered = false;
-    // Finals always summon fresh: fold any live working card silently,
-    // then post every part buzzing. Progress stayed silent in place;
-    // the finish is the run's one notification.
-    if let Some(mid) = live_mid.take() {
-        let _ = s.tg.try_edit_msg(chat, mid, "✅ done", None).await;
-    }
     for part in parts.iter() {
         if report_done(s, chat, th, pane, part).await {
             delivered = true;
@@ -243,6 +257,8 @@ pub async fn finalize(
         println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
         return true;
     }
+    // Working card retires only now that the finish landed.
+    fold_live(s, live_dest, live_mid, "✅ done").await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.
@@ -255,5 +271,4 @@ pub async fn finalize(
     false
 }
 
-pub use super::report::{edit_live, fold_live, report, report_done};
-use super::books::settle_books;
+pub use super::report::{edit_live, report, report_done};

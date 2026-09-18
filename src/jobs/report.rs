@@ -4,20 +4,35 @@ use crate::state::AppState;
 /// Live-card head: the debounced ack and the streaming card share it
 /// so the first output edit only appends content (no flicker).
 pub const WORKING_HEAD: &str = "🔄 working…";
+/// Quiet retire text: never freeze a live "working…" card.
+pub const RUN_ENDED: &str = "⏹️ run ended";
+/// User-cancel text: every cancel branch edits in place, never posts fresh.
+pub const CANCELLED: &str = "✋ cancelled";
 
+/// Cancel edit: retires the live card where it lives (live_dest), never
+/// job.dest (remap race). Falls back to a fresh post at the current dest
+/// only when the edit fails — orphans nothing, double-posts nothing.
 pub async fn edit_live(
     s: &AppState,
     chat_id: i64,
     thread_id: Option<i64>,
     pane: &str,
     live_mid: &mut Option<i64>,
+    live_dest: &mut Option<(i64, Option<i64>)>,
     text: &str,
 ) {
     if let Some(mid) = live_mid.take() {
-        if s.tg.try_edit_msg(chat_id, mid, text, None).await.is_err() {
+        // Fail-closed: mid without dest cannot happen (set together);
+        // drop without editing rather than guessing job.dest and
+        // clobbering the wrong thread after a remap.
+        let Some((lchat, _)) = live_dest.take() else {
+            return;
+        };
+        if s.tg.try_edit_msg(lchat, mid, text, None).await.is_err() {
             report(s, chat_id, thread_id, pane, text).await;
         }
     } else {
+        live_dest.take();
         report(s, chat_id, thread_id, pane, text).await;
     }
 }
@@ -92,16 +107,19 @@ pub async fn fold_live(
 
 /// One-shot silent "working" into an empty live slot (debounced ack).
 /// No retry: a miss just means output adopts the slot later, folds
-/// retire it. Single source for the ack text.
+/// retire it. Single source for the ack text. Returns true on delivery
+/// so the caller only arms `acked` when the row actually landed.
 pub async fn post_silent_ack(
     s: &AppState,
     chat: i64,
     th: Option<i64>,
     live_mid: &mut Option<i64>,
     live_dest: &mut Option<(i64, Option<i64>)>,
-) {
+) -> bool {
     if let Some(mid) = s.tg.send_silent(chat, th, WORKING_HEAD).await {
         *live_mid = Some(mid);
         *live_dest = Some((chat, th));
+        return true;
     }
+    false
 }
