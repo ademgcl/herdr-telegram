@@ -156,56 +156,73 @@ pub async fn answer_tap(
                     let (q, opts) = live_card(&after);
                     let text = blocked_card_text(&q, &opts);
                     let kb = Some(blocked_kb(pane, &opts));
-                    // Edit first; on failure post fresh — and stamp the
-                    // signature ONLY on delivery, so a dropped update
-                    // stays "new" for the watchdog instead of blinding it.
-                    if s.tg
-                        .try_edit_msg(chat, msg_id, &text, kb.clone())
-                        .await
-                        .is_ok()
-                    {
-                        let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
-                        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
-                        s.remember(chat, Some(msg_id), pane).await;
-                        // This card is current — strip sibling surfaces.
-                        crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
-                    } else if let Some(mid) =
-                        s.tg.send_msg_with_effect(
-                            chat,
-                            thread,
-                            &text,
-                            kb,
-                            Some(crate::telegram::EFFECT_FIRE),
-                        )
-                        .await
-                    {
-                        let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
-                        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
-                        s.remember(chat, Some(mid), pane).await;
-                        // Settle the fresh surface; the tapped card may be
-                        // untracked (pre-restart post) — strip it too.
-                        crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
-                        s.tg.strip_buttons(chat, msg_id).await;
+                    // Edit first; a fresh post only when the card is
+                    // definitely gone (edit_gone parity with report.rs) —
+                    // a transient failure keeps the slot and heals below
+                    // instead of duplicating beside the stripped corpse.
+                    // Signature stamps ONLY on delivery, so a dropped
+                    // update stays "new" for the watchdog.
+                    match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
+                        Ok(()) => {
+                            let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
+                            s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
+                            s.remember(chat, Some(msg_id), pane).await;
+                            // This card is current — strip sibling surfaces.
+                            crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
+                        }
+                        Err(e)
+                            if crate::telegram::messages::edit_gone(&e.to_string()) =>
+                        {
+                            if let Some(mid) = s
+                                .tg
+                                .send_msg_with_effect(
+                                    chat,
+                                    thread,
+                                    &text,
+                                    kb,
+                                    Some(crate::telegram::EFFECT_FIRE),
+                                )
+                                .await
+                            {
+                                let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
+                                s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
+                                s.remember(chat, Some(mid), pane).await;
+                                // Settle the fresh surface; the tapped card
+                                // may be untracked (pre-restart post) —
+                                // strip it too.
+                                crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
+                                s.tg.strip_buttons(chat, msg_id).await;
+                            }
+                        }
+                        Err(_) => {
+                            delayed_refresh(s, pane).await;
+                        }
                     }
                 }
                 TapResult::Resumed => {
                     let no_kb = Some(Value::Array(Vec::new()));
                     let done =
                         format!("✅ {} answered — agent resumed [{pane}]", send.label);
-                    // Fallible edit with a converging fallback: a failed
-                    // edit must not strand live buttons (sig is cleared
-                    // below, so nothing else repairs this card).
-                    if s.tg
-                        .try_edit_msg(chat, msg_id, &done, no_kb)
-                        .await
-                        .is_ok()
-                    {
-                        let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
-                        s.remember(chat, Some(msg_id), pane).await;
-                    } else {
-                        let mid = s.tg.send_msg(chat, thread, &done, None).await;
-                        s.remember(chat, mid, pane).await;
-                        s.tg.strip_buttons(chat, msg_id).await;
+                    // Same converging rule: a failed edit must not strand
+                    // live buttons, but only a gone card earns a fresh
+                    // post — transient keeps the slot for the heal below
+                    // (sig is cleared, so nothing else repairs this card:
+                    // strip it buttonless now).
+                    match s.tg.try_edit_msg(chat, msg_id, &done, no_kb).await {
+                        Ok(()) => {
+                            let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
+                            s.remember(chat, Some(msg_id), pane).await;
+                        }
+                        Err(e)
+                            if crate::telegram::messages::edit_gone(&e.to_string()) =>
+                        {
+                            let mid = s.tg.send_msg(chat, thread, &done, None).await;
+                            s.remember(chat, mid, pane).await;
+                            s.tg.strip_buttons(chat, msg_id).await;
+                        }
+                        Err(_) => {
+                            s.tg.strip_buttons(chat, msg_id).await;
+                        }
                     }
                     // The status layer can lag up to a cycle behind: clear
                     // the dialog signature now or the next same-`blocked`

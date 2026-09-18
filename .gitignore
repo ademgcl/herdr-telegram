@@ -6,6 +6,8 @@ target/
 *.prev
 *.bak
 *.log
+*.log.1
+bot.log.1
 ctl.token
 bot.log
 herdr-telegram.log

@@ -99,10 +99,20 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
                 &kind, pane, raw_space, new_status, title_opt, branch,
             );
             let mut mid_opt = s.topics.get_pin(pane);
-            if let Some(mid) = mid_opt
-                && s.tg.try_edit_msg(forum, mid, &card, None).await.is_err()
-            {
-                mid_opt = None;
+            if let Some(mid) = mid_opt {
+                // Fallible pin edit with a converging rule (report.rs
+                // parity): only a definitely-gone card earns a fresh post
+                // (and orphans the pin) — a transient failure keeps the
+                // pin and retries next tick instead of duplicating.
+                match s.tg.try_edit_msg(forum, mid, &card, None).await {
+                    Ok(()) => {}
+                    Err(e)
+                        if crate::telegram::messages::edit_gone(&e.to_string()) =>
+                    {
+                        mid_opt = None;
+                    }
+                    Err(_) => {}
+                }
             }
             if mid_opt.is_none()
                 && let Some(thread) = s.topics.all_mappings().get(pane).copied()

@@ -33,39 +33,36 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
                 .await;
             true
         }
-        // Raced by a resume: the waiter is already consumed, so route
-        // the text as a fresh prompt below instead of dropping it.
+        // Raced by a resume: the waiter is consumed — route the text to
+        // the waited pane as a prompt (never re-route via reply/focus:
+        // the answer belongs to wpane, and focus may point elsewhere).
         // Fail-closed: a "/" answer must become a prompt, never DM
         // control (a literal "/kill" as an answer must not kill).
         Err(super::tap::TypeError::Resumed) => {
-            if text.trim_start().starts_with('/') {
-                match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
-                    Ok(a) => {
-                        s.typewait.lock().await.remove(&(chat, None));
-                        enqueue_prompt(
-                            crate::state::AppState::clone(s),
-                            chat,
-                            None,
-                            a.into(),
-                            text.to_string(),
-                        )
-                        .await;
-                    }
-                    Err(_) => {
-                        // Unreadable re-read after a resume: keep the
-                        // waiter with its ORIGINAL instant (never consume
-                        // on ambiguous read, never re-stamp now — a fresh
-                        // stamp would immortalize the waiter across a
-                        // prolonged outage) so the retry re-routes.
-                        s.typewait.lock().await.insert((chat, None), (wpane, armed_at));
-                        s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
-                            .await;
-                    }
+            match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
+                Ok(a) => {
+                    s.typewait.lock().await.remove(&(chat, None));
+                    enqueue_prompt(
+                        crate::state::AppState::clone(s),
+                        chat,
+                        None,
+                        a.into(),
+                        text.to_string(),
+                    )
+                    .await;
                 }
-                return true;
+                Err(_) => {
+                    // Unreadable re-read after a resume: keep the
+                    // waiter with its ORIGINAL instant (never consume
+                    // on ambiguous read, never re-stamp now — a fresh
+                    // stamp would immortalize the waiter across a
+                    // prolonged outage) so the retry re-routes.
+                    s.typewait.lock().await.insert((chat, None), (wpane, armed_at));
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                }
             }
-            s.typewait.lock().await.remove(&(chat, None));
-            false
+            true
         }
         Err(e) => {
             s.tg.send_msg(
@@ -91,6 +88,14 @@ pub(crate) async fn handle_bare_prompt(
     reply_pane: Option<String>,
 ) {
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    // A bare pane id (or kind) with no prompt is an incomplete address,
+    // never prompt text: enqueuing the literal id into focus/sole-agent
+    // sends "w8:p1" to the wrong session as a prompt. Refuse with usage.
+    if rest.trim().is_empty() && resolve_target(rows, Some(head)).is_some() {
+        s.tg.send_msg(chat, None, "usage: `<pane> <prompt>` — name a pane and a prompt", None)
+            .await;
+        return;
+    }
     let explicit = if rest.is_empty() || rows.len() <= 1 {
         None
     } else {

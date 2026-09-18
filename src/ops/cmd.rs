@@ -139,6 +139,17 @@ pub(crate) fn rotate_log_if_huge() {
         && let Ok(f) = std::fs::OpenOptions::new().write(true).open(&log)
         && f.set_len(0).is_ok()
     {
+        // Rotation copies the mode too: chmod the backup like open_log,
+        // or a pre-existing 0644 keeps leaking chat IDs and excerpts.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&bak) {
+                let mut perm = meta.permissions();
+                perm.set_mode(0o600);
+                let _ = std::fs::set_permissions(&bak, perm);
+            }
+        }
         println!("[main] rotated bot.log (was {} bytes)", meta.len());
     }
 }
