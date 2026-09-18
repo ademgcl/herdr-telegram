@@ -8,7 +8,7 @@ use crate::{
     },
 };
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
     let Some(from) = cbq["from"]["id"].as_i64() else {
@@ -120,7 +120,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.runwait
                 .lock()
                 .await
-                .insert((chat, thread), ws.to_string());
+                .insert((chat, thread), (ws.to_string(), Instant::now()));
             s.tg.edit_msg(
                 chat,
                 msg_id,

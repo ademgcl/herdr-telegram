@@ -21,19 +21,14 @@ fn test_shell_card_text() {
 
 #[test]
 fn test_shell_result_text_notes() {
+    // One command, one bare tail card — no footers, no transient lines.
     let out = "line1\nline2";
-    let final_card = shell_result_text("make build", out, ShellNote::Final);
-    assert!(final_card.contains("$ make build"));
-    assert!(final_card.contains("line2"));
-    assert!(!final_card.contains("⏳") && !final_card.contains("✅"));
-    // Provisional first tail: same shape (no footer — typing covers it),
-    // distinct variant so unsettled output never claims `Final`.
-    let first = shell_result_text("make build", out, ShellNote::First);
-    assert!(!first.contains("⏳") && !first.contains("following up"));
-    assert!(shell_result_text("make build", out, ShellNote::Finished).contains("✅ finished"));
-    assert!(shell_result_text("make build", out, ShellNote::StillRunning).contains("/read"));
+    let card = shell_result_text("make build", out);
+    assert!(card.contains("$ make build"));
+    assert!(card.contains("line2"));
+    assert!(!card.contains("⏳") && !card.contains("✅") && !card.contains("following up"));
     // Empty output never posts a bare prompt line.
-    assert!(shell_result_text("true", "  \n ", ShellNote::Final).contains("(no output)"));
+    assert!(shell_result_text("true", "  \n ").contains("(no output)"));
 }
 
 #[test]

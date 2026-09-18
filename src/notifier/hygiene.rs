@@ -6,7 +6,7 @@ use crate::{
     jobs::{persist, recover::recoverable},
     state::{
         AppState,
-        guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, reap_stale},
+        guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, RUNWAIT_STALE_SECS, claim_stale, reap_stale},
     },
 };
 use std::collections::HashSet;
@@ -34,6 +34,41 @@ pub(crate) async fn panes_once(
     }
 }
 
+/// DM-mode shell flip: no topics exist, but `status` still drives the
+/// limit scanner — a PC-side quit would keep its last agent status
+/// forever and quota words in ordinary shell output would buzz false
+/// ❗ cards. Flip shell-reused panes (status + episode only — no topic,
+/// no report); dead panes stay for `reap_orphans` below. Split from
+/// `reconcile` (300-line file limit).
+pub(crate) async fn flip_dm_shells(
+    s: &AppState,
+    live_panes: &HashSet<String>,
+    pane_list: &mut Option<HashSet<String>>,
+) {
+    let missing: Vec<String> = {
+        let st = s.status.lock().await;
+        st.keys()
+            .filter(|p| !live_panes.contains(*p) && st.get(*p).map(|v| v != "shell").unwrap_or(false))
+            .cloned()
+            .collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
+    let Some(panes) = panes_once(s, pane_list).await else {
+        return;
+    };
+    if panes.is_empty() {
+        return;
+    }
+    for pane in missing {
+        if panes.contains(&pane) {
+            s.status.lock().await.insert(pane.clone(), "shell".to_string());
+            s.clear_limit_episode(&pane).await;
+        }
+    }
+}
+
 /// Reap mode-independent orphans: DM-mode prompts can orphan jobs,
 /// durable intent, and per-pane maps for externally-closed panes (no
 /// topic mapping exists to trigger the forum close flow). Live panes
@@ -51,6 +86,17 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // wipe the armed shell-run waiter it was meant to protect.
     known.extend(s.keywait.lock().await.values().cloned());
     known.extend(s.typewait.lock().await.values().cloned());
+    // runwait expires by AGE, never by pane-liveness (see above): an
+    // armed waiter firing arbitrarily later would execute stale input
+    // as a shell command. Fail-closed expiry, same corpse bound style
+    // as the op guards.
+    {
+        let now = std::time::Instant::now();
+        s.runwait
+            .lock()
+            .await
+            .retain(|_, (_, at)| !claim_stale(*at, now, RUNWAIT_STALE_SECS));
+    }
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.
     known.extend(s.blockop.lock().await.keys().cloned());

@@ -86,6 +86,13 @@ impl TopicManager {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(pane);
+        // Kind memory dies with the mapping: a remint must re-observe,
+        // never inherit a stale flip (and dead panes must not
+        // accumulate here unbounded).
+        self.last_kind
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(pane);
         // Creating is per-pane in-flight: a successful CAS means no live
         // remint holds it (its guard already removed on insert), so
         // clearing a stale leftover is safe and idempotent.

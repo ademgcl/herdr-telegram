@@ -1,24 +1,13 @@
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
-    herdr::client::{get_agent, list_workspaces, read_agent_output, send_agent_keys},
+    herdr::client::{get_agent, read_agent_output, send_agent_keys},
     state::AppState,
     types::AgentRow,
     ui::{
-        agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb,
+        agent_card_kb, build_agent_card_text,
         scope_text::{READ_CAP, TOPIC_READ_DEFAULT},
     },
 };
-
-pub(crate) async fn handle_agents(s: &AppState, chat: i64, rows: &[AgentRow]) {
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    s.tg.send_msg(
-        chat,
-        None,
-        &build_menu_text(&spaces, rows),
-        Some(main_menu_kb(&spaces, rows)),
-    )
-    .await;
-}
 
 pub(crate) async fn handle_keys(
     s: &AppState,

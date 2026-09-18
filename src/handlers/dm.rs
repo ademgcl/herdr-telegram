@@ -85,7 +85,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     };
 
     if cmd == "/agents" {
-        super::dm_info::handle_agents(&s, chat, &rows).await;
+        super::agents::show_panel(&s, chat, None).await;
         return;
     }
 
@@ -130,7 +130,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd == "/spawn" {
-        super::dm_lifecycle::handle_spawn(&s, chat, arg).await;
+        super::agents::spawn_with_arg(&s, chat, None, arg).await;
         return;
     }
 

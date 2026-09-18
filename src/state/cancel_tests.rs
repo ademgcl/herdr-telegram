@@ -64,6 +64,21 @@ async fn test_job_only_preserves_pending_intent() {
 }
 
 #[tokio::test]
+async fn test_clear_pending_if_matches_is_exact() {
+    // Match-guarded clear: only the exact submit triple clears — a
+    // resubmitted successor survives the loser's clear, a vacant slot
+    // clears nothing.
+    let (s, _dir) = isolated_state();
+    s.remember_pending("t:p1", 1, None, "make").await;
+    assert!(!s.clear_pending_if_matches("t:p1", 1, None, "other").await);
+    assert!(!s.clear_pending_if_matches("t:p1", 2, None, "make").await);
+    assert!(s.pending.lock().await.contains_key("t:p1"));
+    assert!(s.clear_pending_if_matches("t:p1", 1, None, "make").await);
+    assert!(!s.pending.lock().await.contains_key("t:p1"));
+    assert!(!s.clear_pending_if_matches("t:p1", 1, None, "make").await);
+}
+
+#[tokio::test]
 async fn test_cancel_all_counts_and_stops() {
     let (s, _dir) = isolated_state();
     let a = Job::new(vec![], 1, None);

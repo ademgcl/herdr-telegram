@@ -18,16 +18,6 @@ pub(crate) async fn handle_general_forum_message(
         return;
     }
 
-    if cmd == "/agents" {
-        super::agents::show_panel(&s, chat, thread_id).await;
-        return;
-    }
-
-    if cmd == "/spawn" {
-        super::agents::spawn_with_arg(&s, chat, thread_id, arg).await;
-        return;
-    }
-
     if cmd == "/cancel" {
         s.keywait.lock().await.remove(&(chat, thread_id));
         s.runwait.lock().await.remove(&(chat, thread_id));
@@ -92,6 +82,20 @@ pub(crate) async fn handle_general_forum_message(
                 return;
             }
         }
+    }
+
+    // Armed waiters own the next message (DM order): a "/" answer
+    // belongs to the waiting prompt, never to routing. Escapes
+    // (/start, /help, /cancel, /card, /esc) precede above; everything
+    // else — including /agents + /spawn — follows the waiters.
+    if cmd == "/agents" {
+        super::agents::show_panel(&s, chat, thread_id).await;
+        return;
+    }
+
+    if cmd == "/spawn" {
+        super::agents::spawn_with_arg(&s, chat, thread_id, arg).await;
+        return;
     }
 
     if cmd == "/model" {

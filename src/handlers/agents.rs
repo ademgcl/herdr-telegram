@@ -24,6 +24,8 @@ pub(crate) async fn show_panel(s: &AppState, chat: i64, thread: Option<i64>) {
 
 /// Dispatcher for topic routers (one arm, two commands): keeps the
 /// 300-line routers small — `/agents` panels, `/spawn` spawns.
+/// Fail-closed: anything else writes nothing (callers pre-gate, this
+/// is the backstop).
 pub(crate) async fn handle_control(
     s: &AppState,
     chat: i64,
@@ -36,8 +38,7 @@ pub(crate) async fn handle_control(
     } else if cmd == "/spawn" {
         spawn_with_arg(s, chat, thread, arg).await;
     }
-    // Fail-closed: unknown cmds (incl. @mention-suffixed strays that
-    // slipped the router's bare_cmd strip) write nothing.
+    // Unknown cmds (should not reach here — callers pre-gate) write nothing.
 }
 /// Spawn `<kind> [space]` + mint its topic. Explicit-arg write only —
 /// no pane context, no misroute. Takes focus like `/shell` from topics.

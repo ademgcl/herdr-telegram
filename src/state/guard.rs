@@ -29,6 +29,12 @@ pub(crate) const BLOCKOP_STALE_SECS: u64 = 300;
 /// live switch.
 pub(crate) const MODELOP_STALE_SECS: u64 = 900;
 
+/// Armed shell-run waiter lifetime: the R button's "next message is a
+/// command" must not fire arbitrarily later (stale input executing
+/// writes). Far above legit arm→type gaps (seconds), far below
+/// "stuck until restart".
+pub(crate) const RUNWAIT_STALE_SECS: u64 = 900;
+
 /// Bounded drop-spin budget (holders release immediately, never across
 /// awaits — contention is microsecond-scale; this is fail-safe, not
 /// load-bearing). Small + `spin_loop` (never `yield_now`/sleep): must

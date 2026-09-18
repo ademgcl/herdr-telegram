@@ -31,64 +31,6 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
             .await;
         return;
     }
-    // Control plane works in-thread like agent topics (see forum_topic).
-    if cmd == "/agents" || cmd == "/spawn" {
-        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
-        return;
-    }
-    if cmd == "/shell" {
-        s.tg
-            .send_msg(
-                chat,
-                Some(thread_id),
-                "already in a shell topic — `/pane` for a second shell here.",
-                None,
-            )
-            .await;
-        return;
-    }
-    if cmd == "/reset" {
-        // Own-pane-only like the agent flavor: an arg is refused, never
-        // a cross-pane reset on a typo.
-        if !arg.is_empty() {
-            s.tg
-                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
-                .await;
-            return;
-        }
-        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
-        return;
-    }
-    if cmd == "/quit" {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "already in shell — type any command.",
-            None,
-        )
-        .await;
-        return;
-    }
-    if cmd == "/kill" {
-        super::kill::ask_kill(&s, chat, Some(thread_id), pane).await;
-        return;
-    }
-    if cmd == "/split" {
-        let dir = match arg {
-            "" | "right" | "down" => arg,
-            _ => {
-                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]` — bare picks the longer side", None)
-                    .await;
-                return;
-            }
-        };
-        super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
-        return;
-    }
-    if cmd == "/pane" {
-        super::shell::open_pane_here(&s, chat, Some(thread_id), pane, arg).await;
-        return;
-    }
     if cmd == "/cancel" {
         s.keywait.lock().await.remove(&(chat, Some(thread_id)));
         s.runwait.lock().await.remove(&(chat, Some(thread_id)));
@@ -126,6 +68,66 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
+        return;
+    }
+    // Everything below follows the waiter (see forum_topic): an
+    // armed run waiter owns the next message.
+    if cmd == "/shell" {
+        s.tg
+            .send_msg(
+                chat,
+                Some(thread_id),
+                "already in a shell topic — `/pane` for a second shell here.",
+                None,
+            )
+            .await;
+        return;
+    }
+    if cmd == "/quit" {
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            "already in shell — type any command.",
+            None,
+        )
+        .await;
+        return;
+    }
+    if cmd == "/kill" {
+        super::kill::ask_kill(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
+    if cmd == "/split" {
+        let dir = match arg {
+            "" | "right" | "down" => arg,
+            _ => {
+                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]` — bare picks the longer side", None)
+                    .await;
+                return;
+            }
+        };
+        super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
+        return;
+    }
+    if cmd == "/pane" {
+        super::shell::open_pane_here(&s, chat, Some(thread_id), pane, arg).await;
+        return;
+    }
+    // Control plane + reset follow the waiter too.
+    if cmd == "/agents" || cmd == "/spawn" {
+        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
+        return;
+    }
+    if cmd == "/reset" {
+        // Own-pane-only like the agent flavor: an arg is refused, never
+        // a cross-pane reset on a typo.
+        if !arg.is_empty() {
+            s.tg
+                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
+                .await;
+            return;
+        }
+        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
         return;
     }
     if cmd == "/read" || cmd == "/output" {

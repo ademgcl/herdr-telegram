@@ -4,7 +4,7 @@
 //! reflects the flip without waiting for the watchdog.
 use super::shell_common::shell_card_text;
 use crate::{
-    herdr::client::{get_agent, list_panes, send_agent_keys},
+    herdr::client::{get_agent, list_agents, list_panes, send_agent_keys},
     state::AppState,
     topics::names,
 };
@@ -34,23 +34,48 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         Ok(a) => a,
         Err(_) => {
             // Dead pane (topic lingering) vs live shell — only the latter
-            // gets the shell card. Fail-open: a failed list call proceeds
-            // to the shell card (later commands fail visibly if truly dead).
-            let dead = list_panes(&s.cfg.socket)
-                .await
-                .map(|l| !l.contains(&pane.to_string()))
-                .unwrap_or(false);
-            if dead {
-                s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None)
-                    .await;
+            // gets the shell card. Fail-closed throughout: a row that
+            // still lists the pane means a blip (one retry, then refuse),
+            // an unreadable list refuses — never a shell card over a
+            // live agent.
+            let rows = match list_agents(&s.cfg.socket).await {
+                Err(_) => {
+                    s.tg.send_msg(chat, thread, crate::ui::scope_text::HERDR_RETRY, None)
+                        .await;
+                    return;
+                }
+                Ok(rows) => rows,
+            };
+            if rows.iter().any(|r| r.pane == pane) {
+                match get_agent(&s.cfg.socket, pane).await {
+                    Ok(a) => a,
+                    Err(_) => {
+                        s.tg.send_msg(chat, thread, crate::ui::scope_text::HERDR_RETRY, None)
+                            .await;
+                        return;
+                    }
+                }
+            } else {
+                let dead = match list_panes(&s.cfg.socket).await {
+                    Ok(l) => !l.contains(&pane.to_string()),
+                    Err(_) => {
+                        s.tg.send_msg(chat, thread, crate::ui::scope_text::HERDR_RETRY, None)
+                            .await;
+                        return;
+                    }
+                };
+                if dead {
+                    s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None)
+                        .await;
+                    return;
+                }
+                let mid =
+                    s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
+                        .await;
+                s.remember(chat, mid, pane).await;
+                s.set_focus(pane).await;
                 return;
             }
-            let mid =
-                s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
-                    .await;
-            s.remember(chat, mid, pane).await;
-            s.set_focus(pane).await;
-            return;
         }
     };
     if !matches!(agent.status.as_str(), "idle" | "done") {

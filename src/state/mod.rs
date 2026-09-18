@@ -19,8 +19,13 @@ pub(crate) mod guard;
 pub(crate) mod history;
 mod jobs;
 mod targets;
+mod typing;
 
 pub use self::guard::OpGuard;
+
+/// Armed shell-run waiter: workspace id + arm instant (see `runwait`).
+/// Alias keeps the triple-nested map under clippy's type-complexity bar.
+pub(crate) type RunWait = (String, std::time::Instant);
 
 pub struct State {
     pub cfg: Cfg,
@@ -36,7 +41,12 @@ pub struct State {
     /// so boot re-arms watchers orphaned by a restart.
     pub pending: Mutex<HashMap<String, PendingPrompt>>,
     pub keywait: Mutex<HashMap<(i64, Option<i64>), String>>,
-    pub runwait: Mutex<HashMap<(i64, Option<i64>), String>>,
+    /// Next message in this chat runs as a shell command in the armed
+    /// workspace (set by the R button). (Workspace, armed_at): values
+    /// are workspace ids, never panes — hygiene must expire by AGE, not
+    /// by pane-liveness (see reap), or an armed waiter fires arbitrarily
+    /// later as a shell command.
+    pub runwait: Mutex<HashMap<(i64, Option<i64>), RunWait>>,
     /// Next message in this chat is typed into the pane's waiting prompt
     /// (blocked interactive input) + Enter. Set by the ⌨️ button.
     pub typewait: Mutex<HashMap<(i64, Option<i64>), String>>,

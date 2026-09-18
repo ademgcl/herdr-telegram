@@ -9,7 +9,7 @@ use crate::{
     herdr::client::{list_agents, list_workspaces, read_shell_output},
     herdr::labels::{pane_facts, tab_labels},
     jobs::finalize::report,
-    notifier::hygiene::{panes_once, reap_orphans},
+    notifier::hygiene::{flip_dm_shells, panes_once, reap_orphans},
     notifier::limits::scan_limits,
     notifier::status::observe_status,
     state::AppState,
@@ -258,6 +258,12 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                 None => {}
             }
         }
+    }
+
+    // DM mode has no topics, but `status` still drives the limit
+    // scanner — flip shell-reused panes (status + episode, no report).
+    if s.cfg.forum.is_none() {
+        flip_dm_shells(s, &live_panes, &mut pane_list).await;
     }
 
     // Mode-independent dead-pane hygiene (jobs, intent, per-pane maps

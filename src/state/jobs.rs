@@ -46,6 +46,33 @@ impl State {
         true
     }
 
+    /// Clear only when the slot still holds this exact submit (same
+    /// TOCTOU as `remember_pending_cas`): a resubmit landing between a
+    /// `pending_matches` check and the clear (a `send_msg` await sits
+    /// between them) must not lose its intent to the loser's clear.
+    pub async fn clear_pending_if_matches(
+        &self,
+        pane: &str,
+        chat: i64,
+        thread: Option<i64>,
+        prompt: &str,
+    ) -> bool {
+        let snap = {
+            let mut map = self.pending.lock().await;
+            let mine = map
+                .get(pane)
+                .map(|p| p.chat == chat && p.thread == thread && p.prompt == prompt)
+                .unwrap_or(false);
+            if !mine {
+                return false;
+            }
+            map.remove(pane);
+            map.clone()
+        };
+        persist::save_file(&persist::store_path(), &snap);
+        true
+    }
+
     pub async fn clear_all_pending(&self) {
         let empty = {
             let mut map = self.pending.lock().await;
@@ -134,9 +161,11 @@ impl State {
     /// remember across awaits lets a submit landing between them be
     /// overwritten by corpse text (lost reply) — and holding the guard
     /// across `pending_matches` deadlocks (non-reentrant tokio Mutex).
-    /// Timestamp + clone inside the guard (no await), disk write after
-    /// (never hold `pending` across serde + blocking fs). True when
-    /// anything was written.
+    /// A restore keeps the ORIGINAL timestamp (never re-stamps now):
+    /// fresh stamps on every restore would defeat the 24h stale bound
+    /// and keep corpse intents immortal. Timestamp + clone inside the
+    /// guard (no await), disk write after (never hold `pending` across
+    /// serde + blocking fs). True when anything was written.
     pub async fn remember_pending_cas(
         &self,
         pane: &str,
@@ -145,24 +174,25 @@ impl State {
     ) -> bool {
         let snap = {
             let mut map = self.pending.lock().await;
-            let mine = match map.get(pane) {
-                None => true,
-                Some(p) => p.chat == check.0 && p.thread == check.1 && p.prompt == check.2,
+            let started_unix = match map.get(pane) {
+                None => SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                Some(p)
+                    if p.chat == check.0 && p.thread == check.1 && p.prompt == check.2 =>
+                {
+                    p.started_unix
+                }
+                _ => return false,
             };
-            if !mine {
-                return false;
-            }
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
             map.insert(
                 pane.to_string(),
                 PendingPrompt {
                     chat: set.0,
                     thread: set.1,
                     prompt: set.2.to_string(),
-                    started_unix: now,
+                    started_unix,
                 },
             );
             map.clone()
@@ -197,92 +227,7 @@ impl State {
     pub(crate) async fn clear_waiters(&self, pane: &str) {
         self.typewait.lock().await.retain(|_, p| p != pane);
         self.keywait.lock().await.retain(|_, p| p != pane);
-        self.runwait.lock().await.retain(|_, p| p != pane);
-    }
-
-    /// F11: Start sustaining a "typing…" action in the pane's topic while working.
-    pub async fn start_typing(self: &Arc<Self>, pane: &str) {
-        // DM mode has no forum: nothing to type into, and the spawned
-        // task would exit instantly while leaking its handle.
-        if self.cfg.forum.is_none() {
-            return;
-        }
-        let mut tasks = self.typing_tasks.lock().await;
-        // Reap dead handles: a panicked task must not block its
-        // replacement forever.
-        tasks.retain(|_, h| !h.is_finished());
-        if tasks.contains_key(pane) {
-            return;
-        }
-        let s = self.clone();
-        let pane_str = pane.to_string();
-        let handle = tokio::spawn(async move {
-            let forum = s.cfg.forum;
-            // 1:1 working↔typing: fire-and-forget per tick — an awaited
-            // sendChatAction under a slow Telegram stretches the cycle
-            // past the ~5s expiry and the indicator flickers. Overlaps
-            // are idempotent refreshes. Pause while unmapped (mid-job
-            // delete healing): a topic indicator typed into General
-            // shows nowhere useful and misleads.
-            while let Some(chat_id) = forum {
-                if let Some(th) = s.topics.all_mappings().get(&pane_str).copied() {
-                    let tg = s.tg.clone();
-                    tokio::spawn(async move {
-                        tg.typing(chat_id, Some(th)).await;
-                    });
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(super::TYPING_TICK_SECS)).await;
-            }
-        });
-        tasks.insert(pane.to_string(), handle);
-    }
-
-    /// Shell-aware stop: shells own `pending`, agents own `jobs`, and
-    /// both share one per-pane typing task. Plain `stop_typing_unless_owned`
-    /// checks only `jobs`, so a finished/superseded shell settle would
-    /// abort the task a still-running successor (or overlapping agent)
-    /// needs. Stop only when neither owns the pane; re-mint on race.
-    pub async fn stop_shell_typing(self: &Arc<Self>, pane: &str) {
-        if self.jobs.lock().await.contains_key(pane) {
-            return;
-        }
-        if self.pending.lock().await.contains_key(pane) {
-            return;
-        }
-        let aborted = if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
-            handle.abort();
-            true
-        } else {
-            false
-        };
-        if aborted
-            && (self.jobs.lock().await.contains_key(pane)
-                || self.pending.lock().await.contains_key(pane))
-        {
-            self.start_typing(pane).await;
-        }
-    }
-
-    /// Stop only when no job owns the pane. Two separate locks (never
-    /// nested — nesting `typing_tasks`→`jobs` once deadlocked against a
-    /// future inverse): check-then-act TOCTOU is self-healing — if a
-    /// successor inserted after our check, we re-mint its task after the
-    /// abort so the kill is only a blip. Producers must insert into `jobs`
-    /// BEFORE spawn → `start_typing` or a mint-after-check still races.
-    pub async fn stop_typing_unless_owned(self: &Arc<Self>, pane: &str) {
-        if self.jobs.lock().await.contains_key(pane) {
-            return;
-        }
-        let aborted = if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
-            handle.abort();
-            true
-        } else {
-            false
-        };
-        // Successor won the race after our check: re-mint so the abort
-        // above is a blip, not a dark pane.
-        if aborted && self.jobs.lock().await.contains_key(pane) {
-            self.start_typing(pane).await;
-        }
+        // No runwait line: values are workspace ids (never panes) and
+        // expiry lives in hygiene — nothing pane-bound to drop here.
     }
 }

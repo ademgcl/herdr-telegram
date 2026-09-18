@@ -62,26 +62,6 @@ pub(crate) async fn handle_topic_agent_message(
         return;
     }
 
-    // Control plane works in-thread (menus are chat-global): panel +
-    // spawn land here instead of redirecting to General.
-    if cmd == "/agents" || cmd == "/spawn" {
-        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
-        return;
-    }
-
-    if cmd == "/reset" {
-        // Own-pane-only: an arg names another pane — refuse (a typo must
-        // never reset the wrong pane).
-        if !arg.is_empty() {
-            s.tg
-                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
-                .await;
-            return;
-        }
-        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
-        return;
-    }
-
     if cmd == "/cancel" {
         s.keywait.lock().await.remove(&(chat, Some(thread_id)));
         s.runwait.lock().await.remove(&(chat, Some(thread_id)));
@@ -119,11 +99,12 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     // An armed typed-answer waiter wins over every command except
-    // /cancel, /card, /esc (checked above): the next message belongs to
-    // the waiting prompt — a literal "/kill" can itself be the answer
-    // a dialog is waiting for. Peek first (a blockop race or failed
-    // send must not consume the waiter); a resume race falls through.
-    // Self-healing: a stale corpse evicts instead of bricking answers.
+    // the escapes checked above (/cancel, /card, /esc): the next message
+    // belongs to the waiting prompt — a literal "/kill" can itself be
+    // the answer a dialog is waiting for. Peek first (a blockop race or
+    // failed send must not consume the waiter); a resume race falls
+    // through. Self-healing: a stale corpse evicts instead of bricking
+    // answers.
     if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).cloned() {
         if s.block_held(&wpane).await {
             s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
@@ -155,6 +136,27 @@ pub(crate) async fn handle_topic_agent_message(
                 return;
             }
         }
+    }
+
+    // Control plane works in-thread (menus are chat-global): panel,
+    // spawn and own-pane reset land here, after the waiters (an armed
+    // waiter owns the next message — commands must not hijack answers).
+    if cmd == "/agents" || cmd == "/spawn" {
+        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
+        return;
+    }
+
+    if cmd == "/reset" {
+        // Own-pane-only: an arg names another pane — refuse (a typo must
+        // never reset the wrong pane).
+        if !arg.is_empty() {
+            s.tg
+                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
+                .await;
+            return;
+        }
+        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
+        return;
     }
 
     if cmd == "/quit" {

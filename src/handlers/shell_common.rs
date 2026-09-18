@@ -1,5 +1,5 @@
 use super::shell_settle::await_shell_settle;
-use crate::{jobs::stream::delta, state::AppState, ui::tail_fit};
+use crate::{herdr::client::get_agent, jobs::stream::delta, state::AppState, ui::tail_fit};
 use serde_json::Value;
 
 // Re-exported for the submit paths (`shell_run`, boot-recover): the
@@ -63,38 +63,35 @@ pub fn fresh_since(out: &str, before: &str) -> String {
     out.trim().to_string()
 }
 
-/// Follow-up budget after the first unsettled card: ~20 rounds × ~15s
+/// Follow-up budget after the first settle window: ~20 rounds × ~15s
 /// ≈ 5 minutes. Never-ending runs (servers, watchers) stop here with a
-/// still-running card; `/read` covers the rest.
+/// single terminal tail + `/read` pointer; `/read` covers the rest.
+/// Nothing posts before that — no provisional cards, no footers: one
+/// command yields one result card. A posted card means done, except the
+/// rare budget-exhaust pointer (still running, terminal, says so).
+/// Typing is the liveness signal while it runs (per-settle sustain
+/// covers forum topics and DMs alike).
 pub(crate) const SHELL_FOLLOW_UP_ROUNDS: u32 = 20;
 
-/// How to close a shell result card.
-pub(crate) enum ShellNote {
-    /// Settled: the tail is final, no footer.
-    Final,
-    /// Provisional first tail of a still-running command: same shape as
-    /// `Final` (no footer — typing signals liveness per explicit UX call)
-    /// but semantically distinct, so unsettled output never claims to be
-    /// final; a `Finished`/`StillRunning` card follows.
-    First,
-    /// Follow-up, now settled.
-    Finished,
-    /// Budget exhausted, still running.
-    StillRunning,
+/// Pure result-card body so tests cover the shape without I/O: bare
+/// `$ cmd` + tail, never a footer. Deliberately footerless — with no
+/// provisional cards, a posted card is always the terminal report, so
+/// footers would only restate what presence already says.
+pub fn shell_result_text(cmd: &str, out: &str) -> String {
+    let lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
+    format_shell_reply(cmd, &tail_fit(&lines, 3500))
 }
 
-/// Pure result-card body so tests cover the shape without I/O.
-pub fn shell_result_text(cmd: &str, out: &str, note: ShellNote) -> String {
-    let lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
-    let mut reply = format_shell_reply(cmd, &tail_fit(&lines, 3500));
-    match note {
-        ShellNote::Final | ShellNote::First => {}
-        ShellNote::Finished => reply.push_str("\n✅ finished."),
-        ShellNote::StillRunning => {
-            reply.push_str("\n⏳ still running — output above may grow; `/read` for more.")
-        }
+/// True when the pane now holds an agent (shell→agent flip mid-settle,
+/// e.g. `opencode` typed at the prompt): the shell report retires
+/// silently instead of posting tails over a live agent session — the
+/// icon flip + agent status are the whole signal. Read-only (`?` and
+/// errors read as not-flipped: fail-closed, the loop just continues).
+async fn flipped_to_agent(s: &AppState, pane: &str) -> bool {
+    match get_agent(&s.cfg.socket, pane).await {
+        Ok(a) => a.kind != "?" && a.kind != "shell",
+        Err(_) => false,
     }
-    reply
 }
 
 /// Pure retire decision for reconcile's agent→shell branch (no I/O).
@@ -126,12 +123,13 @@ pub(crate) fn classify_shell_reuse(was_shell: bool, owed: bool, job: bool) -> Sh
     }
 }
 
-/// Settle one shell command and report it, following up when a long run
-/// outlasts the first settle: silent polls until it finishes (bounded),
-/// then one completion card with the fresh tail — never partial-card
-/// spam, never silence after the start card. Delivery-tracked and
-/// cancel-aware: a failed send keeps the intent for boot-recover, a
-/// cleared intent (/cancel) stays silent.
+/// Settle one shell command and report it with exactly one card: fast
+/// runs post their tail at once; long runs poll silently (typing is the
+/// liveness signal) until they finish, then post the single tail — never
+/// provisional cards, never footers. A shell→agent flip retires silently
+/// (the icon flip is the signal). Delivery-tracked and cancel-aware: a
+/// failed send keeps the intent for boot-recover, a cleared intent
+/// (/cancel) stays silent.
 pub(crate) async fn settle_report_shell(
     s: &AppState,
     chat: i64,
@@ -159,39 +157,46 @@ pub(crate) async fn settle_report_shell(
         s.stop_shell_typing(pane).await;
         return;
     }
-    // The first card carries no "still running" footer: the typing
-    // indicator already signals liveness, and the completion card below
-    // closes the loop. `First` (not `Final`) marks the provisional tail.
-    // Fresh-only: `out` is the whole scrollback — delta
-    // against the pre-send screen so one command's card never carries
-    // old output (follow-ups below already delta against the sent screen).
-    let first = if settled {
-        ShellNote::Final
-    } else {
-        ShellNote::First
-    };
-    let fresh = shell_result_text(cmd, &fresh_since(&out, before), first);
-    let mid = s.tg.send_msg(chat, thread, &fresh, kb.clone()).await;
-    s.remember(chat, mid, pane).await;
-    if mid.is_none() {
-        // Delivery-tracked: the intent survives for boot-recover instead
-        // of eating the reply. No follow-up without a first card — and
-        // no typing either: typing ↔ live worker, and nothing sustains
-        // one now (boot-recover re-arms both together on restart).
+    // Shell→agent flip (`opencode` at the prompt): the shell intent is
+    // now an agent session — retire silently, no cards at all.
+    if flipped_to_agent(s, pane).await {
+        s.clear_pending_if_matches(pane, chat, thread, cmd).await;
+        s.stop_shell_typing(pane).await;
+        return;
+    }
+    // Fresh-only: `out` is the whole scrollback — delta against the
+    // pre-send screen so one command's card never carries old output
+    // (the follow-up below already deltas against the sent screen).
+    // Unsettled posts NOTHING (typing = liveness): provisional cards
+    // are noise — the single completion card is the whole report.
+    if settled {
+        let fresh = shell_result_text(cmd, &fresh_since(&out, before));
+        let mid = s.tg.send_msg(chat, thread, &fresh, kb.clone()).await;
+        s.remember(chat, mid, pane).await;
+        if mid.is_none() {
+            // Delivery-tracked: the intent survives for boot-recover
+            // instead of eating the reply (typing stops too: nothing
+            // sustains one now — boot-recover re-arms both on restart).
+            s.stop_shell_typing(pane).await;
+            return;
+        }
+        // Match-guarded: a resubmit racing the send above owns the slot now.
+        s.clear_pending_if_matches(pane, chat, thread, cmd).await;
         s.stop_shell_typing(pane).await;
         return;
     }
     let sent_lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
     let mut settle_base = out;
-    if settled {
-        s.clear_pending(pane).await;
-        s.stop_shell_typing(pane).await;
-        return;
-    }
     for _ in 0..SHELL_FOLLOW_UP_ROUNDS {
         let (next, done) = await_shell_settle(s, pane, &settle_base, chat, thread).await;
         settle_base = next.clone();
         if !s.pending_matches(pane, chat, thread, cmd).await {
+            s.stop_shell_typing(pane).await;
+            return;
+        }
+        // Late flip (agent took over mid-run): same silent retire.
+        if flipped_to_agent(s, pane).await {
+            s.clear_pending_if_matches(pane, chat, thread, cmd).await;
             s.stop_shell_typing(pane).await;
             return;
         }
@@ -201,21 +206,30 @@ pub(crate) async fn settle_report_shell(
         let new_lines: Vec<String> = next.lines().map(|l| l.trim_end().to_string()).collect();
         let fresh = delta(&new_lines, &sent_lines).to_vec();
         let body = if fresh.iter().all(|l| l.trim().is_empty()) {
-            format!("$ {cmd}\n✅ finished — no further output.")
+            format!("$ {cmd}\n(no further output)")
         } else {
-            shell_result_text(cmd, &fresh.join("\n"), ShellNote::Finished)
+            shell_result_text(cmd, &fresh.join("\n"))
         };
         let mid2 = s.tg.send_msg(chat, thread, &body, kb.clone()).await;
         s.remember(chat, mid2, pane).await;
         if mid2.is_some() {
-            s.clear_pending(pane).await;
+            s.clear_pending_if_matches(pane, chat, thread, cmd).await;
         }
         s.stop_shell_typing(pane).await;
         return;
     }
-    // Budget exhausted, still running: last fresh tail (or a short note
-    // when nothing new arrived all budget) + `/read` pointer.
+    // Budget exhausted and still a shell: the single terminal tail (or
+    // a short note when nothing new arrived all budget) + `/read`
+    // pointer. Terminal, not transient — nothing more posts for this
+    // command — and rare (agent flips retire above long before this).
+    // Flip-guarded like the loop: the last round may have passed the
+    // check as shell just before the flip landed.
     if !s.pending_matches(pane, chat, thread, cmd).await {
+        s.stop_shell_typing(pane).await;
+        return;
+    }
+    if flipped_to_agent(s, pane).await {
+        s.clear_pending_if_matches(pane, chat, thread, cmd).await;
         s.stop_shell_typing(pane).await;
         return;
     }
@@ -227,12 +241,15 @@ pub(crate) async fn settle_report_shell(
     let body = if fresh.iter().all(|l| l.trim().is_empty()) {
         format!("$ {cmd}\n⏳ still running — `/read` for more.")
     } else {
-        shell_result_text(cmd, &fresh.join("\n"), ShellNote::StillRunning)
+        format!(
+            "{}\n⏳ still running — output above may grow; `/read` for more.",
+            shell_result_text(cmd, &fresh.join("\n"))
+        )
     };
     let mid3 = s.tg.send_msg(chat, thread, &body, kb).await;
     s.remember(chat, mid3, pane).await;
     if mid3.is_some() {
-        s.clear_pending(pane).await;
+        s.clear_pending_if_matches(pane, chat, thread, cmd).await;
     }
     s.stop_shell_typing(pane).await;
 }

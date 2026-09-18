@@ -110,7 +110,7 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
 /// text as a shell command in-topic, keywait sends it as keys to the pane
 /// (agent keys when it holds an agent, pane keys otherwise).
 pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: &str) -> bool {
-    if let Some(ws) = s.runwait.lock().await.remove(&(chat, thread)) {
+    if let Some((ws, _)) = s.runwait.lock().await.remove(&(chat, thread)) {
         super::shell::handle_run_command(s, chat, thread, &ws, text).await;
         return true;
     }

@@ -2,8 +2,8 @@ use super::shell_common::shell_card_text;
 use super::shell_run::run_shell_cmd;
 use crate::{
     herdr::client::{
-        await_fresh_root, best_split_direction, create_tab, ensure_tg_space, get_agent, list_workspaces,
-        pane_layout,
+        await_fresh_root, best_split_direction, create_tab, ensure_tg_space, get_agent, list_agents,
+        list_workspaces, pane_layout,
     },
     herdr::labels::pane_facts,
     jobs::enqueue_prompt,
@@ -23,25 +23,32 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
         Some(p) => {
             // A live agent here takes prompts, not shell input: stale
             // rows can omit fresh agents, and shell text must never be
-            // injected into an agent session.
-            match get_agent(&s.cfg.socket, &p).await {
-                Ok(a) => {
-                    enqueue_prompt(
-                        s.clone(),
-                        chat,
-                        None,
-                        AgentRow {
-                            kind: a.kind,
-                            pane: a.pane,
-                            title: a.title,
-                            status: a.status,
-                            ws: a.ws,
-                        },
-                        text.to_string(),
-                    )
-                    .await;
+            // injected into an agent session. Fail-closed: an unreadable
+            // agent row is confirmed via `agent.list` (a blip retries
+            // instead of injecting shell text into live work; a
+            // confirmed-shell pane runs as a command below).
+            let row = match get_agent(&s.cfg.socket, &p).await {
+                Ok(a) => Some(AgentRow {
+                    kind: a.kind,
+                    pane: a.pane,
+                    title: a.title,
+                    status: a.status,
+                    ws: a.ws,
+                }),
+                Err(_) => match list_agents(&s.cfg.socket).await {
+                    Err(_) => {
+                        s.tg.send_msg(chat, None, crate::ui::scope_text::HERDR_RETRY, None)
+                            .await;
+                        return;
+                    }
+                    Ok(rows) => rows.into_iter().find(|r| r.pane == p),
+                },
+            };
+            match row {
+                Some(row) => {
+                    enqueue_prompt(s.clone(), chat, None, row, text.to_string()).await;
                 }
-                Err(_) => run_shell_cmd(s, chat, None, &p, text).await,
+                None => run_shell_cmd(s, chat, None, &p, text).await,
             }
         }
         None => {

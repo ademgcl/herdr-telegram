@@ -1,10 +1,5 @@
 use super::target::dm_pane;
-use crate::{
-    herdr::client::{list_workspaces, spawn_agent},
-    state::AppState,
-    types::AgentRow,
-    ui::ws_label,
-};
+use crate::{state::AppState, types::AgentRow};
 
 pub(crate) async fn handle_quit(
     s: &AppState,
@@ -98,67 +93,4 @@ pub(crate) async fn handle_space(s: &AppState, chat: i64, arg: &str) {
         super::space::next_label(s).await
     };
     super::space::open_space(s, chat, None, &label).await;
-}
-
-pub(crate) async fn handle_spawn(s: &AppState, chat: i64, arg: &str) {
-    let (kind, ws) = match arg.split_once(char::is_whitespace) {
-        Some((k, w)) => (k, Some(w)),
-        None if !arg.is_empty() => (arg, None),
-        _ => {
-            s.tg.send_msg(
-                chat,
-                None,
-                "usage: /spawn <kind> [space] (e.g. /spawn opencode space-1)",
-                None,
-            )
-            .await;
-            return;
-        }
-    };
-    s.tg.send_msg(chat, None, &format!("spawning {kind}..."), None)
-        .await;
-    // Workspace may be an id or a human label (`space-1`).
-    let ws_id;
-    let ws = match ws {
-        Some(w) => match super::space::resolve_ws(s, w).await {
-            Some(id) => {
-                ws_id = id;
-                Some(ws_id.as_str())
-            }
-            None => {
-                s.tg.send_msg(chat, None, &format!("⚠️ unknown space `{w}`"), None)
-                    .await;
-                return;
-            }
-        },
-        None => None,
-    };
-    match spawn_agent(&s.cfg.socket, kind, ws).await {
-        Ok(row) => {
-            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-            let space = ws_label(&spaces, &row.ws);
-            if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space).await {
-                s.tg.send_msg(
-                    chat,
-                    None,
-                    &format!("Started {} [{}] in topic #{topic_th}", row.kind, row.pane),
-                    None,
-                )
-                .await;
-            } else {
-                s.tg.send_msg(
-                    chat,
-                    None,
-                    &format!("Started {} [{}]", row.kind, row.pane),
-                    None,
-                )
-                .await;
-            }
-            s.set_focus(&row.pane).await;
-        }
-        Err(e) => {
-            s.tg.send_msg(chat, None, &format!("spawn failed: {e}"), None)
-                .await;
-        }
-    }
 }

@@ -107,16 +107,24 @@ async fn test_reap_keeps_armed_runwait() {
     // runwait holds workspace ids, not panes: the tick must never
     // misread one as a dead pane and wipe the armed shell-run waiter
     // (the next message is an acknowledged command, not a prompt).
+    // Age-expiry still applies: a waiter armed arbitrarily long ago
+    // must not fire stale input as a shell command.
+    use std::time::{Duration, Instant};
     let (s, _dir) = isolated_state();
     let job = Job::new(vec![], 1, None);
     s.jobs.lock().await.insert("live:p1".into(), job);
-    s.runwait.lock().await.insert((1, None), "w8".into());
+    s.runwait.lock().await.insert((1, None), ("w8".into(), Instant::now()));
+    s.runwait.lock().await.insert(
+        (2, None),
+        ("w8".into(), Instant::now() - Duration::from_secs(3600)),
+    );
     let mut cache = Some(HashSet::from(["live:p1".to_string()]));
     reap_orphans(&s, &mut cache).await;
     assert_eq!(
-        s.runwait.lock().await.get(&(1, None)).map(String::as_str),
+        s.runwait.lock().await.get(&(1, None)).map(|(ws, _)| ws.as_str()),
         Some("w8")
     );
+    assert!(!s.runwait.lock().await.contains_key(&(2, None)));
 }
 
 #[tokio::test]
