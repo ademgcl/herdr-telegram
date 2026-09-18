@@ -1,12 +1,15 @@
 # herdr-telegram
 
-Your AI coding agents, in your pocket. Prompt opencode, shells, and any Herdr agent from Telegram — phone, desktop, anywhere — and get pinged the moment one needs you or finishes. Start on your PC, continue on mobile, seamlessly.
+You're away from the desk when an agent stalls on a question. Telegram buzzes with the prompt and answer buttons — you tap one, the run continues. Start on desktop, finish on the phone.
+
+- One topic per pane: plain text is the prompt, titles sync 1:1 with Herdr.
+- Blocked agents post answer cards: tap a button or type the answer.
 
 ## You need
 
-- [Herdr](https://herdr.dev) running your agents (same machine as this bot)
-- A Telegram bot: [@BotFather](https://t.me/BotFather) → `/newbot` → token
-- A forum supergroup for that machine: new group → enable Topics → add your bot as **admin** (it must manage topics). One group per PC keeps hosts separate.
+- [Herdr](https://herdr.dev) running agents on this machine
+- A bot token: [@BotFather](https://t.me/BotFather) → `/newbot`
+- A forum supergroup: new group → enable Topics → bot as **admin**. One group per machine keeps hosts apart.
 
 ## Setup
 
@@ -20,32 +23,38 @@ cp .env.example .env  # fill in below
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | token from @BotFather |
 | `TELEGRAM_CHAT_ID` | your numeric id ([@userinfobot](https://t.me/userinfobot)) |
-| `TELEGRAM_FORUM_CHAT_ID` | the supergroup id — one topic per agent (omit for DM-only mode) |
+| `TELEGRAM_FORUM_CHAT_ID` | supergroup id, full negative form (omit for DM-only) |
 | `HERDR_SOCKET` | optional, default `~/.config/herdr/herdr.sock` |
 
 ## Run
 
 ```sh
 sed "s|__REPO_DIR__|$(pwd)|g" dev.herdr.telegram.plist.example > ~/Library/LaunchAgents/dev.herdr.telegram.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.herdr.telegram.plist  # auto-restart on crash/reboot, logs to bot.log
-launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop service before manual runs, or the single-instance guard + Telegram getUpdates Conflict will fight it
+launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop before manual runs — single instance only, else getUpdates Conflict
 launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev.herdr.telegram.plist  # uninstall
 ```
 
 ## Use
 
-- General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/pane [space]` `/model` (redirect) `/start` `/reset` `/cancel` `/help`
-- Agent topic: plain text = prompt. `/read` `/output` `/model` `/quit` `/kill` `/keys` `/status` `/shell` `/pane [space]` `/space` `/split` `/card` `/esc` `/cancel` `/help`
-- Spaces, agents, shells — the whole Herdr tree is drivable from chat: `/space [name]` makes a workspace and drops you in its shell topic.
-- Blocked agents post answer cards — tap a button or just type the answer. Stuck with no buttons? `/card` re-posts them, `/esc` dismisses (blocked-only).
-- Topics carry a live kind icon (per-agent glyph — user customs are never overwritten) and an identity card. Status surfaces in cards and the typing indicator instead (never pinned). Titles sync 1:1 with herdr pane names either way (rename the topic or the pane).
+- General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/pane [space]` `/model` (use in topic) `/start` `/reset` (all topics) `/cancel` `/help`
+- Agent topic: plain text = prompt. `/read` `/output` `/model` `/quit` `/kill` `/keys` `/status` `/shell` `/pane [space]` `/space` `/split` `/card` `/esc` `/cancel` `/reset` (this topic) `/help`
+- Shell topic: plain text = shell input; `/esc` sends a raw Esc. No agent here, so `/card`, `/model` and `/quit` refuse. No `/shell` — use `/pane`; everything else matches the agent list (see `/help`).
+- `/space [name]` creates a space and opens its shell topic — works in any topic.
+- `/spawn opencode` in General opens its topic. DMs work too (reply picks the agent).
+- No buttons and stuck? `/card` re-posts the card; `/esc` dismisses blocked dialogs.
+- Topics carry a live kind icon (customs kept) and an identity card; titles sync either way, status never pins.
+
+## Ops
+
+`herdr-telegram dev` → console (rebuild on change, logs, topics, cleanup). One-shots: `dev status|logs|start|stop|restart|cleanup|build`. Run prod on launchd; dev stays foreground.
 
 ## Security
 
-This is shell access over chat — treat it like SSH. Anyone holding your phone or your bot token owns the machine: guard both like keys. Owner-only by numeric id; no auth beyond that.
+Shell access over chat — treat it like SSH. Phone or bot token in hand means machine in hand. Owner-only by numeric id, nothing beyond that.
 
 ## Limitations
 
-Hobby POC, not hardened: no audit log, plaintext local state, single instance. Needs network to Telegram (long-poll, no webhooks). One bot, one Herdr socket, one machine.
+Hobby POC, not hardened: no audit log, plaintext local state, single instance. Needs network to Telegram. One bot, one Herdr socket, one machine.
 
 ## License
 
