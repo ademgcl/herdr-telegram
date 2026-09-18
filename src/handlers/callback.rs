@@ -33,11 +33,11 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     // Thread for ack messages (forum topics carry it, DMs don't).
     let thread = cbq["message"]["message_thread_id"].as_i64();
     // Stale cards must not re-execute (days-old spawn-confirm/kill taps):
-    // one gate covers both relic (86400s+) and merely outdated taps.
+    // one gate (STALE_SECS) covers both relic and merely outdated taps.
     // Dialog (B) taps are exempt — they re-validate against the live
-    // pane at tap time (count/shape/footer checks), so a long-lived
-    // blocked card stays tappable while destructive arms keep the
-    // birth-date gate. Model taps are gated except the read-only list
+    // pane at tap time (blocked-status gate + shape checks), so a
+    // long-lived blocked card stays tappable while destructive arms keep
+    // the birth-date gate. Model taps are gated except the read-only list
     // re-render (M:list:<pane>); an M:<idx> switch is a side effect.
     let (head, rest0) = split_head(data);
     let exempt =

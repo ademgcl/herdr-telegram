@@ -22,7 +22,7 @@ use crate::{
     handlers::title_rules::{stored_covers_label, stored_matches_label, tab_census, tab_of, title_core_for},
     herdr::{
         client::{list_agents, list_workspaces},
-        labels::{pane_facts, rename_pane, rename_tab, tab_labels},
+        labels::{pane_facts, rename_pane, rename_tab},
     },
     state::AppState,
     topics::names,
@@ -35,38 +35,9 @@ const STATE_READ_ERR: &str = "⚠️ rename failed: could not read herdr state �
 
 /// Watchdog half: every mapped live pane's topic shows its herdr TAB
 /// name (or the tag default when the tab has none). Panes gone from
-/// herdr are skipped — the close flow owns them.
-/// Prefer `sync_titles_with` on the hot path (reuses the tick's fetch).
-#[allow(dead_code)]
-pub async fn sync_titles(s: &AppState) {
-    // Reset owns Steps 1-4: the watchdog must not rename topics about
-    // to die (or mint through the gate) mid-reset. Reset's Step 4 calls
-    // `sync_title` directly, so it is unaffected.
-    if crate::handlers::reset::is_resetting() {
-        return;
-    }
-    if s.cfg.forum.is_none() || s.topics.all_mappings().is_empty() {
-        return;
-    }
-    // Fail-closed inputs: a degraded fetch must skip the tick, never
-    // reformat every topic from tag/? defaults (mass-revert on outage).
-    let Ok(facts) = pane_facts(&s.cfg.socket).await else {
-        return;
-    };
-    let Ok(agents) = list_agents(&s.cfg.socket).await else {
-        return;
-    };
-    let Ok(spaces) = list_workspaces(&s.cfg.socket).await else {
-        return;
-    };
-    let Ok(tabs) = tab_labels(&s.cfg.socket).await else {
-        return;
-    };
-    sync_titles_with(s, &agents, &spaces, &facts, &tabs).await;
-}
-
-/// Cached variant: reuses the reconcile tick's agents/spaces/facts/tabs
-/// so the watchdog costs 1 extra list RPC (tab.list) per tick, not 8.
+/// herdr are skipped — the close flow owns them. Reuses the reconcile
+/// tick's agents/spaces/facts/tabs, so the watchdog costs 1 extra list
+/// RPC (tab.list) per tick, not 8.
 pub async fn sync_titles_with(
     s: &AppState,
     agents: &[crate::types::AgentRow],

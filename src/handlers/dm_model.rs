@@ -1,4 +1,4 @@
-use super::target::resolve_target;
+use super::target::{resolve_target, unmatched_reply};
 use crate::{state::AppState, types::AgentRow};
 
 pub(crate) async fn handle_model(
@@ -31,6 +31,18 @@ pub(crate) async fn handle_model(
             .and_then(|p| rows.iter().find(|r| r.pane == p))
     {
         pane = Some(p.pane.clone());
+    }
+    // Corpse reply: refuse — falling through would drive the model
+    // picker key sequence into the wrong live session's work.
+    if pane.is_none() && unmatched_reply(rows, reply_pane) {
+        s.tg.send_msg(
+            chat,
+            None,
+            "who? `/model <pane>` or tap an agent in /agents",
+            None,
+        )
+        .await;
+        return;
     }
     if pane.is_none()
         && let Some(f) = s.get_focus().await

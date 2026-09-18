@@ -1,6 +1,5 @@
 //! Durable topic identity (pane→thread/tag/title/icon/card): JSON file
-//! with `.prev` backup, mutex-guarded in memory. Atomic clear-except
-//! covers the reset survivor path. Split into `disk` + `tests`.
+//! with `.prev` backup, mutex-guarded in memory. Split into `disk` + `tests`.
 //! (`card` persists under the legacy `pins` key — same ids, never pinned.)
 use std::{collections::HashMap, env, path::PathBuf, sync::Mutex};
 
@@ -14,10 +13,6 @@ pub struct TopicStorage {
     file_path: PathBuf,
     store: Mutex<Store>,
 }
-
-/// Full topic identity for reset survivors (pane, thread, tag, title, icon).
-#[allow(dead_code)]
-pub type KeptIdentity = (String, i64, Option<String>, Option<String>, Option<String>);
 
 impl TopicStorage {
     pub fn new() -> Self {
@@ -65,6 +60,8 @@ impl TopicStorage {
             .map(|(p, _)| p.clone())
     }
 
+    /// Test-only surface (roundtrip + wipe tests pin the disk format).
+    #[allow(dead_code)]
     pub fn insert(&self, pane: String, thread: i64) {
         let mut s = self.lock();
         s.topics.insert(pane, thread);
@@ -145,18 +142,12 @@ impl TopicStorage {
         self.lock().tags.get(pane).cloned()
     }
 
-    pub fn set_tag(&self, pane: &str, tag: &str) {
-        let mut s = self.lock();
-        if s.tags.get(pane).map(|t| t.as_str()) != Some(tag) {
-            s.tags.insert(pane.to_string(), tag.to_string());
-            self.save(&s);
-        }
-    }
-
     pub fn get_title(&self, pane: &str) -> Option<String> {
         self.lock().titles.get(pane).cloned()
     }
 
+    /// Test-only surface (roundtrip + wipe tests pin the disk format).
+    #[allow(dead_code)]
     pub fn set_title(&self, pane: &str, title: &str) {
         let mut s = self.lock();
         if s.titles.get(pane).map(|t| t.as_str()) == Some(title) {
@@ -232,6 +223,8 @@ impl TopicStorage {
         self.lock().topics.clone()
     }
 
+    /// Test-only surface (wipe test pins the empty-store format).
+    #[allow(dead_code)]
     pub fn clear_all(&self) {
         let mut s = self.lock();
         s.topics.clear();
@@ -243,40 +236,6 @@ impl TopicStorage {
         s.last_msgs.clear();
         // No backup: empty intermediate must not clobber last-good.
         self.save_no_backup(&s);
-    }
-
-    /// Atomic clear+restore (reset survivor path): one lock, one save.
-    #[allow(dead_code)]
-    pub fn clear_except(&self, kept: Vec<KeptIdentity>) {
-        let mut s = self.lock();
-        s.topics.clear();
-        s.unread.clear();
-        s.tags.clear();
-        s.titles.clear();
-        s.pins.clear();
-        s.icons.clear();
-        let kept_panes: std::collections::HashSet<&str> =
-            kept.iter().map(|(p, ..)| p.as_str()).collect();
-        s.last_msgs.retain(|p, _| kept_panes.contains(p.as_str()));
-        for (pane, thread, tag, title, icon) in &kept {
-            s.topics.insert(pane.clone(), *thread);
-            if let Some(t) = tag {
-                s.tags.insert(pane.clone(), t.clone());
-            }
-            if let Some(t) = title {
-                s.titles.insert(pane.clone(), t.clone());
-            }
-            if let Some(i) = icon {
-                s.icons.insert(pane.clone(), i.clone());
-            }
-        }
-        // Empty wipe must not clobber last-good (kill between wipe and
-        // Step-4 recreate would lose both copies).
-        if kept.is_empty() {
-            self.save_no_backup(&s);
-        } else {
-            self.save(&s);
-        }
     }
 }
 

@@ -30,8 +30,8 @@ pub use super::reset_single::*;
 static RESET_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// True while a paced reset runs: topic creators must not mint (only
-/// reuse) until it ends, or `clear_all` wipes in-flight mappings into
-/// orphans + later doubles. Set before any snapshot; auto-cleared.
+/// reuse) until it ends, or in-flight mappings are wiped into orphans +
+/// later doubles. Set before any snapshot; auto-cleared.
 /// Watchdog/notifier also consult it: reconcile, spontaneous cards and
 /// event-driven topic writes pause while it holds (no 429 storm), while
 /// read-only memory updates continue.

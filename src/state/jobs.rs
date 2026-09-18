@@ -156,23 +156,6 @@ impl State {
         self.runwait.lock().await.retain(|_, p| p != pane);
     }
 
-    /// Drop reply targets pointing at a dead pane (lock order torder →
-    /// targets, as in `remember`): replying to a stale card must say
-    /// "who?", never re-arm focus on the corpse into a void loop.
-    pub(crate) async fn clear_targets_for(&self, pane: &str) {
-        let mut ord = self.torder.lock().await;
-        let mut map = self.targets.lock().await;
-        let dead: Vec<(i64, i64)> = map
-            .iter()
-            .filter(|(_, p)| p.as_str() == pane)
-            .map(|(k, _)| *k)
-            .collect();
-        for k in &dead {
-            map.remove(k);
-        }
-        ord.retain(|o| !dead.contains(o));
-    }
-
     /// F11: Start sustaining a "typing…" action in the pane's topic while working.
     pub async fn start_typing(self: &Arc<Self>, pane: &str) {
         // DM mode has no forum: nothing to type into, and the spawned
@@ -207,16 +190,6 @@ impl State {
             }
         });
         tasks.insert(pane.to_string(), handle);
-    }
-
-    /// Stop sustaining the "typing…" action for this pane.
-    /// Unconditional primitive (shutdown paths); live paths prefer
-    /// `stop_typing_unless_owned` so a successor keeps its task.
-    #[allow(dead_code)]
-    pub async fn stop_typing(&self, pane: &str) {
-        if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
-            handle.abort();
-        }
     }
 
     /// Shell-aware stop: shells own `pending`, agents own `jobs`, and

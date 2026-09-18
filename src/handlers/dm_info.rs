@@ -1,4 +1,4 @@
-use super::target::resolve_target;
+use super::target::{resolve_target, unmatched_reply};
 use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output, send_agent_keys},
     state::AppState,
@@ -98,6 +98,14 @@ pub(crate) async fn handle_read(
             _ => (if arg.is_empty() { None } else { Some(arg) }, 80),
         },
     };
+    // Corpse reply with exactly one live agent: the sole-agent shortcut
+    // below would otherwise serve (and refocus) the wrong session.
+    // Explicit targets keep their own unknown-target error.
+    if target_arg.is_none() && unmatched_reply(rows, reply_pane) {
+        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            .await;
+        return;
+    }
     let mut row = match resolve_target(rows, target_arg) {
         Some(r) => Some(r),
         None if target_arg.is_some() => {
@@ -149,6 +157,14 @@ pub(crate) async fn handle_status(
     arg: &str,
     reply_pane: &Option<String>,
 ) {
+    // Corpse reply with exactly one live agent: the sole-agent shortcut
+    // would otherwise serve (and refocus) the wrong session. Explicit
+    // targets win over the reply, so only bare replies refuse here.
+    if arg.is_empty() && unmatched_reply(rows, reply_pane) {
+        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            .await;
+        return;
+    }
     let mut pane = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
         Some(r) => Some(r.pane),
         // Explicit but unknown: never show a different agent's card.

@@ -21,9 +21,18 @@ pub(crate) enum TapCall {
 pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
     // Read first: the index is validated against the LIVE dialog below —
     // a stale card (or crafted callback) must never drive keys into a
-    // narrower turned-over dialog. Unreadable screens stay permissive:
-    // outage must not brick real buttons.
+    // narrower turned-over dialog. Unreadable screens/status stay
+    // permissive: outage must not brick real buttons (sends fail
+    // visibly below, so nothing injects blind).
     let before = read_screen_visible(socket, pane, 30).await;
+    // Stale-tap ground truth: buttons only exist on blocked panes. A tap
+    // racing a resume — or landing days later on a history card — must
+    // refuse instead of driving keys into live work (shape heuristics
+    // alone cannot tell working prose from a dialog).
+    match get_agent(socket, pane).await {
+        Ok(a) if a.status != "blocked" => return TapCall::Unknown,
+        _ => {}
+    }
     // Winner-segment basis (mirrors live_card): a stale numbered list
     // in scrollback must not flip the branch or the bounds check.
     let win_raw: Vec<String> = if before.is_empty() {

@@ -248,7 +248,11 @@ impl State {
         // keeps its typing task; a dead pane has no owner so it stops.
         self.stop_typing_unless_owned(pane).await;
         self.clear_waiters(pane).await;
-        self.clear_targets_for(pane).await;
+        // Reply targets are NEVER pruned here: a DM reply to a corpse
+        // card must fail visibly ("pane gone") via the shell fallback —
+        // pruning it would silently reroute the text as a prompt into
+        // the focused live agent. Dead entries age out via the 512-cap
+        // overflow in `remember`; per-tap `forget_target` drops them.
         // A killed pane must not stay focused: the next bare message
         // would route into the void instead of resolving fresh.
         if self.focus.lock().await.as_deref() == Some(pane) {

@@ -38,8 +38,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // Armed input waiters also pin a pane: a keywait/typewait for an
     // externally-closed shell (no job, no intent, DM mode) must die
     // with it instead of eating the next message as dead input.
+    // runwait is deliberately EXCLUDED: it holds workspace ids, not
+    // pane ids — admitting one would misread it as a dead pane and
+    // wipe the armed shell-run waiter it was meant to protect.
     known.extend(s.keywait.lock().await.values().cloned());
-    known.extend(s.runwait.lock().await.values().cloned());
     known.extend(s.typewait.lock().await.values().cloned());
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.
@@ -133,16 +135,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             for pane in &drop_typing {
                 s.stop_typing_unless_owned(pane).await;
             }
-            // Reply targets pointing at dead panes (order
-            // torder→targets, as in remember).
-            {
-                let mut ord = s.torder.lock().await;
-                let mut map = s.targets.lock().await;
-                map.retain(|_, p| live.contains(p));
-                let live_keys: std::collections::HashSet<(i64, i64)> =
-                    map.keys().cloned().collect();
-                ord.retain(|k| live_keys.contains(k));
-            }
+            // Reply targets are NEVER pruned (not even for dead panes):
+            // a DM reply to a corpse card must fail visibly via the
+            // shell fallback, never silently reroute into the focused
+            // live agent. Dead entries age out via the 512-cap overflow.
         }
         None => {}
     }
@@ -227,5 +223,46 @@ mod tests {
         assert!(s.modelop.lock().await.contains_key("live:p2"));
         assert!(!s.blockop.lock().await.contains_key("dead:p9"));
         assert!(!s.modelop.lock().await.contains_key("dead:p9"));
+    }
+
+    #[tokio::test]
+    async fn test_reap_retains_dead_reply_targets() {
+        // Fail-visible corpses: a DM reply to a dead pane's card must
+        // keep its address so routing fails loudly ("pane gone") instead
+        // of silently prompting the focused live agent.
+        let (s, _dir) = isolated_state();
+        let job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("live:p1".into(), job);
+        s.targets.lock().await.insert((1, 10), "live:p1".into());
+        s.targets.lock().await.insert((1, 11), "dead:p9".into());
+        s.torder.lock().await.push_back((1, 10));
+        s.torder.lock().await.push_back((1, 11));
+        let mut cache = Some(HashSet::from(["live:p1".to_string()]));
+        reap_orphans(&s, &mut cache).await;
+        assert_eq!(
+            s.targets.lock().await.get(&(1, 10)).map(String::as_str),
+            Some("live:p1")
+        );
+        assert_eq!(
+            s.targets.lock().await.get(&(1, 11)).map(String::as_str),
+            Some("dead:p9")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reap_keeps_armed_runwait() {
+        // runwait holds workspace ids, not panes: the tick must never
+        // misread one as a dead pane and wipe the armed shell-run waiter
+        // (the next message is an acknowledged command, not a prompt).
+        let (s, _dir) = isolated_state();
+        let job = Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("live:p1".into(), job);
+        s.runwait.lock().await.insert((1, None), "w8".into());
+        let mut cache = Some(HashSet::from(["live:p1".to_string()]));
+        reap_orphans(&s, &mut cache).await;
+        assert_eq!(
+            s.runwait.lock().await.get(&(1, None)).map(String::as_str),
+            Some("w8")
+        );
     }
 }

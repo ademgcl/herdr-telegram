@@ -3,7 +3,7 @@
 //! Escape (blocked-status only, never into live work). Commands — not
 //! buttons — are the out-of-band path, so they work even when every
 //! card on screen is stale or gone.
-use super::target::resolve_target;
+use super::target::{resolve_target, unmatched_reply};
 use crate::{
     handlers::dialog::send_blocked_card,
     handlers::tap_classify::{TapResult, classify_tap},
@@ -160,6 +160,14 @@ async fn resolve_dm_pane(
     arg: &str,
     reply_pane: &Option<String>,
 ) -> Option<String> {
+    // Corpse reply with exactly one live agent: the sole-agent shortcut
+    // below would otherwise show/dismiss the wrong dialog (bare commands
+    // only; an explicit live arg already wins in the match).
+    if arg.is_empty() && unmatched_reply(rows, reply_pane) {
+        s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+            .await;
+        return None;
+    }
     let mut row = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
         Some(r) => Some(r),
         None if !arg.is_empty() => {

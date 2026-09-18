@@ -111,28 +111,15 @@ impl TopicManager {
     /// (`forum_topic_edited` → `pane.rename`), and the stored title
     /// absorbs our own sync echoes.
     pub async fn ensure_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
-        self.ensure_inner(pane, kind, space, false).await
+        self.ensure_inner(pane, kind, space).await
     }
 
-    /// Reset-owned mint: bypasses the reuse-only gate (Step 4 must
-    /// recreate after `clear_all`; the watchdog path stays gated).
-    pub async fn ensure_topic_for_reset(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
-        self.ensure_inner(pane, kind, space, true).await
-    }
-
-    async fn ensure_inner(
-        &self,
-        pane: &str,
-        kind: &str,
-        space: &str,
-        allow_during_reset: bool,
-    ) -> Option<i64> {
+    async fn ensure_inner(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
         let forum = self.forum_id?;
         // A paced reset is rebuilding the map: reuse only, never mint —
-        // anything created now is wiped by `clear_all` into an orphan
-        // (later re-minted as a double). Reset's own Step 4 bypasses via
-        // `allow_during_reset`; deferred panes mint on post-reset ticks.
-        if !allow_during_reset && crate::handlers::reset::is_resetting() {
+        // anything created now is wiped mid-reset into an orphan (later
+        // re-minted as a double). Deferred panes mint on post-reset ticks.
+        if crate::handlers::reset::is_resetting() {
             return self.storage.get_thread(pane);
         }
         // Unknown kind (agent vanished mid-flight): never mint topics —
@@ -170,7 +157,7 @@ impl TopicManager {
         // Re-check after claiming single-flight: a reset that started
         // between our first gate and now would wipe this mint into an
         // orphan → later double. Defer to post-reset ticks instead.
-        if !allow_during_reset && crate::handlers::reset::is_resetting() {
+        if crate::handlers::reset::is_resetting() {
             return self.storage.get_thread(pane);
         }
         // Tag inside the guard: a cancel before the guard must not leak
@@ -242,27 +229,11 @@ impl TopicManager {
     /// reflected on the icon — it surfaces in cards and the typing
     /// indicator instead.
     pub async fn sync_topic(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
-        self.sync_inner(pane, kind, space, false).await
+        self.sync_inner(pane, kind, space).await
     }
 
-    /// Reset-owned sync: mints through the reset gate (see ensure).
-    #[allow(dead_code)]
-    pub async fn sync_topic_for_reset(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
-        self.sync_inner(pane, kind, space, true).await
-    }
-
-    async fn sync_inner(
-        &self,
-        pane: &str,
-        kind: &str,
-        space: &str,
-        allow_during_reset: bool,
-    ) -> Option<i64> {
-        let thread = if allow_during_reset {
-            self.ensure_topic_for_reset(pane, kind, space).await?
-        } else {
-            self.ensure_topic(pane, kind, space).await?
-        };
+    async fn sync_inner(&self, pane: &str, kind: &str, space: &str) -> Option<i64> {
+        let thread = self.ensure_topic(pane, kind, space).await?;
         let forum = self.forum_id?;
 
         // If icon was never set for this topic (e.g. migration / boot), set it once.

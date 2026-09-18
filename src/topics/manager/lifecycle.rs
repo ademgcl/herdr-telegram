@@ -1,6 +1,5 @@
 //! Topic lifecycle: reopen/close/delete, shell badging, card
-//! retirement, mapping removal, and full-identity snapshot/restore
-//! (reset path).
+//! retirement, and mapping removal.
 //! Split from `manager` (300-line file limit).
 use super::TopicManager;
 use crate::topics::names;
@@ -114,71 +113,6 @@ impl TopicManager {
                     && !t[2..].is_empty()
                     && t[2..].chars().all(|c| c.is_ascii_digit())
             })
-    }
-
-    /// Snapshot a pane's full topic identity (reset survivor path).
-    #[allow(dead_code)]
-    pub fn snapshot_identity(
-        &self,
-        pane: &str,
-    ) -> (Option<String>, Option<String>, Option<String>) {
-        (
-            self.storage.get_tag(pane),
-            self.storage.get_title(pane),
-            self.storage.get_icon(pane),
-        )
-    }
-
-    /// Restore a mapping wiped by `clear_all` (reset retry path).
-    /// Superseded by atomic `storage_clear_except`; kept for manual
-    /// repair paths and tests.
-    #[allow(dead_code)]
-    pub fn restore_identity(
-        &self,
-        pane: String,
-        thread: i64,
-        tag: Option<String>,
-        title: Option<String>,
-        icon: Option<String>,
-    ) {
-        self.storage.insert(pane.clone(), thread);
-        if let Some(t) = tag {
-            self.storage.set_tag(&pane, &t);
-        }
-        if let Some(t) = title {
-            self.storage.set_title(&pane, &t);
-        }
-        if let Some(i) = icon {
-            self.storage.set_icon(&pane, &i);
-        }
-    }
-
-    /// Full wipe (tests / manual repair). Reset uses atomic
-    /// `storage_clear_except` instead.
-    #[allow(dead_code)]
-    pub fn clear_all(&self) {
-        self.last_title_write
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        self.creating
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        self.storage.clear_all();
-    }
-
-    /// Atomic clear+restore for the reset survivor path (see storage).
-    /// Preserves `creating` (in-flight guards stay): wiping it would let
-    /// a concurrent ensure double-mint while the winner still holds its
-    /// guard. Drains before the wipe cover the race instead.
-    #[allow(dead_code)]
-    pub fn storage_clear_except(&self, kept: Vec<crate::topics::storage::KeptIdentity>) {
-        self.last_title_write
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        self.storage.clear_except(kept);
     }
 
     /// F6: Record recent message ID for this pane.
