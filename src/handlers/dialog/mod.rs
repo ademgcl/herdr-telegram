@@ -20,7 +20,7 @@ mod surfaces;
 mod tests;
 
 pub use options::{has_numbered_options, parse_options};
-pub(crate) use surfaces::{resolve_cards, settle_card};
+pub(crate) use surfaces::{resolve_cards, settle_card, strip_tracked};
 
 /// Question + options off one screen, parsed from the same final-block
 /// source the cards use — tap paths must never diverge from it.

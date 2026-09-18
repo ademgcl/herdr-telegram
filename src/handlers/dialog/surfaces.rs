@@ -88,6 +88,24 @@ pub(crate) async fn settle_card(s: &AppState, pane: &str, chat: i64, mid: i64) {
     }
 }
 
+/// Strip every tracked button surface WITHOUT consuming tracking or
+/// touching the signature: the dialog was just answered by text and
+/// the cards must settle now. The delayed refresh reconciles after —
+/// repost on turnover (re-tracking then), resolve on resume. Used by
+/// the text-answer path, which owns no card of its own. Lock short.
+pub(crate) async fn strip_tracked(s: &AppState, pane: &str) {
+    let cards = s
+        .blocked_card
+        .lock()
+        .await
+        .get(pane)
+        .cloned()
+        .unwrap_or_default();
+    for (chat, mid) in cards {
+        s.tg.strip_buttons(chat, mid).await;
+    }
+}
+
 /// PC-side (or quit-side) resolve: the dialog is gone — strip every
 /// posted button surface so no doomed tap can fire, then drop the
 /// signature. Consumes the tracked locations; a racing tap that owns

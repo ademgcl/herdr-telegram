@@ -96,6 +96,10 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
         tokio::time::sleep(Duration::from_secs(5)).await;
         refresh_blocked_card(&s2, &pane2).await;
     });
+    // Landed: settle the answered cards now (buttons off) — the heal
+    // above reconciles after. Tracking + signature stay: a turnover
+    // reposts, a resume resolves.
+    crate::handlers::dialog::strip_tracked(s, pane).await;
     // Landed: remember what the owner sent (typed answers are history
     // too — Resumed callers route through enqueue instead, no double).
     s.push_history(pane, text).await;
