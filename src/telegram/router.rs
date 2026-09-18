@@ -105,7 +105,13 @@ pub async fn handle_update(s: AppState, u: &Value) {
         .unwrap_or_default()
         .as_secs();
     if now.saturating_sub(date) > STALE_SECS {
+        // Visible, not silent: a pump stall (long shell/model/quit run)
+        // or bot downtime can age queued prompts past the gate — the
+        // sender must know to resend instead of assuming delivery.
         println!("[tg] dropping stale update");
+        let th = msg["message_thread_id"].as_i64();
+        s.tg.send_msg(chat_id, th, "⌛️ that message arrived too late — please resend", None)
+            .await;
         return;
     }
 

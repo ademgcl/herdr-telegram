@@ -10,9 +10,17 @@ pub(crate) async fn handle_model(
 ) {
     // `/model [target] [search]` — first token is a target only when it
     // resolves to a pane/kind; otherwise the whole arg is the search.
+    // Pane-shaped (`w:p`) tokens are never search text: an unresolvable
+    // one is an explicit address — refuse instead of falling through to
+    // focus/sole with a junk filter driving the wrong picker's keys.
     let (mut pane, query) = match arg.split_once(char::is_whitespace) {
         Some((t, rest)) => match resolve_target(rows, Some(t)) {
             Some(r) => (Some(r.pane), rest.trim()),
+            None if t.contains(':') => {
+                s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+                    .await;
+                return;
+            }
             None => (None, arg),
         },
         None => {
@@ -20,6 +28,10 @@ pub(crate) async fn handle_model(
                 (None, "")
             } else if let Some(r) = resolve_target(rows, Some(arg)) {
                 (Some(r.pane), "")
+            } else if arg.contains(':') {
+                s.tg.send_msg(chat, None, "unknown target — see /agents", None)
+                    .await;
+                return;
             } else {
                 (None, arg)
             }

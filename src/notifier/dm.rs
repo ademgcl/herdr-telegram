@@ -4,9 +4,7 @@ use crate::{
     jobs::stream::{delta, join_trimmed},
     notifier::cards::post_spontaneous_card,
     state::AppState,
-    ui::{btn, emoji},
 };
-use serde_json::json;
 use std::time::{Duration, Instant};
 
 const POST_PROMPT_QUIET_SECS: u64 = 45;
@@ -16,14 +14,11 @@ const POST_PROMPT_QUIET_SECS: u64 = 45;
 /// of eating it. Fresh work recomputes the delta vs CURRENT seen just
 /// before post (a final retiring during the screen RPC anchors seen —
 /// the pre-RPC body would else re-post the final's duplicate).
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn push_dm_alert(
     s: &AppState,
     pane: &str,
     kind: &str,
     raw_space: &str,
-    space_label: &str,
-    title: &str,
     new_status: &str,
     screen: &[String],
     observed_at: Instant,
@@ -63,7 +58,10 @@ pub(crate) async fn push_dm_alert(
         return;
     }
     // Empty (duplicate of a just-posted final, or genuinely empty):
-    // recent final → consume + quiet; else fall through to the hint.
+    // recent final → consume + quiet; anything else stays silent too —
+    // buzzing on empty/unreadable settles violates §3 (silent when empty
+    // or moved-on) and fail-closed (no buzz on ambiguous reads). The
+    // forum path anchors silently the same way.
     if let Some(t) = s.last_done.lock().await.get(pane)
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
     {
@@ -71,50 +69,5 @@ pub(crate) async fn push_dm_alert(
             .lock()
             .await
             .insert(pane.to_string(), screen.to_vec());
-        return;
-    }
-    let hint = "";
-    let verb = if new_status == "idle" {
-        "ready"
-    } else {
-        new_status
-    };
-    let mut text = format!("{} {}: {kind} @ {space_label}", emoji(new_status), verb);
-    if !title.is_empty() {
-        let short: String = title.chars().take(60).collect();
-        text.push_str(&format!("\n{short}"));
-    }
-    text.push_str(hint);
-    let mut delivered = true;
-    for id in &s.cfg.owners {
-        let mid =
-            s.tg.send_msg(
-                *id,
-                None,
-                &text,
-                Some(json!([[btn("show output", &format!("o:{pane}"))]])),
-            )
-            .await;
-        if let Some(m) = mid {
-            if new_status == "done" {
-                let _ = s.tg.set_reaction(*id, m, Some("✅")).await;
-            }
-        } else {
-            delivered = false;
-        }
-        s.remember(*id, mid, pane).await;
-    }
-    // Baseline advances only on delivery: an outage replays the
-    // delta instead of eating it. Stamp last_done like a posted
-    // card so the next settle in the quiet window stays silent.
-    if delivered {
-        s.seen
-            .lock()
-            .await
-            .insert(pane.to_string(), screen.to_vec());
-        s.last_done
-            .lock()
-            .await
-            .insert(pane.to_string(), Instant::now());
     }
 }

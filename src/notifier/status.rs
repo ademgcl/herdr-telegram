@@ -74,11 +74,6 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
-    let space_label = spaces
-        .iter()
-        .find(|w| w.id == ws_id)
-        .map(|w| format!("#{} {}", w.number, w.label))
-        .unwrap_or_else(|| ws_id.clone());
 
     // The pane's topic exists (ensured silently — never notifies).
     // Skipped during reset: event-driven ensure must not instantly reopen
@@ -233,18 +228,8 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     // DM mode has no topics — legacy immediate pushes.
     if s.cfg.forum.is_none() {
-        crate::notifier::dm::push_dm_alert(
-            s,
-            pane,
-            &kind,
-            raw_space,
-            &space_label,
-            &title,
-            new_status,
-            &screen,
-            observed_at,
-        )
-        .await;
+        crate::notifier::dm::push_dm_alert(s, pane, &kind, raw_space, new_status, &screen, observed_at)
+            .await;
         return;
     }
 
