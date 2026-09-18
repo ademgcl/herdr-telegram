@@ -12,6 +12,7 @@ pub fn build_send_msg_params(
     text: &str,
     keyboard: Option<Value>,
     effect_id: Option<&str>,
+    silent: bool,
 ) -> Value {
     let body = fit_msg(text);
     let mut params = json!({"chat_id": chat_id, "text": body});
@@ -23,6 +24,9 @@ pub fn build_send_msg_params(
     }
     if let Some(eff) = effect_id {
         params["message_effect_id"] = json!(eff);
+    }
+    if silent {
+        params["disable_notification"] = json!(true);
     }
     params
 }
@@ -39,6 +43,23 @@ impl TelegramClient {
             .await
     }
 
+    /// Silent send (no buzz): progress the user watches, not hears.
+    /// Single attempt (a missed ack is harmless — output adopts the
+    /// live slot, folds retire it); None on any failure.
+    pub async fn send_silent(&self, chat_id: i64, thread_id: Option<i64>, text: &str) -> Option<i64> {
+        let params = build_send_msg_params(chat_id, thread_id, text, None, None, true);
+        match self
+            .call("sendMessage", params, Duration::from_secs(15))
+            .await
+        {
+            Ok(v) => v["message_id"].as_i64(),
+            Err(e) => {
+                eprintln!("sendMessage silent failed: {}", self.redact(&e.to_string()));
+                None
+            }
+        }
+    }
+
     /// F8: Send message with optional message effect ID (e.g. fire/flame for urgent alerts).
     /// If Telegram rejects the effect (e.g. in unsupported chats), retries without effect.
     pub async fn send_msg_with_effect(
@@ -49,7 +70,7 @@ impl TelegramClient {
         keyboard: Option<Value>,
         effect_id: Option<&str>,
     ) -> Option<i64> {
-        let mut params = build_send_msg_params(chat_id, thread_id, text, keyboard, effect_id);
+        let mut params = build_send_msg_params(chat_id, thread_id, text, keyboard, effect_id, false);
         let mut sends = 0;
         let mut waits = 0;
         loop {
@@ -227,14 +248,18 @@ mod tests {
 
     #[test]
     fn test_build_send_msg_params_effect() {
-        let p1 = build_send_msg_params(123, Some(456), "hello", None, Some(EFFECT_FIRE));
+        let p1 = build_send_msg_params(123, Some(456), "hello", None, Some(EFFECT_FIRE), false);
         assert_eq!(p1["chat_id"], 123);
         assert_eq!(p1["message_thread_id"], 456);
         assert_eq!(p1["message_effect_id"], EFFECT_FIRE);
+        assert!(p1.get("disable_notification").is_none());
 
-        let p2 = build_send_msg_params(123, None, "hello", None, None);
+        let p2 = build_send_msg_params(123, None, "hello", None, None, false);
         assert_eq!(p2["chat_id"], 123);
         assert!(p2.get("message_thread_id").is_none());
         assert!(p2.get("message_effect_id").is_none());
+
+        let p3 = build_send_msg_params(123, None, "hello", None, None, true);
+        assert_eq!(p3["disable_notification"], true);
     }
 }

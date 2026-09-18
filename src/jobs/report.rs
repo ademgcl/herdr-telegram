@@ -1,6 +1,10 @@
 //! Delivery helpers for live prompts and reports. Split from finalize.rs.
 use crate::state::AppState;
 
+/// Live-card head: the debounced ack and the streaming card share it
+/// so the first output edit only appends content (no flicker).
+pub const WORKING_HEAD: &str = "🔄 working…";
+
 pub async fn edit_live(
     s: &AppState,
     chat_id: i64,
@@ -83,5 +87,21 @@ pub async fn fold_live(
         }
     } else {
         live_dest.take();
+    }
+}
+
+/// One-shot silent "working" into an empty live slot (debounced ack).
+/// No retry: a miss just means output adopts the slot later, folds
+/// retire it. Single source for the ack text.
+pub async fn post_silent_ack(
+    s: &AppState,
+    chat: i64,
+    th: Option<i64>,
+    live_mid: &mut Option<i64>,
+    live_dest: &mut Option<(i64, Option<i64>)>,
+) {
+    if let Some(mid) = s.tg.send_silent(chat, th, WORKING_HEAD).await {
+        *live_mid = Some(mid);
+        *live_dest = Some((chat, th));
     }
 }

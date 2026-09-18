@@ -8,12 +8,9 @@ use crate::{
     herdr::client::get_agent,
     jobs::finalize::{edit_live, fold_live},
     jobs::job::Job,
-    jobs::segment::final_block,
     jobs::settle::{SettleStep, SettledArm, settle_step, sleep_or_superseded},
-    jobs::stream::{EvStream, WatchEvent, delta},
+    jobs::stream::{EvStream, WatchEvent},
     state::AppState,
-    types::LIVE_EDIT_COOLDOWN_SECS,
-    ui::tail_fit,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -23,17 +20,18 @@ use tokio::time::{Duration, Instant};
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
 /// Safety-net tick in case herdr events are unavailable.
 const FALLBACK_TICK_SECS: u64 = 5;
+/// Debounced-ack delay: slow prompts feel heard, instant answers skip
+/// it. Under one tick period so the first loop tick fires deterministically.
+const ACK_DEBOUNCE_MILLIS: u64 = 1500;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
 /// Watch the agent via herdr push-events: every output burst updates one live
 /// Telegram message; settle turns it into the final result card.
 pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
-    let mut live_mid: Option<i64> = None;
-    // Chat/thread owning the live card — needed to retire it when a new
-    // prompt supersedes (live_mid alone can't address the edit).
-    let mut live_dest: Option<(i64, Option<i64>)> = None;
-    let mut last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
+    // Live card slot: address + content flag + edit throttle travel
+    // together (see live.rs) so the address can never split.
+    let mut live = super::live::LiveSlot::new();
     // Raw output since the prompt — the fresh reply is extracted from
     // this at display time (last segment only, see segment::final_block)
     let mut acc: Vec<String> = Vec::new();
@@ -68,6 +66,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // the piggyback period past expiry. Spawned, never awaited inline.
     let mut typing_tick = tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
     typing_tick.tick().await;
+    // Debounced silent ack: if nothing worth showing landed quickly,
+    // post one buzz-free "working" row into the live slot — instant
+    // answers skip it entirely (no flicker), slow ones feel heard.
+    // First output edits it instead of sending fresh; every fold path
+    // already retires the slot, so it can never strand. Due sits under
+    // one tick period so the first loop tick fires it deterministically.
+    let mut ack_due = Instant::now() + Duration::from_millis(ACK_DEBOUNCE_MILLIS);
+    let mut acked = false;
     // First settled sample arms the report timer (see settle.rs): agy
     // idles briefly between phases mid-run, and retiring on that
     // transient leaves the agent working unwatched. Cleared on working
@@ -80,7 +86,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         if job.is_stopped() {
             // Quiet retire: no cancel card by design, but never freeze a
             // live "working…" card — fold it in place, buzz nothing.
-            fold_live(&s, &mut live_dest, &mut live_mid, "⏹️ run ended").await;
+            fold_live(&s, &mut live.dest, &mut live.mid, "⏹️ run ended").await;
             break;
         }
         // New prompt on a reused watcher restarts all episode timers
@@ -93,14 +99,19 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             settled_since = None;
             acc.clear();
             retry_wait = FALLBACK_TICK_SECS;
+            // New turn re-arms the debounced ack + content flag with it:
+            // a reused watcher owes the new prompt its own feedback.
+            acked = false;
+            ack_due = Instant::now() + Duration::from_millis(ACK_DEBOUNCE_MILLIS);
+            live.has_content = false;
             // Retire the old live card instead of orphaning it frozen.
-            if let Some(mid) = live_mid.take() {
-                if let Some((chat, _)) = live_dest.take() {
+            if let Some(mid) = live.mid.take() {
+                if let Some((chat, _)) = live.dest.take() {
                     s.tg.edit_msg(chat, mid, "🔄 superseded by a newer prompt", None)
                         .await;
                 }
             } else {
-                live_dest = None;
+                live.dest = None;
             }
             job.baseline_ok.store(false, Ordering::Relaxed);
         }
@@ -130,7 +141,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     s.clear_pending(&pane).await;
                 }
                 let (chat, th) = *job.dest.lock().await;
-                edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
+                edit_live(&s, chat, th, &pane, &mut live.mid, "✋ cancelled").await;
                 break;
             }
             _ = typing_tick.tick() => {
@@ -139,6 +150,13 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 tokio::spawn(async move {
                     tg.typing(dchat, dth).await;
                 });
+                // One-shot debounced ack (see above): skip when stopped,
+                // answered, settling, or already acked — a settling run
+                // finishes fresh (buzzing) within seconds, no corpse row.
+                if !acked && settled_since.is_none() && Instant::now() >= ack_due && live.mid.is_none() && !job.is_stopped() {
+                    acked = true;
+                    super::report::post_silent_ack(&s, dchat, dth, &mut live.mid, &mut live.dest).await;
+                }
                 // Falls through to a poll cycle below (no `continue`):
                 // restarting the 5s fallback sleep on every typing tick
                 // would starve it on quiet panes, leaving settle/stall
@@ -185,7 +203,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                                 s.clear_pending(&pane).await;
                             }
                             let (chat, th) = *job.dest.lock().await;
-                            edit_live(&s, chat, th, &pane, &mut live_mid, "✋ cancelled").await;
+                            edit_live(&s, chat, th, &pane, &mut live.mid, "✋ cancelled").await;
                             break;
                         }
                         _ = sleep_or_superseded(&job, backoff_epoch, Duration::from_secs(60)) => {}
@@ -205,8 +223,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 &pane,
                 &job,
                 &agent.status,
-                &mut live_mid,
-                &mut live_dest,
+                &mut live.mid,
+                live.has_content,
+                &mut live.dest,
                 &mut acc,
                 &mut retry_wait,
                 &mut settled_since,
@@ -234,49 +253,16 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             screen
         };
 
-        // Stream whatever is new into the live message
-        if last_edit.elapsed() < Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS) {
-            continue;
-        }
-        if screen.is_empty() {
-            continue; // nothing readable yet — try next wake-up
-        }
-        if !job.baseline_ok() {
-            job.anchor_baseline(screen).await;
-            continue;
-        }
-        let base = job.baseline.lock().await.clone();
-        let fresh = delta(&screen, &base);
-        if fresh.is_empty() {
-            continue;
-        }
-        // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
-        // are resolved at display time so only the fresh reply is shown.
-        acc.extend(fresh.iter().cloned());
-        if acc.len() > 400 {
-            let drop = acc.len() - 400;
-            acc.drain(..drop);
-        }
-        *job.baseline.lock().await = screen;
-
-        let prompt = job.prompt.lock().await.clone();
-        let seg = final_block(&acc, &prompt);
-        if seg.is_empty() {
-            continue; // chrome-only so far — nothing worth showing yet
-        }
-        let (chat, th) = *job.dest.lock().await;
-        s.tg.typing(chat, th).await;
-        let text = format!("🔄 working…\n\n{}", tail_fit(&seg, 3200));
-        match live_mid {
-            Some(mid) => {
-                if s.tg.try_edit_msg(chat, mid, &text, None).await.is_err() {
-                    live_mid = s.tg.send_msg(chat, th, &text, None).await;
-                }
-            }
-            None => live_mid = s.tg.send_msg(chat, th, &text, None).await,
-        }
-        live_dest = live_mid.map(|_| (chat, th));
-        last_edit = Instant::now();
+        // Stream whatever is new into the live message (see live.rs
+        // for the cooldown/baseline/delta details).
+        super::live::stream_live(
+            &s,
+            &job,
+            screen,
+            &mut acc,
+            &mut live,
+        )
+        .await;
     }
 
     // Retire only if the map still points at THIS watcher (no newer job took over)

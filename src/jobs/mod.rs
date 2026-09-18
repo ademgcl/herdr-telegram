@@ -1,10 +1,12 @@
 pub mod arbitrate;
+pub mod books;
 pub mod echo;
 pub mod enqueue;
 pub mod episode;
 pub mod filter;
 pub mod finalize;
 pub mod job;
+pub mod live;
 pub mod notices;
 pub mod persist;
 pub mod recover;

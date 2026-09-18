@@ -92,6 +92,7 @@ pub async fn settle_step(
     job: &Arc<Job>,
     status: &str,
     live_mid: &mut Option<i64>,
+    live_has_content: bool,
     live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
     retry_wait: &mut u64,
@@ -132,7 +133,7 @@ pub async fn settle_step(
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
     repoint_dest_if_remapped(s, pane, job, live_mid, epoch_before).await;
-    let retry = finalize(s, pane, job, status, live_mid, acc).await;
+    let retry = finalize(s, pane, job, status, live_mid, live_has_content, acc).await;
     // finalize consumes the live slot on success — drop its
     // address too, or a later reset would edit the final card.
     if live_mid.is_none() {

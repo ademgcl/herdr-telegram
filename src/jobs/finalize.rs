@@ -30,6 +30,7 @@ pub async fn finalize(
     job: &Arc<Job>,
     settled: &str,
     live_mid: &mut Option<i64>,
+    live_has_content: bool,
     acc: &mut Vec<String>,
 ) -> bool {
     // Fresh reply only: the last segment after tool calls, reasoning
@@ -117,6 +118,14 @@ pub async fn finalize(
             .unwrap_or(false)
         {
             observe_status(s, pane, settled, true, "job").await;
+            // Ack-only slot (no output ever streamed): fold it — the
+            // question card it duplicates already buzzed.
+            if !live_has_content
+                && let Some(mid) = live_mid.take()
+            {
+                let (chat, _) = *job.dest.lock().await;
+                let _ = s.tg.try_edit_msg(chat, mid, "⛔ blocked — see question card", None).await;
+            }
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -201,38 +210,20 @@ pub async fn finalize(
         body.len()
     );
     let mut delivered = false;
-    // Whether the live slot itself holds landed final content (part 0
-    // edited in place): only then must a mid-post supersede leave the
-    // slot alone — otherwise the handoff's "superseded" retire still
-    // owns the stale working card.
-    let mut live_shows_final = false;
-    for (i, part) in parts.iter().enumerate() {
-        match (i, *live_mid) {
-            (0, Some(mid)) => {
-                if s.tg.try_edit_msg(chat, mid, part, None).await.is_ok() {
-                    let _ = s.tg.set_reaction(chat, mid, Some("✅")).await;
-                    delivered = true;
-                    live_shows_final = true;
-                } else if report_done(s, chat, th, pane, part).await {
-                    delivered = true;
-                }
-            }
-            _ => {
-                if report_done(s, chat, th, pane, part).await {
-                    delivered = true;
-                }
-            }
+    // Finals always summon fresh: fold any live working card silently,
+    // then post every part buzzing. Progress stayed silent in place;
+    // the finish is the run's one notification.
+    if let Some(mid) = live_mid.take() {
+        let _ = s.tg.try_edit_msg(chat, mid, "✅ done", None).await;
+    }
+    for part in parts.iter() {
+        if report_done(s, chat, th, pane, part).await {
+            delivered = true;
         }
         // Retarget check per part: a slow flood-wait can span a submit.
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
             println!("[prompt] finalize {pane}: superseded mid-post, stopping");
             acc.clear();
-            // The live slot already shows the landed final: consume it so
-            // the epoch handoff never clobbers it with a "superseded"
-            // edit. Any other slot stays for the handoff's own retire.
-            if live_shows_final {
-                live_mid.take();
-            }
             return false;
         }
     }
@@ -260,41 +251,9 @@ pub async fn finalize(
         .await
         .insert(pane.to_string(), std::time::Instant::now());
     s.seen.lock().await.insert(pane.to_string(), snapshot);
-    *live_mid = None;
     settle_books(s, pane, job, entry_epoch, entry_pending).await;
     false
 }
 
 pub use super::report::{edit_live, fold_live, report, report_done};
-
-/// Cover the prompts owed at entry. A new submit mid-finalize bumps the
-/// epoch: leave its pending count, persisted intent and map entry so the
-/// watcher loop keeps serving it.
-async fn settle_books(
-    s: &AppState,
-    pane: &str,
-    job: &Arc<Job>,
-    entry_epoch: u64,
-    entry_pending: usize,
-) {
-    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-        let mut p = job.pending.lock().await;
-        *p = p.saturating_sub(entry_pending);
-        return;
-    }
-    *job.pending.lock().await = 0;
-    // Clear the durable intent only if it still belongs to this prompt:
-    // a shell command (or a re-entered agent prompt) may have
-    // overwritten the shared per-pane slot mid-finalize — wiping it
-    // would eat their reply's intent while ours is already delivered.
-    let prompt = job.prompt.lock().await.clone();
-    let (chat, th) = *job.dest.lock().await;
-    if s.pending_matches(pane, chat, th, &prompt).await {
-        s.clear_pending(pane).await;
-    }
-    let mut map = s.jobs.lock().await;
-    if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
-        map.remove(pane);
-        println!("[prompt] watcher retired: {pane}");
-    }
-}
+use super::books::settle_books;
