@@ -98,7 +98,17 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         super::shell::handle_run_command(s, chat, thread, &ws, text).await;
         return true;
     }
-    if let Some(pane) = s.keywait.lock().await.remove(&(chat, thread)) {
+    if let Some(pane) = s.keywait.lock().await.get(&(chat, thread)).cloned() {
+        // Never interleave with an owned key sequence (mirrors /keys):
+        // a tap answer or model switch in flight owns the pane's input
+        // until it lands. The waiter stays armed — the retry is just
+        // sending the message again (a stale corpse self-evicts here).
+        if s.block_held(&pane).await || s.model_held(&pane).await {
+            s.tg.send_msg(chat, thread, "tap/model op in flight — send again in a beat", None)
+                .await;
+            return true;
+        }
+        s.keywait.lock().await.remove(&(chat, thread));
         let keys: Vec<&str> = text.split_whitespace().collect();
         let r = if get_agent(&s.cfg.socket, &pane).await.is_ok() {
             send_agent_keys(&s.cfg.socket, &pane, &keys).await

@@ -1,7 +1,7 @@
 //! Agent-topic message routing: commands + bare-message prompts.
 //! Split from `forum` (300-line file limit).
 use crate::{
-    herdr::client::{get_agent, read_agent_output, send_agent_keys},
+    herdr::client::{get_agent, list_agents, list_panes, read_agent_output, send_agent_keys},
     jobs::enqueue_prompt,
     state::AppState,
     ui::{agent_card_kb, build_agent_card_text, topic_help_text},
@@ -24,8 +24,16 @@ pub(crate) async fn handle_topic_agent_message(
     let cmd = bare_cmd(raw_cmd);
 
     let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
-        // No agent in this pane: shell CLI mode (or a lingering dead pane,
-        // which the shell side reports as gone).
+        // One failed read must not reroute a live prompt as shell input:
+        // confirm via pane+agent lists (recover's cascade). Only a
+        // confirmed live agent retries visibly; everything else takes the
+        // shell side (which reports gone panes).
+        let live = list_panes(&s.cfg.socket).await.map(|l| l.contains(&pane.to_string())).unwrap_or(true);
+        let agent = list_agents(&s.cfg.socket).await.map(|a| a.iter().any(|r| r.pane == pane)).unwrap_or(true);
+        if live && agent {
+            s.tg.send_msg(chat, Some(thread_id), "⚠️ herdr status unreadable — try again", None).await;
+            return;
+        }
         super::shell_topic::handle_shell_topic(s, chat, thread_id, pane, text).await;
         return;
     };

@@ -97,11 +97,15 @@ pub fn cfg_from_env() -> Res<Cfg> {
         .and_then(|v| {
             let v = v.trim();
             match v.parse::<i64>() {
-                Ok(n) => Some(if v.starts_with('-') {
-                    n
-                } else {
-                    -(1_000_000_000_000i64 + n)
-                }),
+                // Supergroup/forum ids are negative; a positive id is
+                // malformed (mirrors owners above) — DM-only with a loud
+                // warning instead of minting a bogus negative id that
+                // fails every topic call at runtime.
+                Ok(n) if v.starts_with('-') && n != 0 => Some(n),
+                Ok(_) => {
+                    eprintln!("[config] ignoring forum id: must be negative — DM-only mode");
+                    None
+                }
                 Err(_) => {
                     eprintln!("[config] ignoring forum id: not numeric — DM-only mode");
                     None

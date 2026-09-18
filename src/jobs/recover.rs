@@ -67,9 +67,25 @@ pub async fn recover_pending(s: &AppState) {
                                 if tail.is_empty() {
                                     // Still-running shell command with no output
                                     // yet: keep the intent (bounded by the 24h
-                                    // stale drop) so the next boot re-evaluates
-                                    // instead of eating a live command's reply.
+                                    // stale drop) AND re-arm a settle follower —
+                                    // otherwise the reply waits for the next
+                                    // restart instead of landing when the
+                                    // command finishes. Cancel-aware + bounded
+                                    // like the foreground path.
                                     println!("[recover] shell quiet, keeping {pane}");
+                                    let (s2, pane2, pp2) = (s.clone(), pane.clone(), pp.clone());
+                                    tokio::spawn(async move {
+                                        let before =
+                                            crate::handlers::shell_common::shell_snapshot(
+                                                &s2, &pane2,
+                                            )
+                                            .await;
+                                        crate::handlers::shell_common::settle_report_shell(
+                                            &s2, pp2.chat, pp2.thread, &pane2, &pp2.prompt,
+                                            &before, None,
+                                        )
+                                        .await;
+                                    });
                                     continue;
                                 }
                                 // Undelivered notices keep their intent: wiping

@@ -2,7 +2,7 @@ use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use crate::{
     handlers::dialog::{blocked_card_text, blocked_kb, live_card, parse_options},
-    herdr::client::read_screen_visible,
+    herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
 use serde_json::Value;
@@ -68,7 +68,27 @@ pub async fn answer_tap(
     match call {
         TapCall::Unknown => {
             // Narrowed/turned-over dialog: refresh the card in place with
-            // the live option set instead of stranding dead buttons.
+            // the live option set instead of stranding dead buttons. But
+            // a stale tap on a LIVE pane must strip, never ghost: posting
+            // blocked buttons for working output invites blind taps (the
+            // gate already refuses them, but the card must not offer).
+            let live_blocked = get_agent(&s.cfg.socket, pane)
+                .await
+                .map(|a| a.status == "blocked")
+                .unwrap_or(true);
+            if !live_blocked {
+                s.blocked_sig.lock().await.remove(pane);
+                let no_kb = Some(Value::Array(Vec::new()));
+                s.tg.edit_msg(
+                    chat,
+                    msg_id,
+                    &format!("↩️ already moved on [{pane}] — buttons removed"),
+                    no_kb,
+                )
+                .await;
+                s.remember(chat, Some(msg_id), pane).await;
+                return;
+            }
             let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
             if screen.is_empty() {
                 let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
