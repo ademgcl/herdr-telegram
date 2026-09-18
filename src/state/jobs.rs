@@ -201,6 +201,42 @@ impl State {
         true
     }
 
+    /// Bump the shell submit generation for `pane` (one submit = one
+    /// generation). Settles snapshot the return and serve only it: an
+    /// identical re-command shares the pending slot's text, so text
+    /// equality alone would let the old settle post and clear the
+    /// newcomer's intent (silent reply loss).
+    pub async fn bump_shell_epoch(&self, pane: &str) -> u64 {
+        let mut map = self.shell_gen.lock().await;
+        let n = map.get(pane).copied().unwrap_or(0).wrapping_add(1);
+        map.insert(pane.to_string(), n);
+        n
+    }
+
+    /// True when `epoch` is still the pane's latest submit (no resubmit
+    /// landed since the snapshot). Check alongside every
+    /// `pending_matches` gate in the shell settle.
+    pub async fn shell_epoch_is(&self, pane: &str, epoch: u64) -> bool {
+        self.shell_gen.lock().await.get(pane).copied() == Some(epoch)
+    }
+
+    /// Clear the shell intent only for our own generation (same TOCTOU
+    /// as `clear_pending_if_matches`, plus the generation): a resubmit
+    /// racing the send owns the slot now, even byte-identical text.
+    pub async fn clear_shell_if_matches(
+        &self,
+        pane: &str,
+        chat: i64,
+        thread: Option<i64>,
+        prompt: &str,
+        epoch: u64,
+    ) -> bool {
+        if !self.shell_epoch_is(pane, epoch).await {
+            return false;
+        }
+        self.clear_pending_if_matches(pane, chat, thread, prompt).await
+    }
+
     /// End one pane's stall episode (limit alert, stuck timer, absence
     /// streak, send cooldown) — called on shell flips and pane death, or
     /// after confirmed-clean reads. Working flicker deliberately does NOT

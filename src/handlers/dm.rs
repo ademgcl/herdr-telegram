@@ -1,4 +1,5 @@
 use crate::{herdr::client::list_agents, state::AppState, ui::help_text};
+use super::target::resolve_target;
 use serde_json::Value;
 
 pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
@@ -149,20 +150,53 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd == "/history" {
-        // Counts only (topics share the rule): a pane-shaped arg was
-        // silently dropped to a default-count read of the focus pane.
-        // The validated count flows through (never re-parsed downstream).
-        let Some(n) = crate::ui::scope_text::parse_count(
-            arg,
-            5,
-            crate::state::history::HISTORY_CAP as u32,
-        ) else {
-            s.tg
-                .send_msg(chat, None, crate::ui::scope_text::USAGE_HISTORY_DM, None)
-                .await;
-            return;
+        // Target + count like /read (`/history w8:p1 50`, `/history 50`,
+        // `/history w8:p1`): an explicit but unknown target errors — it
+        // must never answer for a different agent. Pane ids/kinds are
+        // never bare numbers, so a numeric word that resolves as a
+        // target stays a target.
+        let (target_arg, n) = match arg.rsplit_once(char::is_whitespace) {
+            Some((head, tail)) => match tail.parse::<i64>() {
+                Ok(count) if resolve_target(&rows, Some(arg)).is_none() => {
+                    let head = head.trim();
+                    let count = count.clamp(1, crate::state::history::HISTORY_CAP as i64) as u32;
+                    (if head.is_empty() { None } else { Some(head) }, count)
+                }
+                _ => (Some(arg), 5),
+            },
+            None => match arg.parse::<i64>() {
+                Ok(count) if resolve_target(&rows, Some(arg)).is_none() => {
+                    (None, count.clamp(1, crate::state::history::HISTORY_CAP as i64) as u32)
+                }
+                _ => (if arg.is_empty() { None } else { Some(arg) }, 5),
+            },
         };
-        match super::target::dm_pane(&s, &rows, "", &reply_pane).await {
+        if target_arg.is_none() && super::target::unmatched_reply(&rows, &reply_pane) {
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+            return;
+        }
+        let mut pane = match resolve_target(&rows, target_arg) {
+            Some(r) => Some(r.pane),
+            None if target_arg.is_some() => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                return;
+            }
+            None => reply_pane
+                .as_deref()
+                .and_then(|p| rows.iter().find(|r| r.pane == p).map(|r| r.pane.clone())),
+        };
+        if pane.is_none() {
+            if let Some(f) = s
+                .get_focus()
+                .await
+                .filter(|f| rows.iter().any(|r| &r.pane == f))
+            {
+                pane = Some(f);
+            } else {
+                pane = resolve_target(&rows, Some("")).map(|r| r.pane);
+            }
+        }
+        match pane {
             Some(pane) => {
                 crate::state::history::send_history(&s, chat, None, &pane, n as usize).await;
             }

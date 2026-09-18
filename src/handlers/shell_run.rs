@@ -1,4 +1,4 @@
-use super::shell_common::{settle_report_shell, shell_snapshot};
+use super::shell_common::{ShellSettle, settle_report_shell, shell_snapshot};
 use super::shell_validate::validate_shell_cmd;
 use crate::{
     herdr::client::{create_tab, list_workspaces, send_pane_input},
@@ -42,13 +42,26 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     // Detached: the settle budget runs ~5.5 min and the Telegram pump is
     // sequential — awaiting it here would head-of-line-block every pane
     // (watchdog ≤60s violated globally, /cancel deadened for the very
-    // command stalling). Match-guarded inside (pending_matches before
-    // every post, clear-if-matches for clears): a racing resubmit owns
-    // the slot and overlapping settles retire silently.
+    // command stalling). Generation-guarded inside (epoch + pending
+    // match before every post, clear-if-matches for clears): a racing
+    // resubmit owns the slot and overlapping settles retire silently.
+    let epoch = s.bump_shell_epoch(pane).await;
     let (s2, pane_o, cmd_o, before_o) =
         (s.clone(), pane.to_string(), cmd.to_string(), before.clone());
     tokio::spawn(async move {
-        settle_report_shell(&s2, chat, thread, &pane_o, &cmd_o, &before_o, None).await;
+        settle_report_shell(
+            &s2,
+            ShellSettle {
+                chat,
+                thread,
+                pane: pane_o,
+                cmd: cmd_o,
+                before: before_o,
+                kb: None,
+                epoch,
+            },
+        )
+        .await;
     });
 }
 
@@ -106,7 +119,8 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     s.push_history(&pane, cmd).await;
     super::shell_lifecycle::spawn_flip_watch(s, &pane);
     // Detached like run_shell_cmd above: same ~5.5 min budget, same
-    // sequential-pump head-of-line block, same match-guarded safety.
+    // sequential-pump head-of-line block, same generation-guarded safety.
+    let epoch = s.bump_shell_epoch(&pane).await;
     let (s2, pane_o, cmd_o, before_o, kb) = (
         s.clone(),
         pane.clone(),
@@ -115,6 +129,18 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         Some(pane_output_kb(&pane)),
     );
     tokio::spawn(async move {
-        settle_report_shell(&s2, chat, thread, &pane_o, &cmd_o, &before_o, kb).await;
+        settle_report_shell(
+            &s2,
+            ShellSettle {
+                chat,
+                thread,
+                pane: pane_o,
+                cmd: cmd_o,
+                before: before_o,
+                kb,
+                epoch,
+            },
+        )
+        .await;
     });
 }

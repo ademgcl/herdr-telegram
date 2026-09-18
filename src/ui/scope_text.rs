@@ -27,8 +27,6 @@ pub const USAGE_READ_TOPIC: &str =
     "usage: `/read [n]` — recent output of this topic (this pane only; DM reads any pane).";
 pub const USAGE_HISTORY_TOPIC: &str =
     "usage: `/history [n]` — recent prompts here (this pane only).";
-pub const USAGE_HISTORY_DM: &str =
-    "usage: `/history [n]` — recent prompts (counts only; open a pane's topic for its history).";
 pub const USAGE_KEYS_TOPIC: &str =
     "usage: `/keys <key> [key...]` sends to this topic's pane — DM `/keys <pane>` targets others.";
 pub const USAGE_RESET_TOPIC: &str =

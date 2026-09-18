@@ -83,9 +83,20 @@ pub async fn recover_pending(s: &AppState) {
                                                 &s2, &pane2,
                                             )
                                             .await;
+                                        // Own the slot for this follower: a
+                                        // live resubmit racing boot owns it.
+                                        let epoch = s2.bump_shell_epoch(&pane2).await;
                                         crate::handlers::shell_common::settle_report_shell(
-                                            &s2, pp2.chat, pp2.thread, &pane2, &pp2.prompt,
-                                            &before, None,
+                                            &s2,
+                                            crate::handlers::shell_common::ShellSettle {
+                                                chat: pp2.chat,
+                                                thread: pp2.thread,
+                                                pane: pane2,
+                                                cmd: pp2.prompt,
+                                                before,
+                                                kb: None,
+                                                epoch,
+                                            },
                                         )
                                         .await;
                                     });

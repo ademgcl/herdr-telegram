@@ -155,6 +155,22 @@ async fn test_reap_expires_stale_key_type_waiters() {
 }
 
 #[tokio::test]
+async fn test_reap_prunes_live_maps_when_idle() {
+    // Idle bot (no jobs, intents, waiters, or guards) must still prune
+    // live-only maps — otherwise dead panes leak their entries forever.
+    use std::collections::VecDeque;
+    let (s, _dir) = isolated_state();
+    s.seen.lock().await.insert("dead:p9".into(), vec!["x".into()]);
+    s.seen.lock().await.insert("live:p1".into(), vec!["x".into()]);
+    s.history.lock().await.insert("dead:p9".into(), VecDeque::from(["h".to_string()]));
+    let mut cache = Some(HashSet::from(["live:p1".to_string()]));
+    reap_orphans(&s, &mut cache).await;
+    assert!(!s.seen.lock().await.contains_key("dead:p9"));
+    assert!(s.seen.lock().await.contains_key("live:p1"));
+    assert!(!s.history.lock().await.contains_key("dead:p9"));
+}
+
+#[tokio::test]
 async fn test_reap_prunes_stale_intent_and_persists() {
     // In-uptime prune uses boot-recover's bound (stale >24h, future
     // >1h): dead or alive, unrecoverable intents drop — and the prune

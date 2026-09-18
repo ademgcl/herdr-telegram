@@ -148,9 +148,11 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     }
     known.extend(s.blockop.lock().await.keys().cloned());
     known.extend(s.modelop.lock().await.keys().cloned());
-    if known.is_empty() {
-        return;
-    }
+    // No early return on empty `known`: an idle bot (no jobs, intents,
+    // waiters, or guards) must still prune live-only maps below, or dead
+    // panes leak their seen/history/status/typing entries forever. The
+    // per-pane retire loop simply no-ops while the retains still run.
+    let reaping = !known.is_empty();
     match panes_once(s, pane_list).await {
         Some(live) if live.is_empty() => {
             eprintln!("[reconcile] pane list empty, keeping intents");
@@ -159,19 +161,21 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // Retain live-only (not live∪known): known includes
             // the just-cleared dead panes, so ∪ would keep
             // everything clear_pane missed.
-            for pane in &known {
-                if !live.contains(pane) {
-                    // Job-only retire: the durable intent is
-                    // boot-recover's reporter for dead panes
-                    // ("pane gone before reply arrived") — a loud
-                    // retire would wipe it the same tick the
-                    // forum branch above restored it, and a
-                    // "✋ cancelled" card on a dead pane is noise.
-                    // Waiters still die via clear_pane below, maps
-                    // via the retains; lingering intent is bounded
-                    // by recover's 24h stale drop.
-                    s.cancel_job_only_for(pane).await;
-                    s.clear_pane(pane).await;
+            if reaping {
+                for pane in &known {
+                    if !live.contains(pane) {
+                        // Job-only retire: the durable intent is
+                        // boot-recover's reporter for dead panes
+                        // ("pane gone before reply arrived") — a loud
+                        // retire would wipe it the same tick the
+                        // forum branch above restored it, and a
+                        // "✋ cancelled" card on a dead pane is noise.
+                        // Waiters still die via clear_pane below, maps
+                        // via the retains; lingering intent is bounded
+                        // by recover's 24h stale drop.
+                        s.cancel_job_only_for(pane).await;
+                        s.clear_pane(pane).await;
+                    }
                 }
             }
             s.seen.lock().await.retain(|p, _| live.contains(p));
@@ -222,6 +226,8 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
             s.blocked_card.lock().await.retain(|p, _| live.contains(p));
+            // Shell generations are pane-scoped like the maps above.
+            s.shell_gen.lock().await.retain(|p, _| live.contains(p));
             // Corpse-tap reap: a wedged OpGuard (drop lost the lock race)
             // must never brick answers until restart — every answer path
             // refuses while blockop holds the pane. Legit taps hold

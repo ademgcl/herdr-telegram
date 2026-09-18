@@ -110,15 +110,99 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
     Ok(())
 }
 
+/// Arm the typed-answer waiter (B:type button): the next message in
+/// this chat types into the pane's waiting prompt + Enter. Split from
+/// `tap_answer` (300-line file limit).
+pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
+    // 1:1 arming: a stale Type button racing a turnover to options
+    // must not arm a waiter that eats the next message into refuses
+    // (nor wipe the sibling run/key waiters below). Unreadable
+    // screen arms anyway — outage must not brick typing; the
+    // send-path gate backstops stale arms.
+    let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
+    if !screen.is_empty()
+        && !parse_options(&winner_lines(&screen)).is_empty()
+    {
+        s.tg.send_msg(
+            chat,
+            thread,
+            "that question takes an option — tap a button:",
+            None,
+        )
+        .await;
+        super::escape::handle_card_topic(s, chat, thread, pane).await;
+        return;
+    }
+    // Exclusive waiter: drop sibling run/key waiters for this key so
+    // the next message types instead of running. Never clobber a
+    // waiter armed for a DIFFERENT pane on the same key (DM shares
+    // one (chat,None) key across panes — the next secret text would
+    // type into the wrong session): refuse and keep the first arm.
+    // Same-pane re-arms refresh the instant and proceed.
+    s.runwait.lock().await.remove(&(chat, thread));
+    s.keywait.lock().await.remove(&(chat, thread));
+    let occupant = s.typewait.lock().await.get(&(chat, thread)).map(|(p, _)| p.clone());
+    if let Some(other) = occupant
+        && other != pane
+    {
+        s.tg.send_msg(
+            chat,
+            thread,
+            &format!(
+                "an answer is already armed for {other} — /cancel it first, then tap Type again"
+            ),
+            None,
+        )
+        .await;
+        return;
+    }
+    s.typewait.lock().await.insert(
+        (chat, thread),
+        (pane.to_string(), std::time::Instant::now()),
+    );
+    let mid = s
+        .tg
+        .send_msg(
+            chat,
+            thread,
+            "⌨️ type your answer as the next message (⏎ sends it)",
+            None,
+        )
+        .await;
+    s.remember(chat, mid, pane).await;
+}
+
 /// Consume an armed run/key waiter for (chat, thread): runwait runs the
 /// text as a shell command in-topic, keywait sends it as keys to the pane
 /// (agent keys when it holds an agent, pane keys otherwise).
 pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: &str) -> bool {
-    if let Some((ws, _)) = s.runwait.lock().await.remove(&(chat, thread)) {
+    if let Some((ws, at)) = s.runwait.lock().await.remove(&(chat, thread)) {
+        // Fail-closed expiry at consume (not just the 60s hygiene tick):
+        // a corpse waiter firing arbitrarily later would execute stale
+        // input as a shell command. Swallowed with a notice, never run.
+        if crate::state::guard::claim_stale(
+            at,
+            std::time::Instant::now(),
+            crate::state::guard::RUNWAIT_STALE_SECS,
+        ) {
+            s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None).await;
+            return true;
+        }
         super::shell::handle_run_command(s, chat, thread, &ws, text).await;
         return true;
     }
-    if let Some(pane) = s.keywait.lock().await.get(&(chat, thread)).map(|(p, _)| p.clone()) {
+    if let Some((pane, at)) = s.keywait.lock().await.get(&(chat, thread)).cloned() {
+        // Same corpse bound for keys: stale keys executing into a live
+        // session is the dangerous half of waiter staleness.
+        if crate::state::guard::claim_stale(
+            at,
+            std::time::Instant::now(),
+            crate::state::guard::KEYWAIT_STALE_SECS,
+        ) {
+            s.keywait.lock().await.remove(&(chat, thread));
+            s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None).await;
+            return true;
+        }
         // Never interleave with an owned key sequence (mirrors /keys):
         // a tap answer or model switch in flight owns the pane's input
         // until it lands. The waiter stays armed — the retry is just

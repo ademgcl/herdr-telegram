@@ -20,15 +20,26 @@ pub(crate) async fn consume_typewait(
     text: &str,
     is_cmd: bool,
 ) -> WaitOut {
-    let Some(wpane) = s
+    let Some((wpane, at)) = s
         .typewait
         .lock()
         .await
         .get(&(chat, Some(thread_id)))
-        .map(|(p, _)| p.clone())
+        .cloned()
     else {
         return WaitOut::Pass;
     };
+    // Corpse bound at consume: a stale arm degrades to normal routing
+    // (bare text still types into blocked panes there) instead of
+    // answering a dead question.
+    if crate::state::guard::claim_stale(
+        at,
+        std::time::Instant::now(),
+        crate::state::guard::TYPEWAIT_STALE_SECS,
+    ) {
+        s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+        return WaitOut::Pass;
+    }
     if s.block_held(&wpane).await {
         s.tg
             .send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None)

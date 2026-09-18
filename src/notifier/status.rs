@@ -203,8 +203,9 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     let fresh_body = join_trimmed(&final_block(&source, ""));
 
     // Re-entered an agent in a shelled pane: the user did it by hand in
-    // the topic, so it needs no announcement. Blocked still surfaces.
-    if old.as_deref() == Some("shell") && matches!(new_status, "idle" | "done") {
+    // the topic, so a bare flip needs no announcement — but genuine fresh
+    // output after the re-enter still buzzes. Blocked still surfaces.
+    if old.as_deref() == Some("shell") && matches!(new_status, "idle" | "done") && fresh_body.is_empty() {
         println!("[alert] suppressed re-enter {new_status} for {pane} ({src})");
         s.seen.lock().await.insert(pane.to_string(), screen);
         return;

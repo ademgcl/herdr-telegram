@@ -56,3 +56,7 @@ pub const STALE_TYPEWAIT_SHELL: &str =
 /// Single source for the card-failure fallback (failed type + failed
 /// repost: answer on the PC). Dup'd literals re-drift — use this.
 pub const CARD_FAILED_PC: &str = "card failed too — answer on the PC";
+
+/// Single source for the stale-arm refuse (an expired run/keys waiter
+/// must never fire its write late — the retry is just tapping again).
+pub const ARM_EXPIRED: &str = "that button expired — tap it again";

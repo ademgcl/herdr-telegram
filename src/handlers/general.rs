@@ -50,49 +50,59 @@ pub(crate) async fn handle_general_forum_message(
     // A race lost to a resume falls through to normal routing below.
     // Peek first (mirrors topics): failures keep the waiter for retry.
     // Self-healing: a stale corpse evicts instead of bricking answers.
-    if let Some(wpane) = s.typewait.lock().await.get(&(chat, thread_id)).map(|(p, _)| p.clone()) {
-        if s.block_held(&wpane).await {
-            s.tg.send_msg(
-                chat,
-                thread_id,
-                crate::ui::ANSWER_IN_FLIGHT,
-                None,
-            )
-            .await;
-            return;
-        }
-        match super::tap::type_text(&s, &wpane, text).await {
-            Ok(()) => {
-                s.typewait.lock().await.remove(&(chat, thread_id));
-                s.tg.send_msg(chat, thread_id, &crate::ui::typed_ack(&wpane), None)
-                    .await;
+    if let Some((wpane, armed_at)) = s.typewait.lock().await.get(&(chat, thread_id)).cloned() {
+        // Corpse bound at consume (mirrors topics): stale degrades to
+        // normal routing instead of answering a dead question.
+        if crate::state::guard::claim_stale(
+            armed_at,
+            std::time::Instant::now(),
+            crate::state::guard::TYPEWAIT_STALE_SECS,
+        ) {
+            s.typewait.lock().await.remove(&(chat, thread_id));
+        } else {
+            if s.block_held(&wpane).await {
+                s.tg.send_msg(
+                    chat,
+                    thread_id,
+                    crate::ui::ANSWER_IN_FLIGHT,
+                    None,
+                )
+                .await;
                 return;
             }
-            Err(super::tap::TypeError::Resumed) => {
-                s.typewait.lock().await.remove(&(chat, thread_id));
-                // Raced resume: answer text must never become General
-                // control (a literal "/reset" as an answer must not
-                // wipe topics). Fall through to bare-text guidance only.
-                if cmd.starts_with('/') {
+            match super::tap::type_text(&s, &wpane, text).await {
+                Ok(()) => {
+                    s.typewait.lock().await.remove(&(chat, thread_id));
+                    s.tg.send_msg(chat, thread_id, &crate::ui::typed_ack(&wpane), None)
+                        .await;
+                    return;
+                }
+                Err(super::tap::TypeError::Resumed) => {
+                    s.typewait.lock().await.remove(&(chat, thread_id));
+                    // Raced resume: answer text must never become General
+                    // control (a literal "/reset" as an answer must not
+                    // wipe topics). Fall through to bare-text guidance only.
+                    if cmd.starts_with('/') {
+                        s.tg.send_msg(
+                            chat,
+                            thread_id,
+                            "that answer arrived after the question moved on — re-send as a fresh prompt in the agent's topic.",
+                            None,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+                Err(e) => {
                     s.tg.send_msg(
                         chat,
                         thread_id,
-                        "that answer arrived after the question moved on — re-send as a fresh prompt in the agent's topic.",
+                        &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
                         None,
                     )
                     .await;
                     return;
                 }
-            }
-            Err(e) => {
-                s.tg.send_msg(
-                    chat,
-                    thread_id,
-                    &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
-                    None,
-                )
-                .await;
-                return;
             }
         }
     }

@@ -8,9 +8,19 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     // Peek first (mirrors topics): a blockop race or failed send must
     // not consume the waiter — the retry is just sending again.
     // Self-healing: a stale corpse evicts instead of bricking answers.
-    let Some(wpane) = s.typewait.lock().await.get(&(chat, None)).map(|(p, _)| p.clone()) else {
+    let Some((wpane, armed_at)) = s.typewait.lock().await.get(&(chat, None)).cloned() else {
         return false;
     };
+    // Corpse bound at consume (mirrors topics): a stale arm degrades
+    // to normal routing instead of answering a dead question.
+    if crate::state::guard::claim_stale(
+        armed_at,
+        std::time::Instant::now(),
+        crate::state::guard::TYPEWAIT_STALE_SECS,
+    ) {
+        s.typewait.lock().await.remove(&(chat, None));
+        return false;
+    }
     if s.block_held(&wpane).await {
         s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None)
             .await;
@@ -43,12 +53,11 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
                     }
                     Err(_) => {
                         // Unreadable re-read after a resume: keep the
-                        // waiter (never consume on ambiguous read) so the
-                        // retry re-routes instead of dropping the answer.
-                        s.typewait.lock().await.insert(
-                            (chat, None),
-                            (wpane, std::time::Instant::now()),
-                        );
+                        // waiter with its ORIGINAL instant (never consume
+                        // on ambiguous read, never re-stamp now — a fresh
+                        // stamp would immortalize the waiter across a
+                        // prolonged outage) so the retry re-routes.
+                        s.typewait.lock().await.insert((chat, None), (wpane, armed_at));
                         s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                             .await;
                     }

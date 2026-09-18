@@ -1,7 +1,7 @@
 use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card, parse_options, winner_lines},
+    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card, parse_options},
     herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
@@ -22,42 +22,7 @@ pub async fn answer_tap(
     action: &str,
 ) {
     if action == "type" {
-        // 1:1 arming: a stale Type button racing a turnover to options
-        // must not arm a waiter that eats the next message into refuses
-        // (nor wipe the sibling run/key waiters below). Unreadable
-        // screen arms anyway — outage must not brick typing; the
-        // send-path gate backstops stale arms.
-        let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
-        if !screen.is_empty()
-            && !parse_options(&winner_lines(&screen)).is_empty()
-        {
-            s.tg.send_msg(
-                chat,
-                thread,
-                "that question takes an option — tap a button:",
-                None,
-            )
-            .await;
-            super::escape::handle_card_topic(s, chat, thread, pane).await;
-            return;
-        }
-        // Exclusive waiter: drop sibling run/key waiters for this key so
-        // the next message types instead of running.
-        s.runwait.lock().await.remove(&(chat, thread));
-        s.keywait.lock().await.remove(&(chat, thread));
-        s.typewait
-            .lock()
-            .await
-            .insert((chat, thread), (pane.to_string(), std::time::Instant::now()));
-        let mid =
-            s.tg.send_msg(
-                chat,
-                thread,
-                "⌨️ type your answer as the next message (⏎ sends it)",
-                None,
-            )
-            .await;
-        s.remember(chat, mid, pane).await;
+        super::tap_input::arm_type_waiter(s, chat, thread, pane).await;
         return;
     }
     // Single-flight per pane: a double-tap (or two owners) must not

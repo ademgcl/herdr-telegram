@@ -127,6 +127,9 @@ pub struct State {
     /// Owner→pane texts for `/history` catch-up (RAM-only: prompts
     /// carry secrets, never disk). Bounded per pane, pruned with it.
     pub history: Mutex<HashMap<String, std::collections::VecDeque<String>>>,
+    /// Shell submit generation per pane (identical re-commands share one
+    /// slot — text equality alone can't tell settles apart). Pruned live.
+    pub shell_gen: Mutex<HashMap<String, u64>>,
     /// Active background typing indicator tasks for working panes.
     pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
@@ -247,6 +250,7 @@ impl State {
             spawndone: Mutex::new(HashMap::new()),
             blocked_card: Mutex::new(HashMap::new()),
             history: Mutex::new(HashMap::new()),
+            shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
         }))
     }
@@ -285,13 +289,12 @@ impl State {
         self.blocked_sig.lock().await.remove(pane);
         self.blocked_card.lock().await.remove(pane);
         self.history.lock().await.remove(pane);
-        // Fresh guards die with the pane (dead/kill/reset/shell-flip is
-        // an abort, not a flap): pane names are reminted, so preserving
-        // a fresh guard would brick the successor until stale. A single
-        // flapped list sample can race a live tap the same way it races
-        // jobs/waiters (pre-existing, shared) — the next tap then
-        // claims fresh and single-flight resumes.
+        // Fresh guards die with the pane (remints must not inherit a
+        // live-tap brick or a stale shell generation): a flapped list
+        // sample races like jobs/waiters (pre-existing, shared) and the
+        // next tap claims fresh.
         self.modelop.lock().await.remove(pane);
         self.blockop.lock().await.remove(pane);
+        self.shell_gen.lock().await.remove(pane);
     }
 }
