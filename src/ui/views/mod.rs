@@ -245,7 +245,8 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
         "🤖 **{kind}** topic [{pane}]\n\n\
          • Plain text sends a prompt to this agent\n\
          • `/start` — show this help\n\
-         • `/agents`, `/spawn` — control panel & spawn live in General/DM\n\
+         • `/agents` — spaces & agents panel (here)\n\
+          • `/spawn <kind> [space]` — spawn here\n\
          • `/read [n]` or `/output [n]` — fetch recent terminal output\n\
          • `/history [n]` — recent prompts you sent here\n\
          • `/model` — current model + free-Zen picker (opencode)\n\
@@ -274,7 +275,8 @@ pub fn shell_help_text(pane: &str) -> String {
          • Plain text runs as a shell command\n\
          • `opencode`, `claude`, … — run one to re-enter as agent\n\
          • `/start` — show this help\n\
-         • `/agents`, `/spawn` — control panel & spawn live in General/DM\n\
+         • `/agents` — spaces & agents panel (here)\n\
+          • `/spawn <kind> [space]` — spawn here\n\
          • `/read [n]` — recent shell output (`/output [n]` too)\n\
          • `/history [n]` — recent shell commands\n\
          • `/esc` — send Esc (vim toggles mode)\n\

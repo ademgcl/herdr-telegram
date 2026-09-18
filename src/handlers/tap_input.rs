@@ -126,13 +126,18 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         }
         s.keywait.lock().await.remove(&(chat, thread));
         let keys: Vec<&str> = text.split_whitespace().collect();
-        let r = if get_agent(&s.cfg.socket, &pane).await.is_ok() {
+        let was_shell = get_agent(&s.cfg.socket, &pane).await.is_err();
+        let r = if !was_shell {
             send_agent_keys(&s.cfg.socket, &pane, &keys).await
         } else {
             send_pane_keys(&s.cfg.socket, &pane, &keys).await
         };
         match r {
             Ok(_) => {
+                // Shell keys may have launched an agent — instant re-icon.
+                if was_shell {
+                    super::shell_lifecycle::spawn_flip_watch(s, &pane);
+                }
                 s.tg.send_msg(chat, thread, "keys sent", None).await;
             }
             Err(e) => {

@@ -27,6 +27,9 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     // eating the reply (boot posts it once, then clears).
     s.remember_pending(pane, chat, thread, cmd).await;
     s.push_history(pane, cmd).await;
+    // Shell→agent flip (`opencode` typed at the prompt) re-icons in
+    // seconds via the spawned watch, not next watchdog tick.
+    super::shell_lifecycle::spawn_flip_watch(s, pane);
     settle_report_shell(s, chat, thread, pane, cmd, &before, None).await;
 }
 
@@ -73,6 +76,7 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     s.set_focus(&pane).await;
     s.remember_pending(&pane, chat, thread, cmd).await;
     s.push_history(&pane, cmd).await;
+    super::shell_lifecycle::spawn_flip_watch(s, &pane);
     settle_report_shell(
         s,
         chat,

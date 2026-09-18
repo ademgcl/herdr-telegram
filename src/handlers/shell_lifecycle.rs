@@ -193,6 +193,46 @@ async fn do_quit(
     s.set_focus(pane).await;
 }
 
+/// Shell→agent flip watcher: after shell input the pane may have become
+/// an agent (`opencode`, `claude`, … typed at the prompt). The watchdog
+/// would re-icon up to 60s later — poll briefly and badge immediately
+/// instead (mirror of `do_quit`'s instant shell badge above). Spawned,
+/// never awaited, so the reply path never blocks; reads only plus a
+/// conditional bot-owned icon write (customs kept, `?`/errors write
+/// nothing — the watchdog retries).
+pub(crate) fn spawn_flip_watch(s: &AppState, pane: &str) {
+    let s = s.clone();
+    let pane = pane.to_string();
+    tokio::spawn(async move {
+        for _ in 0..8 {
+            sleep(Duration::from_millis(1500)).await;
+            match get_agent(&s.cfg.socket, &pane).await {
+                Ok(a) if a.kind != "?" && a.kind != "shell" => {
+                    s.status
+                        .lock()
+                        .await
+                        .insert(pane.clone(), a.status.clone());
+                    s.topics.note_kind(&pane, &a.kind);
+                    if let (Some(forum), Some(thread)) =
+                        (s.cfg.forum, s.topics.all_mappings().get(&pane).copied())
+                        && let Some(want) = names::icon_needs_update(
+                            s.topics.storage.get_icon(&pane).as_deref(),
+                            &a.kind,
+                        )
+                        && s.tg.set_topic_icon(forum, thread, want).await.is_ok()
+                    {
+                        s.topics.storage.set_icon(&pane, want);
+                    }
+                    break;
+                }
+                // Still shell (`Err`) or unknown kind (`?`): keep polling —
+                // agent registration lags shell input by seconds.
+                _ => {}
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

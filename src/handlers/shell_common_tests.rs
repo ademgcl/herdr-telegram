@@ -26,9 +26,10 @@ fn test_shell_result_text_notes() {
     assert!(final_card.contains("$ make build"));
     assert!(final_card.contains("line2"));
     assert!(!final_card.contains("⏳") && !final_card.contains("✅"));
-    assert!(
-        shell_result_text("make build", out, ShellNote::Following).contains("following up")
-    );
+    // Provisional first tail: same shape (no footer — typing covers it),
+    // distinct variant so unsettled output never claims `Final`.
+    let first = shell_result_text("make build", out, ShellNote::First);
+    assert!(!first.contains("⏳") && !first.contains("following up"));
     assert!(shell_result_text("make build", out, ShellNote::Finished).contains("✅ finished"));
     assert!(shell_result_text("make build", out, ShellNote::StillRunning).contains("/read"));
     // Empty output never posts a bare prompt line.

@@ -6,7 +6,7 @@ use crate::{
     state::AppState,
     ui::{
         agent_card_kb, build_agent_card_text,
-        scope_text::{READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC, parse_count, redirect_general_dm},
+        scope_text::{READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC, parse_count},
         topic_help_text,
     },
 };
@@ -62,12 +62,10 @@ pub(crate) async fn handle_topic_agent_message(
         return;
     }
 
-    // General/DM-only commands redirect (topics serve their own agent):
-    // text guidance, no action (General's redirect precedent).
+    // Control plane works in-thread (menus are chat-global): panel +
+    // spawn land here instead of redirecting to General.
     if cmd == "/agents" || cmd == "/spawn" {
-        s.tg
-            .send_msg(chat, Some(thread_id), &redirect_general_dm(cmd), None)
-            .await;
+        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
         return;
     }
 

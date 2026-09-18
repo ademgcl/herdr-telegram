@@ -72,8 +72,11 @@ pub(crate) const SHELL_FOLLOW_UP_ROUNDS: u32 = 20;
 pub(crate) enum ShellNote {
     /// Settled: the tail is final, no footer.
     Final,
-    /// First card, still running: a completion card follows.
-    Following,
+    /// Provisional first tail of a still-running command: same shape as
+    /// `Final` (no footer — typing signals liveness per explicit UX call)
+    /// but semantically distinct, so unsettled output never claims to be
+    /// final; a `Finished`/`StillRunning` card follows.
+    First,
     /// Follow-up, now settled.
     Finished,
     /// Budget exhausted, still running.
@@ -85,10 +88,7 @@ pub fn shell_result_text(cmd: &str, out: &str, note: ShellNote) -> String {
     let lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
     let mut reply = format_shell_reply(cmd, &tail_fit(&lines, 3500));
     match note {
-        ShellNote::Final => {}
-        ShellNote::Following => {
-            reply.push_str("\n⏳ still running — following up when it settles…")
-        }
+        ShellNote::Final | ShellNote::First => {}
         ShellNote::Finished => reply.push_str("\n✅ finished."),
         ShellNote::StillRunning => {
             reply.push_str("\n⏳ still running — output above may grow; `/read` for more.")
@@ -159,14 +159,17 @@ pub(crate) async fn settle_report_shell(
         s.stop_shell_typing(pane).await;
         return;
     }
+    // The first card carries no "still running" footer: the typing
+    // indicator already signals liveness, and the completion card below
+    // closes the loop. `First` (not `Final`) marks the provisional tail.
+    // Fresh-only: `out` is the whole scrollback — delta
+    // against the pre-send screen so one command's card never carries
+    // old output (follow-ups below already delta against the sent screen).
     let first = if settled {
         ShellNote::Final
     } else {
-        ShellNote::Following
+        ShellNote::First
     };
-    // Fresh-only: `out` is the whole scrollback — delta against the
-    // pre-send screen so one command's card never carries old output
-    // (follow-ups below already delta against the sent screen).
     let fresh = shell_result_text(cmd, &fresh_since(&out, before), first);
     let mid = s.tg.send_msg(chat, thread, &fresh, kb.clone()).await;
     s.remember(chat, mid, pane).await;

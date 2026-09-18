@@ -1,9 +1,5 @@
 use super::forum::bare_cmd;
-use crate::{
-    herdr::client::{list_agents, list_workspaces, spawn_agent},
-    state::AppState,
-    ui::{build_menu_text, general_help_text, main_menu_kb, ws_label},
-};
+use crate::{state::AppState, ui::general_help_text};
 
 pub(crate) async fn handle_general_forum_message(
     s: AppState,
@@ -23,81 +19,12 @@ pub(crate) async fn handle_general_forum_message(
     }
 
     if cmd == "/agents" {
-        let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-        let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
-        s.tg.send_msg(
-            chat,
-            thread_id,
-            &build_menu_text(&spaces, &agents),
-            Some(main_menu_kb(&spaces, &agents)),
-        )
-        .await;
+        super::agents::show_panel(&s, chat, thread_id).await;
         return;
     }
 
     if cmd == "/spawn" {
-        let (kind, ws) = match arg.split_once(char::is_whitespace) {
-            Some((k, w)) => (k, Some(w)),
-            None if !arg.is_empty() => (arg, None),
-            _ => {
-                s.tg.send_msg(
-                    chat,
-                    thread_id,
-                    "usage: `/spawn <kind> [space]` (e.g. `/spawn opencode space-1`)",
-                    None,
-                )
-                .await;
-                return;
-            }
-        };
-        s.tg.send_msg(chat, thread_id, &format!("⏳ spawning {kind}…"), None)
-            .await;
-        // Workspace may be an id or a human label (`space-1`).
-        let ws_id;
-        let ws = match ws {
-            Some(w) => match super::space::resolve_ws(&s, w).await {
-                Some(id) => {
-                    ws_id = id;
-                    Some(ws_id.as_str())
-                }
-                None => {
-                    s.tg.send_msg(chat, thread_id, &format!("⚠️ unknown space `{w}`"), None)
-                        .await;
-                    return;
-                }
-            },
-            None => None,
-        };
-        match spawn_agent(&s.cfg.socket, kind, ws).await {
-            Ok(row) => {
-                let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                let space = ws_label(&spaces, &row.ws);
-                if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space).await {
-                    s.tg.send_msg(
-                        chat,
-                        thread_id,
-                        &format!(
-                            "✅ Started {} [{}] in topic #{topic_th}",
-                            row.kind, row.pane
-                        ),
-                        None,
-                    )
-                    .await;
-                } else {
-                    s.tg.send_msg(
-                        chat,
-                        thread_id,
-                        &format!("✅ Started {} [{}]", row.kind, row.pane),
-                        None,
-                    )
-                    .await;
-                }
-            }
-            Err(e) => {
-                s.tg.send_msg(chat, thread_id, &format!("⚠️ spawn failed: {e}"), None)
-                    .await;
-            }
-        }
+        super::agents::spawn_with_arg(&s, chat, thread_id, arg).await;
         return;
     }
 

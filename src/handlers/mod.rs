@@ -1,6 +1,7 @@
 pub mod callback;
 pub mod callback_model;
 pub mod callback_parse;
+pub mod agents;
 pub mod callback_spawn;
 pub mod dialog;
 pub mod dm;

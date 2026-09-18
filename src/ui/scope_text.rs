@@ -16,13 +16,6 @@ pub const SHELL_READ_DEFAULT: u32 = 60;
 /// Line-count cap shared by every `/read` surface (mirrors DM clamp).
 pub const READ_CAP: u32 = 400;
 
-/// Redirect for General/DM-only commands typed in a topic (`/agents`,
-/// `/spawn`): text-only, no write, no action — mirrors General's
-/// existing out-of-scope redirects.
-pub fn redirect_general_dm(cmd: &str) -> String {
-    format!("`{cmd}` runs in General or DM — open it there; topics talk to their own agent.")
-}
-
 /// Redirect for topic/DM commands typed in General (one arm covers all
 /// seven — same shape as the existing `/model` redirect).
 pub const REDIRECT_TOPIC_SCOPED: &str =

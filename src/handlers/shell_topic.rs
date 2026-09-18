@@ -8,7 +8,7 @@ use crate::{
     ui::{
         scope_text::{
             READ_CAP, SHELL_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC,
-            USAGE_RESET_TOPIC, parse_count, redirect_general_dm,
+            USAGE_RESET_TOPIC, parse_count,
         },
         shell_help_text,
     },
@@ -31,12 +31,9 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
             .await;
         return;
     }
-    // General/DM-only commands redirect (see forum_topic): text
-    // guidance, no action.
+    // Control plane works in-thread like agent topics (see forum_topic).
     if cmd == "/agents" || cmd == "/spawn" {
-        s.tg
-            .send_msg(chat, Some(thread_id), &redirect_general_dm(cmd), None)
-            .await;
+        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
         return;
     }
     if cmd == "/shell" {
@@ -183,6 +180,8 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         let keys: Vec<&str> = arg.split_whitespace().collect();
         match send_pane_keys(&s.cfg.socket, pane, &keys).await {
             Ok(_) => {
+                // Keys may have launched an agent — same instant re-icon.
+                super::shell_lifecycle::spawn_flip_watch(&s, pane);
                 s.tg.send_msg(chat, Some(thread_id), "⌨️ keys sent", None)
                     .await;
             }

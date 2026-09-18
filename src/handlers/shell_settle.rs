@@ -10,7 +10,7 @@ use tokio::time::{Duration, sleep};
 /// First-settle poll budget: 15 rounds of 1s sleeps (nominal ~15s;
 /// wall clock stretches under sick-herdr RPCs — snapshot reads up to
 /// 30s, the busy probe 10s — so the typing sustain below is time-based,
-/// never per-iteration). Unsettled commands post a Following card and
+/// never per-iteration). Unsettled commands post their tail card and
 /// continue in `settle_report_shell` follow-ups.
 const SETTLE_ROUNDS: u32 = 15;
 
@@ -110,7 +110,7 @@ pub(crate) async fn await_shell_settle(
 /// banks no stability — the old loop settled two blank reads as a blank
 /// Final. Isolated blanks deliberately leave the banked streak untouched
 /// (the screen did not move; only banking is gated), so one failed poll
-/// cannot spam Following cards. Returns (failed_streak, dead_window).
+/// cannot spam extra cards. Returns (failed_streak, dead_window).
 pub(crate) fn note_blank(failed: u32) -> (u32, bool) {
     let next = failed + 1;
     (next, next >= SETTLE_ROUNDS)
