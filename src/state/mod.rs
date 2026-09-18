@@ -120,7 +120,7 @@ impl State {
         let mut tmp = file.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        if std::fs::write(&tmp, off.to_string()).is_ok() {
+        if crate::types::write_private(&tmp, off.to_string().as_bytes()).is_ok() {
             if std::fs::rename(&tmp, &file).is_err() {
                 eprintln!("[state] offset rename failed (disk full?)");
             }
@@ -234,7 +234,7 @@ impl State {
         let mut tmp = file.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        if std::fs::write(&tmp, pane).is_ok() {
+        if crate::types::write_private(&tmp, pane.as_bytes()).is_ok() {
             if std::fs::rename(&tmp, &file).is_err() {
                 eprintln!("[state] focus rename failed (disk full?)");
             }

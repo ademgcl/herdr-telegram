@@ -62,7 +62,7 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
         Ok(s) => s,
         Err(e) => {
             eprintln!("⚠️  Cannot connect to herdr-telegram on {addr}: {e}");
-            eprintln!("   Is the bot running? Start it with: ./dev.sh start");
+            eprintln!("   Is the bot running? Start it with: herdr-telegram dev start");
             return Err(e.into());
         }
     };

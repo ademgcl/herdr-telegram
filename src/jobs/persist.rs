@@ -50,7 +50,7 @@ pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        if std::fs::write(&tmp, json).is_ok() {
+        if crate::types::write_private(&tmp, json.as_bytes()).is_ok() {
             if std::fs::rename(&tmp, path).is_err() {
                 eprintln!("[jobs] intent rename failed (disk full?)");
             }

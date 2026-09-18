@@ -97,7 +97,7 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    if fs::write(&tmp, json).is_ok() {
+    if crate::types::write_private(&tmp, json.as_bytes()).is_ok() {
         if let Ok(f) = fs::File::open(&tmp) {
             let _ = f.sync_all();
         }
@@ -116,7 +116,8 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
                 let mut ptmp = prev.as_os_str().to_owned();
                 ptmp.push(".tmp");
                 let ptmp = PathBuf::from(ptmp);
-                if fs::write(&ptmp, serde_json::to_string_pretty(s).unwrap_or_default()).is_ok() {
+                let pretty = serde_json::to_string_pretty(s).unwrap_or_default();
+                if crate::types::write_private(&ptmp, pretty.as_bytes()).is_ok() {
                     if let Ok(f) = fs::File::open(&ptmp) {
                         let _ = f.sync_all();
                     }

@@ -82,6 +82,34 @@ pub fn collapse_home(path: &str, home: &str) -> String {
     }
 }
 
+/// Private file write (0600 on unix): state files carry chat IDs and
+/// prompt excerpts — dev.sh's `umask 077` covered them; this is its
+/// replacement now that ops lives in Rust. Tmp+rename callers pass the
+/// tmp path (rename preserves the mode).
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(bytes)?;
+        // Create-only mode is not enough: a pre-existing 0644 tmp
+        // (crash leftover) would keep its mode through rename.
+        let mut perm = f.metadata()?.permissions();
+        perm.set_mode(0o600);
+        f.set_permissions(perm)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +126,21 @@ mod tests {
         assert_eq!(collapse_home("/etc/hosts", "/"), "~/etc/hosts");
         assert_eq!(collapse_home("/Users/x", "/Users/x/"), "~");
         assert_eq!(collapse_home("/Users/x/a", "/Users/x/"), "~/a");
+    }
+
+    #[test]
+    fn test_write_private_roundtrip() {
+        let p = std::env::temp_dir().join(format!("ht-priv-{}.txt", std::process::id()));
+        write_private(&p, b"secret").expect("write");
+        assert_eq!(std::fs::read(&p).expect("read"), b"secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let _ = std::fs::remove_file(&p);
     }
 }

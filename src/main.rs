@@ -6,6 +6,7 @@ mod handlers;
 mod herdr;
 mod jobs;
 mod notifier;
+mod ops;
 mod state;
 mod telegram;
 mod topics;
@@ -35,6 +36,9 @@ fn home_masked(p: &std::path::Path) -> String {
 #[tokio::main]
 async fn main() -> Res<()> {
     let args: Vec<String> = std::env::args().collect();
+    // .env first: dev.sh saw the file's port for the guard bind, so the
+    // binary must too (otherwise a .env-only HERDR_TG_PORT is ignored).
+    config::load_env_file();
     let port: u16 = match std::env::var("HERDR_TG_PORT") {
         Ok(v) => v
             .trim()
@@ -46,6 +50,12 @@ async fn main() -> Res<()> {
     // CLI control client mode: bypass daemon bind and talk to running bot
     if args.len() > 1 && args[1] == "ctl" {
         return ctl::run_ctl_client(port, &args[2..]).await;
+    }
+
+    // Local ops console (replaces dev.sh): supervised runs, status,
+    // logs, cleanup, build, and ctl passthrough. Never binds the guard.
+    if args.len() > 1 && (args[1] == "dev" || args[1] == "ops") {
+        return ops::run(&args[2..]).await;
     }
 
     let lock_addr = format!("127.0.0.1:{port}");
