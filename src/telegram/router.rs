@@ -4,7 +4,16 @@ use crate::{
     types::STALE_SECS,
 };
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// Stale-notice burst guard: a boot burst queues N stale messages and
+/// each must not send its own "please resend" (serial and slow — fresh
+/// updates stall behind the spam). One notice per (chat, thread) per
+/// STALE_SECS; a later genuine stall still notifies. Pure for tests.
+fn stale_notice_due(last: Option<Instant>, now: Instant) -> bool {
+    last.map(|t| now.duration_since(t).as_secs() >= STALE_SECS)
+        .unwrap_or(true)
+}
 
 /// Strip newlines from user-controlled titles before logging: logged
 /// titles must never forge log lines.
@@ -110,8 +119,22 @@ pub async fn handle_update(s: AppState, u: &Value) {
         // sender must know to resend instead of assuming delivery.
         println!("[tg] dropping stale update");
         let th = msg["message_thread_id"].as_i64();
-        s.tg.send_msg(chat_id, th, "⌛️ that message arrived too late — please resend", None)
-            .await;
+        // Burst-deduped (see stale_notice_due): short lock, no await
+        // inside — the map prune rides along, never a second pass.
+        let at = Instant::now();
+        let due = {
+            let mut nagged = s.stale_nagged.lock().await;
+            nagged.retain(|_, t| at.duration_since(*t).as_secs() < STALE_SECS);
+            let due = stale_notice_due(nagged.get(&(chat_id, th)).copied(), at);
+            if due {
+                nagged.insert((chat_id, th), at);
+            }
+            due
+        };
+        if due {
+            s.tg.send_msg(chat_id, th, "⌛️ that message arrived too late — please resend", None)
+                .await;
+        }
         return;
     }
 
@@ -148,5 +171,16 @@ mod tests {
         assert_eq!(log_safe("plain"), "plain");
         assert_eq!(log_safe("a\nb\rc"), "a b c");
         assert_eq!(log_safe("[x]\nFAKE LOG"), "[x] FAKE LOG");
+    }
+
+    #[test]
+    fn test_stale_notice_due_first_then_quiet_then_due() {
+        let now = Instant::now();
+        assert!(stale_notice_due(None, now));
+        assert!(!stale_notice_due(Some(now), now));
+        let recent = now - std::time::Duration::from_secs(10);
+        assert!(!stale_notice_due(Some(recent), now));
+        let old = now - std::time::Duration::from_secs(STALE_SECS + 1);
+        assert!(stale_notice_due(Some(old), now));
     }
 }

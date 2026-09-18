@@ -44,15 +44,13 @@ pub async fn answer_tap(
     // Single-flight per pane: a double-tap (or two owners) must not
     // interleave key sequences into the same dialog, and observations
     // must not post over the card this tap owns. RAII: cancellation
-    // mid-tap must not wedge the pane. Contention drops SILENTLY: the
-    // spinner already stopped and the winning tap owns the card's next
-    // state — a chat message per double-tap is pure litter.
+    // mid-tap must not wedge the pane. Contention drops PURELY silent:
+    // the spinner already stopped and the winner owns this pane — even
+    // stripping our own card is unsafe here, a retried strip landing
+    // after the winner's final edit would wipe its fresh buttons with
+    // no heal repairing them. A stranded orphan self-heals: the next
+    // tap re-validates through the blocked-gate + Unknown arm.
     let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
-        // Loser's own card comes off too: the winner owns this pane's
-        // next state, and a live-buttoned orphan would offer taps the
-        // gate then refuses (winner Resumed clears the sig, so no heal
-        // re-renders it — strip, never strand).
-        s.tg.strip_buttons(chat, msg_id).await;
         return;
     };
     // A button tap supersedes an armed typed answer for THIS pane: drop

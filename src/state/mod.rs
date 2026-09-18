@@ -39,6 +39,11 @@ pub struct State {
     /// (blocked interactive input) + Enter. Set by the ⌨️ button.
     pub typewait: Mutex<HashMap<(i64, Option<i64>), String>>,
     pub nagged: Mutex<HashSet<i64>>,
+    /// Last stale-arrival notice per (chat, thread): a boot burst queues
+    /// N stale messages and each must not send its own "please resend".
+    /// Time-bounded (STALE_SECS), never forever — a later genuine stall
+    /// in the same thread still notifies.
+    pub stale_nagged: Mutex<HashMap<(i64, Option<i64>), std::time::Instant>>,
     /// When a prompt watcher last reported a pane — status alerts inside
     /// this window are redundant (the final card already covered them).
     pub last_done: Mutex<HashMap<String, std::time::Instant>>,
@@ -183,6 +188,7 @@ impl State {
             runwait: Mutex::new(HashMap::new()),
             typewait: Mutex::new(HashMap::new()),
             nagged: Mutex::new(HashSet::new()),
+            stale_nagged: Mutex::new(HashMap::new()),
             last_done: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
