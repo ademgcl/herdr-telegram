@@ -212,7 +212,7 @@ impl TopicManager {
                 Some(thread)
             }
             Err(e) => {
-                eprintln!("[topics] failed to create topic for {pane}: {e}");
+                eprintln!("[topics] failed to create topic for {pane}: {}", self.tg.redact(&e.to_string()));
                 // Roll back the tag when nothing was minted: failed
                 // creates must not leak `o<n>` gaps forever.
                 if self.storage.get_thread(pane).is_none() {

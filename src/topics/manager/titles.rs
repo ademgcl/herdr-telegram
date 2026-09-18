@@ -75,7 +75,7 @@ impl TopicManager {
                     // instead of retry-spamming every watchdog tick.
                     let _ = self.storage.set_title_if_thread(pane, thread, desired);
                 } else {
-                    eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}");
+                    eprintln!("[topics] rename topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
                 }
             }
         }
@@ -143,7 +143,7 @@ impl TopicManager {
                 }
             }
             Err(e) => {
-                eprintln!("[topics] probe topic #{thread} ({pane}) failed: {e}");
+                eprintln!("[topics] probe topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
             }
         }
     }

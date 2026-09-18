@@ -148,7 +148,7 @@ async fn main() -> Res<()> {
                     }
                 }
             }
-            Err(e) => eprintln!("[telegram] permission probe failed: {e}"),
+            Err(e) => eprintln!("[telegram] permission probe failed: {}", s.tg.redact(&e.to_string())),
         }
 
         // F4: verify custom emoji topic icon stickers
@@ -166,7 +166,7 @@ async fn main() -> Res<()> {
                     );
                 }
             }
-            Err(e) => eprintln!("[telegram] forum icon stickers probe failed: {e}"),
+            Err(e) => eprintln!("[telegram] forum icon stickers probe failed: {}", s.tg.redact(&e.to_string())),
         }
     }
     recover_pending(&s).await;

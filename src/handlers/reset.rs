@@ -87,7 +87,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!("[reset] permission check warning (proceeding): {e}");
+            eprintln!("[reset] permission check warning (proceeding): {}", s.tg.redact(&e.to_string()));
         }
     }
 

@@ -38,7 +38,7 @@ impl TopicManager {
                     }
                     return false;
                 }
-                eprintln!("[topics] reopen topic #{thread} ({pane}) failed: {e}");
+                eprintln!("[topics] reopen topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
                 false
             }
         }
@@ -65,7 +65,7 @@ impl TopicManager {
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
-                eprintln!("[topics] close topic #{thread} ({pane}) failed: {e}");
+                eprintln!("[topics] close topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
                 false
             }
         };
@@ -94,7 +94,7 @@ impl TopicManager {
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
-                eprintln!("[topics] delete topic #{thread} ({pane}) failed: {e}");
+                eprintln!("[topics] delete topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
                 false
             }
         }
@@ -191,7 +191,7 @@ impl TopicManager {
         let new_thread = match self.tg.create_forum_topic(forum, &name, Some(color)).await {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[reset] create topic failed for {pane}: {e}");
+                eprintln!("[reset] create topic failed for {pane}: {}", self.tg.redact(&e.to_string()));
                 return None;
             }
         };
@@ -231,7 +231,7 @@ impl TopicManager {
         if let Some(old) = old_thread
             && let Err(e) = self.tg.delete_forum_topic(forum, old).await
         {
-            eprintln!("[reset] delete old topic #{old} failed (orphaned): {e}");
+            eprintln!("[reset] delete old topic #{old} failed (orphaned): {}", self.tg.redact(&e.to_string()));
         }
 
         println!(

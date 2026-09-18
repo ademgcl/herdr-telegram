@@ -77,6 +77,39 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     }
 }
 
+/// Pane-id shape (`w1:p1`, dead `w9:p7`): `w<n>` colon `p<n>` suffix,
+/// no URL/mention chars. Pure for tests — ordinary words (`note:`,
+/// `note:p1`, `https://…`) return false so normal prompts never refuse.
+fn pane_shaped(head: &str) -> bool {
+    let Some((a, b)) = head.split_once(':') else {
+        return false;
+    };
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if head.contains('/') || head.contains('@') || head.contains('.') {
+        return false;
+    }
+    if a.contains(char::is_whitespace) || b.contains(char::is_whitespace) {
+        return false;
+    }
+    // Real panes are `w<n>:p<n>` — the `w` prefix reclaims `note:p1`
+    // style prompts that a suffix-only check would refuse.
+    let mut ac = a.chars();
+    if ac.next() != Some('w') {
+        return false;
+    }
+    if !ac.next().is_some_and(|d| d.is_ascii_digit()) {
+        return false;
+    }
+    // Suffix `p<n>` covers live + dead panes (`w1:p1`, `w9:p7`).
+    let mut c = b.chars();
+    if c.next() != Some('p') {
+        return false;
+    }
+    c.next().is_some_and(|d| d.is_ascii_digit())
+}
+
 /// Bare text prompt routing: explicit `<pane> <prompt>`, else reply,
 /// else focus, else sole agent; shell-pane fallback when the target is
 /// rowless. Blocked panes get typed input, others enqueue a prompt job.
@@ -93,6 +126,18 @@ pub(crate) async fn handle_bare_prompt(
     // sends "w8:p1" to the wrong session as a prompt. Refuse with usage.
     if rest.trim().is_empty() && resolve_target(rows, Some(head)).is_some() {
         s.tg.send_msg(chat, None, "usage: `<pane> <prompt>` — name a pane and a prompt", None)
+            .await;
+        return;
+    }
+    // Dead/ambiguous address is never prompt text: a dead pane id
+    // (`w1:p9 fix bug`) or an ambiguous kind (`opencode fix` with two)
+    // refuses with UNKNOWN_TARGET instead of prompting focus/sole-agent
+    // with the address as text (fail-closed parity with dm_info.rs:30).
+    // `pane_shaped` keeps ordinary `note:`/`https://` prompts serving.
+    if resolve_target(rows, Some(head)).is_none()
+        && (pane_shaped(head) || rows.iter().any(|r| r.kind == head))
+    {
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return;
     }
@@ -118,7 +163,23 @@ pub(crate) async fn handle_bare_prompt(
     } else if reply_pane.is_some() {
         // The reply names a rowless (shell) pane: run it as a command
         // instead of falling through to the focused agent (which would
-        // send shell text to the wrong agent as a prompt).
+        // send shell text to the wrong agent as a prompt). Fail-closed
+        // first: a corpse reply (dead pane) refuses with UNKNOWN_TARGET
+        // instead of attempting a shell write — rowless LIVE shells
+        // still serve (one list RPC to tell them apart; a failed list
+        // falls open to the fallback, which reports gone/unreachable).
+        // (`via_reply==None` here already implies unmatched, so no
+        // extra dead-check — just the liveness probe.)
+        if let Some(rp) = &reply_pane
+            && !crate::herdr::client::list_panes(&s.cfg.socket)
+                .await
+                .map(|l| l.contains(rp))
+                .unwrap_or(true)
+        {
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                .await;
+            return;
+        }
         super::shell::run_shell_fallback(s, chat, reply_pane.clone(), text).await;
         return;
     } else if let Some(r) = via_focus {
@@ -182,4 +243,23 @@ pub(crate) async fn handle_bare_prompt(
         prompt_text,
     )
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pane_shaped_dead_vs_ordinary() {
+        assert!(pane_shaped("w1:p1"));
+        assert!(pane_shaped("w8:p3"));
+        assert!(pane_shaped("w9:p7"));
+        assert!(!pane_shaped("note:"));
+        assert!(!pane_shaped("note:p1"));
+        assert!(!pane_shaped("dead:p9"));
+        assert!(!pane_shaped("well:done"));
+        assert!(!pane_shaped("https://foo"));
+        assert!(!pane_shaped("hello"));
+        assert!(!pane_shaped("opencode"));
+    }
 }
