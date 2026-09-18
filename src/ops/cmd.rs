@@ -68,8 +68,14 @@ pub(crate) fn print_status(port: u16) {
 /// Follow bot.log from its current end (callers print history first).
 /// Shares the caller's stdin channel — a second reader would race it
 /// for `q` lines. Partial trailing lines held for the next poll.
+/// Seek-based: the file grows unbounded over long prod runs (rotation
+/// happens only at boot), so re-reading it whole every 500ms would
+/// burn RAM/CPU — read only the appended window, capped per poll.
 pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>) {
     println!("following bot.log — `q` + Enter exits (masking on)");
+    // Cap per-poll appends: a burst bigger than this jumps the cursor
+    // (the tail command covers history; follow is for live lines).
+    const POLL_CAP: u64 = 256 * 1024;
     let mut pos = std::fs::metadata(proc::log_path())
         .map(|m| m.len())
         .unwrap_or(0);
@@ -77,19 +83,16 @@ pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::Unbounded
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
                 let len = std::fs::metadata(proc::log_path()).map(|m| m.len()).unwrap_or(pos);
-                if len > pos
-                    && let Ok(bytes) = std::fs::read(proc::log_path())
-                    && bytes.len() as u64 >= pos
-                {
-                    let new = &bytes[pos as usize..];
+                if len <= pos {
+                    pos = len;
+                } else if let Ok((bytes, at)) = read_tail_from(&proc::log_path(), pos, len, POLL_CAP) {
+                    pos = at;
                     // Hold back a partial trailing line for next poll.
-                    let end = new.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
+                    let end = bytes.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
                     if end > 0 {
-                        print!("{}", mask::mask_line(&String::from_utf8_lossy(&new[..end]), home));
+                        print!("{}", mask::mask_line(&String::from_utf8_lossy(&bytes[..end]), home));
                         pos += end as u64;
                     }
-                } else {
-                    pos = len.min(pos);
                 }
             }
             line = rx.recv() => {
@@ -99,6 +102,43 @@ pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::Unbounded
                 break;
             }
         }
+    }
+}
+
+/// Read at most `cap` bytes of `path` ending at `len`, starting from
+/// `pos` (seek — never a full-file read). Returns the bytes plus the
+/// cursor they start at: when the gap exceeds the cap the cursor jumps
+/// (a partial first line may print mid-line — follow mode only).
+fn read_tail_from(path: &std::path::Path, pos: u64, len: u64, cap: u64) -> Res<(Vec<u8>, u64)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let start = pos.max(len.saturating_sub(cap));
+    let mut f = std::fs::File::open(path)?;
+    f.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::new();
+    f.take(len - start).read_to_end(&mut buf)?;
+    Ok((buf, start))
+}
+
+/// Boot-time log rotation: bot.log grows unbounded over long prod runs
+/// (no rotation daemon watches it). Copy-truncate over 8MB into a
+/// single backup — same inode, so writers appending across the call
+/// never lose output. Boot-only (single-threaded, no race). Best
+/// effort throughout: rotation must never fail the boot.
+pub(crate) fn rotate_log_if_huge() {
+    const LIMIT: u64 = 8 << 20;
+    let log = proc::log_path();
+    let Ok(meta) = std::fs::metadata(&log) else {
+        return;
+    };
+    if meta.len() <= LIMIT {
+        return;
+    }
+    let bak = std::path::PathBuf::from("bot.log.1");
+    if std::fs::copy(&log, &bak).is_ok()
+        && let Ok(f) = std::fs::OpenOptions::new().write(true).open(&log)
+        && f.set_len(0).is_ok()
+    {
+        println!("[main] rotated bot.log (was {} bytes)", meta.len());
     }
 }
 
@@ -140,4 +180,25 @@ pub(crate) async fn run_foreground(home: &str, port: u16) -> Res<()> {
         return Err(format!("bot exited: {st}").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_tail_from_seeks_and_caps() {
+        let dir = std::env::temp_dir().join(format!("herdr-tail-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("t.log");
+        std::fs::write(&path, b"aaaa\nbbbb\ncccc\ndddd\n").unwrap();
+        // Full window from 0.
+        let (b, at) = read_tail_from(&path, 0, 20, 1024).unwrap();
+        assert_eq!((at, &b[..]), (0, &b"aaaa\nbbbb\ncccc\ndddd\n"[..]));
+        // Gap over cap jumps the cursor.
+        let (b, at) = read_tail_from(&path, 0, 20, 6).unwrap();
+        assert_eq!(at, 14);
+        assert_eq!(&b[..], b"\ndddd\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

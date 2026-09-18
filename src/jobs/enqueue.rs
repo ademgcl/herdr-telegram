@@ -65,12 +65,13 @@ pub async fn enqueue_prompt(
     // Deliver FIRST, record after: a failed submit must neither bump the
     // epoch (it would reset the live watcher's stream state for nothing)
     // nor overwrite dest/prompt with undelivered text.
-    // Reservation-window cover: the 30s submit RPC runs before the
-    // watcher exists — light the indicator now and sustain it until
-    // submit lands (else the window sits dark). Unconditional: DM has
-    // no typing task at all, and a forum pane still unmapped pauses
-    // its task — both need the loop; where the task runs too the
-    // touches are idempotent refreshes. Spawned, never awaited.
+    // Reservation-window cover: the watcher spawned above samples the
+    // agent while the 30s submit RPC is still in flight — light the
+    // indicator now and sustain it until submit lands (else the window
+    // sits dark). Unconditional: DM has no typing task at all, and a
+    // forum pane still unmapped pauses its task — both need the loop;
+    // where the task runs too the touches are idempotent refreshes.
+    // Spawned, never awaited.
     s.start_typing(&pane).await;
     {
         let tg = s.tg.clone();
@@ -159,4 +160,36 @@ pub async fn enqueue_prompt(
     s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
         .await;
     s.push_history(&pane, &req.text).await;
+    // Early-retire race: the watcher above may have settled the
+    // pre-submit idle screen (5s same-kind persistence) and retired
+    // while the submit RPC was in flight — the books just landed on a
+    // detached job and the durable intent would sit watcherless until
+    // a restart. If the map no longer holds this job and no live
+    // successor took the pane, re-arm a watcher for the recorded intent.
+    let rearm = match s.jobs.lock().await.get(&pane).cloned() {
+        Some(j) if Arc::ptr_eq(&j, &job) => false,
+        Some(j) => j.is_stopped(),
+        None => true,
+    };
+    if rearm {
+        let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+        // Re-check under a fresh lock: a concurrent enqueue may have won
+        // while the baseline read yielded (same pattern as the spawn
+        // above) — a mapped live job is always a successor, leave it.
+        let mut map = s.jobs.lock().await;
+        let live_other = map
+            .get(&pane)
+            .cloned()
+            .map(|j| !j.is_stopped())
+            .unwrap_or(false);
+        if !live_other {
+            let j2 = Job::new(baseline, req.chat_id, req.message_thread_id);
+            *j2.prompt.lock().await = req.text.clone();
+            *j2.pending.lock().await = 1;
+            map.insert(pane.clone(), j2.clone());
+            drop(map);
+            println!("[jobs] re-armed watcher for {pane} (retired mid-submit)");
+            tokio::spawn(watch_job(s.clone(), pane.clone(), j2.clone()));
+        }
+    }
 }

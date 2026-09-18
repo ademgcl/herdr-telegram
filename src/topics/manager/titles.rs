@@ -1,7 +1,6 @@
 //! 1:1 pane↔topic title sync (both directions) plus stable short tags.
 //! Split from `manager` (300-line file limit).
 use super::TopicManager;
-use std::time::Instant;
 impl TopicManager {
     /// Stable short tag for this pane (`o2`) — backs the friendly
     /// default title for unlabeled panes.
@@ -41,10 +40,6 @@ impl TopicManager {
         if !self.storage.set_title_if_thread(pane, thread, title) {
             return false;
         }
-        self.last_title_write
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(pane.to_string(), Instant::now());
         true
     }
 
@@ -66,10 +61,6 @@ impl TopicManager {
                 // store must not gain an orphan title.
                 if self.storage.set_title_if_thread(pane, thread, desired) {
                     println!("[topics] renamed topic #{thread} ({pane}) to {desired:?}");
-                    self.last_title_write
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(pane.to_string(), Instant::now());
                 }
             }
             Err(e) => {
@@ -82,13 +73,7 @@ impl TopicManager {
                 } else if crate::telegram::topic_not_modified(&e.to_string()) {
                     // Already showing it — converged, store and stay quiet
                     // instead of retry-spamming every watchdog tick.
-                    // Same atomic guard as the Ok path.
-                    if self.storage.set_title_if_thread(pane, thread, desired) {
-                        self.last_title_write
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner())
-                            .insert(pane.to_string(), Instant::now());
-                    }
+                    let _ = self.storage.set_title_if_thread(pane, thread, desired);
                 } else {
                     eprintln!("[topics] rename topic #{thread} ({pane}) failed: {e}");
                 }
@@ -96,11 +81,13 @@ impl TopicManager {
         }
     }
 
-    /// Round-robin liveness probe: re-assert ONE mapping's stored title
-    /// per watchdog tick (1 RPC). Converged titles otherwise never fire
-    /// an RPC, so a human-deleted topic would dangle forever — the probe
-    /// answers TOPIC_ID_INVALID → prune, and the next ensure recreates.
-    /// Skipped while resetting (would fight identity restore).
+    /// Round-robin liveness probe: re-assert THREE mappings' stored
+    /// titles per watchdog tick (3 RPCs). Converged titles otherwise
+    /// never fire an RPC, so a human-deleted topic would dangle — the
+    /// probe answers TOPIC_ID_INVALID → prune, and the next ensure
+    /// recreates. One-per-tick healed N topics in N×60s; three keeps
+    /// the drift small on busy hosts. Skipped while resetting (would
+    /// fight identity restore).
     pub async fn probe_deleted(&self) {
         if crate::handlers::reset::is_resetting() {
             return;
@@ -108,6 +95,15 @@ impl TopicManager {
         let Some(forum) = self.forum_id else {
             return;
         };
+        for _ in 0..3 {
+            self.probe_next(forum).await;
+        }
+    }
+
+    /// Probe a single mapping (one RPC): the ring cursor advances per
+    /// call so consecutive calls walk the map. Split for the 3-per-tick
+    /// loop above.
+    async fn probe_next(&self, forum: i64) {
         let mappings = self.storage.all_mappings();
         if mappings.is_empty() {
             return;

@@ -71,6 +71,7 @@ async fn main() -> Res<()> {
     // Never print the home dir (username) or numeric chat IDs: bot.log is
     // a local diagnostic file, not a place for identifiers.
     println!("[main] state dir: {}", home_masked(&state::state_dir()));
+    crate::ops::rotate_log_if_huge();
     let s = State::new(cfg)?;
     tokio::spawn(ctl::run_control_server(s.clone(), listener));
 
@@ -91,7 +92,11 @@ async fn main() -> Res<()> {
                 eprintln!(
                     "[herdr] ping failed (attempt {attempt}/5): {ping_err} — retrying in 10s"
                 );
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                // Signal-aware: a deaf 40s boot stall starves TERM.
+                tokio::select! {
+                    _ = shutdown_signal() => return Ok(()),
+                    _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                }
             }
         }
     }
@@ -203,12 +208,6 @@ async fn main() -> Res<()> {
                         }
                         for u in list {
                             let id = u["update_id"].as_u64().unwrap_or(0);
-                            {
-                                let mut off = s.offset.lock().await;
-                                if id >= *off {
-                                    *off = id + 1;
-                                }
-                            }
                             // Shutdown-aware: a long handler (spawn) must
                             // not starve TERM into a SIGKILL + replay.
                             tokio::select! {
@@ -219,6 +218,15 @@ async fn main() -> Res<()> {
                                 }
                                 _ = handle_update(s.clone(), &u) => {}
                             }
+                            // Ack AFTER handling (at-least-once): bumping
+                            // before the handler acked a never-handled
+                            // update on TERM — a silent prompt loss.
+                            {
+                                let mut off = s.offset.lock().await;
+                                if id >= *off {
+                                    *off = id + 1;
+                                }
+                            }
                             // Durable ack per update (at-least-once otherwise:
                             // a mid-batch crash would replay handled prompts
                             // as duplicate submits).
@@ -228,13 +236,29 @@ async fn main() -> Res<()> {
                     Err(e) => {
                         poll_fails = poll_fails.saturating_add(1);
                         let msg = s.tg.redact(&e.to_string());
+                        // Backoff sleeps stay signal-aware: a deaf 30s
+                        // sleep starves TERM into SIGKILL + replay.
                         if msg.contains("Conflict") {
                             eprintln!("[tg] poll conflict (overlap), backing off 30s: {msg}");
-                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            tokio::select! {
+                                _ = shutdown_signal() => {
+                                    println!("[main] shutdown signal during backoff — saving offset");
+                                    s.save_offset().await;
+                                    return Ok(());
+                                }
+                                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                            }
                         } else {
                             let wait = crate::telegram::polling::poll_backoff_secs(poll_fails);
                             eprintln!("[tg] poll failed (retry in {wait}s): {msg}");
-                            tokio::time::sleep(Duration::from_secs(wait)).await;
+                            tokio::select! {
+                                _ = shutdown_signal() => {
+                                    println!("[main] shutdown signal during backoff — saving offset");
+                                    s.save_offset().await;
+                                    return Ok(());
+                                }
+                                _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
+                            }
                         }
                     }
                 }

@@ -19,6 +19,16 @@ pub fn split_reset_target(target: &str) -> Result<i64, String> {
     clean.parse::<i64>().map_err(|_| clean.to_string())
 }
 
+/// Spawned single-topic reset: ~6 Telegram RPCs + herdr reads must not
+/// stall the sequential pump behind the requesting surface. Owned
+/// target for 'static. Single source for the forum/General/DM arms.
+pub fn spawn_single_topic_reset(s: &AppState, chat: i64, thread_id: Option<i64>, target: String) {
+    let s2 = s.clone();
+    tokio::spawn(async move {
+        let _ = run_single_topic_reset(&s2, chat, thread_id, &target).await;
+    });
+}
+
 pub async fn run_single_topic_reset(
     s: &AppState,
     chat: i64,

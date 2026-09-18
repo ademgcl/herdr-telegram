@@ -105,7 +105,7 @@ pub(crate) async fn handle_topic_agent_message(
     // failed send must not consume the waiter); a resume race falls
     // through. Self-healing: a stale corpse evicts instead of bricking
     // answers.
-    if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).cloned() {
+    if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).map(|(p, _)| p.clone()) {
         if s.block_held(&wpane).await {
             s.tg.send_msg(chat, Some(thread_id), "answer already in flight — wait a beat", None).await;
             return;
@@ -148,14 +148,14 @@ pub(crate) async fn handle_topic_agent_message(
 
     if cmd == "/reset" {
         // Own-pane-only: an arg names another pane — refuse (a typo must
-        // never reset the wrong pane).
+        // never reset the wrong pane). Spawned: must not stall the pump.
         if !arg.is_empty() {
             s.tg
                 .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
                 .await;
             return;
         }
-        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
+        super::reset::spawn_single_topic_reset(&s, chat, Some(thread_id), pane.to_string());
         return;
     }
 

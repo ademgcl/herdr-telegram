@@ -30,6 +30,9 @@ pub async fn recover_pending(s: &AppState) {
     for (pane, pp) in entries {
         if !recoverable(pp.started_unix, now) {
             println!("[recover] dropping stale {pane}");
+            // Best-effort notice: otherwise the submitter is never told
+            // their prompt died. Cleared regardless to keep the 24h bound.
+            report(s, pp.chat, pp.thread, &pane, "⚠️ dropped: this prompt went stale while the bot was down (>24h) — please resend").await;
             s.clear_pending(&pane).await;
             continue;
         }

@@ -206,8 +206,12 @@ impl TopicManager {
 
         // Delete old topic now that the mapping already points at the
         // new one (a crash here leaves an orphan, never a corpse mapping).
-        if let Some(old) = old_thread {
-            let _ = self.tg.delete_forum_topic(forum, old).await;
+        // Loud on failure: nothing enumerates Telegram topics, so a
+        // failed delete orphans silently without this line.
+        if let Some(old) = old_thread
+            && let Err(e) = self.tg.delete_forum_topic(forum, old).await
+        {
+            eprintln!("[reset] delete old topic #{old} failed (orphaned): {e}");
         }
 
         println!(

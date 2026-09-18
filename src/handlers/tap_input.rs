@@ -114,7 +114,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         super::shell::handle_run_command(s, chat, thread, &ws, text).await;
         return true;
     }
-    if let Some(pane) = s.keywait.lock().await.get(&(chat, thread)).cloned() {
+    if let Some(pane) = s.keywait.lock().await.get(&(chat, thread)).map(|(p, _)| p.clone()) {
         // Never interleave with an owned key sequence (mirrors /keys):
         // a tap answer or model switch in flight owns the pane's input
         // until it lands. The waiter stays armed — the retry is just

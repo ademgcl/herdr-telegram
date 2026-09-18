@@ -6,7 +6,10 @@ use crate::{
     jobs::{persist, recover::recoverable},
     state::{
         AppState,
-        guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, RUNWAIT_STALE_SECS, claim_stale, reap_stale},
+        guard::{
+            BLOCKOP_STALE_SECS, KEYWAIT_STALE_SECS, MODELOP_STALE_SECS, RUNWAIT_STALE_SECS,
+            TYPEWAIT_STALE_SECS, claim_stale, reap_stale,
+        },
     },
 };
 use std::collections::HashSet;
@@ -84,18 +87,28 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // runwait is deliberately EXCLUDED: it holds workspace ids, not
     // pane ids — admitting one would misread it as a dead pane and
     // wipe the armed shell-run waiter it was meant to protect.
-    known.extend(s.keywait.lock().await.values().cloned());
-    known.extend(s.typewait.lock().await.values().cloned());
+    known.extend(s.keywait.lock().await.values().map(|(p, _)| p.clone()));
+    known.extend(s.typewait.lock().await.values().map(|(p, _)| p.clone()));
     // runwait expires by AGE, never by pane-liveness (see above): an
     // armed waiter firing arbitrarily later would execute stale input
     // as a shell command. Fail-closed expiry, same corpse bound style
-    // as the op guards.
+    // as the op guards. Key/type waiters expire by age too (a stale K
+    // arm keys into live work, a stale Type arm answers a dead question)
+    // — pane-death reap above still applies first.
     {
         let now = std::time::Instant::now();
         s.runwait
             .lock()
             .await
             .retain(|_, (_, at)| !claim_stale(*at, now, RUNWAIT_STALE_SECS));
+        s.keywait
+            .lock()
+            .await
+            .retain(|_, (_, at)| !claim_stale(*at, now, KEYWAIT_STALE_SECS));
+        s.typewait
+            .lock()
+            .await
+            .retain(|_, (_, at)| !claim_stale(*at, now, TYPEWAIT_STALE_SECS));
     }
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.

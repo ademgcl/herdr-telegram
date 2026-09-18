@@ -26,6 +26,10 @@ pub use self::guard::OpGuard;
 /// Armed shell-run waiter: workspace id + arm instant (see `runwait`).
 /// Alias keeps the triple-nested map under clippy's type-complexity bar.
 pub(crate) type RunWait = (String, std::time::Instant);
+/// Armed input waiter: target pane + arm instant (keywait, typewait).
+/// Age expiry lives in hygiene (values are panes, so pane-liveness
+/// reap applies too — unlike runwait's workspace ids).
+pub(crate) type Waiter = (String, std::time::Instant);
 
 pub struct State {
     pub cfg: Cfg,
@@ -40,7 +44,11 @@ pub struct State {
     /// Prompts owed a reply (pane → dest + text), mirrored to jobs.state
     /// so boot re-arms watchers orphaned by a restart.
     pub pending: Mutex<HashMap<String, PendingPrompt>>,
-    pub keywait: Mutex<HashMap<(i64, Option<i64>), String>>,
+    /// Next message in this chat is sent as raw keys to the pane (set by
+    /// the K button). (Pane, armed_at): age expiry in hygiene — stale
+    /// keys executing into a live session is a write that must not fire
+    /// arbitrarily later.
+    pub keywait: Mutex<HashMap<(i64, Option<i64>), Waiter>>,
     /// Next message in this chat runs as a shell command in the armed
     /// workspace (set by the R button). (Workspace, armed_at): values
     /// are workspace ids, never panes — hygiene must expire by AGE, not
@@ -48,8 +56,10 @@ pub struct State {
     /// later as a shell command.
     pub runwait: Mutex<HashMap<(i64, Option<i64>), RunWait>>,
     /// Next message in this chat is typed into the pane's waiting prompt
-    /// (blocked interactive input) + Enter. Set by the ⌨️ button.
-    pub typewait: Mutex<HashMap<(i64, Option<i64>), String>>,
+    /// (blocked interactive input) + Enter. Set by the keyboard button.
+    /// (Pane, armed_at): age expiry in hygiene (generous — answers take
+    /// a while to compose; expiry degrades to normal routing).
+    pub typewait: Mutex<HashMap<(i64, Option<i64>), Waiter>>,
     /// Setup-note stamp per chat (see NAGGED_SECS): time-bounded like
     /// stale notices — an unconfigured group reminds daily, never
     /// forever-mute, never spam.

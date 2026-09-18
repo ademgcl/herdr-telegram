@@ -90,6 +90,7 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
         let _ = fs::create_dir_all(parent);
     }
     let Ok(json) = serde_json::to_string_pretty(s) else {
+        eprintln!("[topics] state serialize failed — in-memory/disk diverging");
         return;
     };
     // Durable tmp+rename: fsync file before rename + dir after, so a
@@ -97,7 +98,11 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    if crate::types::write_private(&tmp, json.as_bytes()).is_ok() {
+    if crate::types::write_private(&tmp, json.as_bytes()).is_err() {
+        eprintln!("[topics] state tmp write failed (disk full?) — in-memory/disk diverging");
+        return;
+    }
+    {
         if let Ok(f) = fs::File::open(&tmp) {
             let _ = f.sync_all();
         }

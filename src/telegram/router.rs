@@ -89,7 +89,12 @@ pub async fn handle_update(s: AppState, u: &Value) {
     }
 
     // User customized topic icon in Telegram: persist so bot never overwrites it.
+    // Same forum gate as renames below: thread ids are small ints that
+    // collide across chats — an icon edit elsewhere must never poison a
+    // mapped pane (customs stick, so the glyph would wedge).
     if let Some((thread, icon)) = crate::handlers::topic_edit::parse_topic_icon_edit(msg)
+        && (chat_type == "supergroup" || chat_type == "group")
+        && s.cfg.forum == Some(chat_id)
         && let Some(pane) = s.topics.pane_of_thread(thread)
     {
         println!("[topics] user customized icon for {pane}: {icon}");

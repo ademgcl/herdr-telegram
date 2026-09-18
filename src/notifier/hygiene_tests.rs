@@ -4,7 +4,9 @@ use crate::{
     jobs::job::Job,
     state::{
         cancel::isolated_state,
-        guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS},
+        guard::{
+            BLOCKOP_STALE_SECS, KEYWAIT_STALE_SECS, MODELOP_STALE_SECS, TYPEWAIT_STALE_SECS,
+        },
     },
 };
 use std::time::{Duration, Instant};
@@ -125,6 +127,31 @@ async fn test_reap_keeps_armed_runwait() {
         Some("w8")
     );
     assert!(!s.runwait.lock().await.contains_key(&(2, None)));
+}
+
+#[tokio::test]
+async fn test_reap_expires_stale_key_type_waiters() {
+    // Armed K/Type waiters must not fire arbitrarily later: age expiry
+    // drops them even on live panes (pane-death reap is separate).
+    // Fresh arms survive; expired ones go even when the pane is live.
+    let (s, _dir) = isolated_state();
+    let now = Instant::now();
+    s.keywait.lock().await.insert(
+        (1, None),
+        ("live:p1".into(), now - Duration::from_secs(KEYWAIT_STALE_SECS + 60)),
+    );
+    s.keywait.lock().await.insert((2, None), ("live:p1".into(), now));
+    s.typewait.lock().await.insert(
+        (3, None),
+        ("live:p1".into(), now - Duration::from_secs(TYPEWAIT_STALE_SECS + 60)),
+    );
+    s.typewait.lock().await.insert((4, None), ("live:p1".into(), now));
+    let mut cache = Some(HashSet::from(["live:p1".to_string()]));
+    reap_orphans(&s, &mut cache).await;
+    assert!(!s.keywait.lock().await.contains_key(&(1, None)));
+    assert!(s.keywait.lock().await.contains_key(&(2, None)));
+    assert!(!s.typewait.lock().await.contains_key(&(3, None)));
+    assert!(s.typewait.lock().await.contains_key(&(4, None)));
 }
 
 #[tokio::test]

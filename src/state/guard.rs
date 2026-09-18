@@ -35,6 +35,16 @@ pub(crate) const MODELOP_STALE_SECS: u64 = 900;
 /// "stuck until restart".
 pub(crate) const RUNWAIT_STALE_SECS: u64 = 900;
 
+/// Armed raw-keys waiter lifetime: stale keys executing into a live
+/// session is the dangerous half of waiter staleness — same bound as
+/// runwait.
+pub(crate) const KEYWAIT_STALE_SECS: u64 = 900;
+
+/// Armed typed-answer waiter lifetime: generous — answers take a while
+/// to compose, and expiry degrades gracefully to normal routing (in a
+/// topic the bare-text path types into blocked panes anyway).
+pub(crate) const TYPEWAIT_STALE_SECS: u64 = 3600;
+
 /// Bounded drop-spin budget (holders release immediately, never across
 /// awaits — contention is microsecond-scale; this is fail-safe, not
 /// load-bearing). Small + `spin_loop` (never `yield_now`/sleep): must

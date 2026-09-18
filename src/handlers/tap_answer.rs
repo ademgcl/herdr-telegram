@@ -48,7 +48,7 @@ pub async fn answer_tap(
         s.typewait
             .lock()
             .await
-            .insert((chat, thread), pane.to_string());
+            .insert((chat, thread), (pane.to_string(), std::time::Instant::now()));
         let mid =
             s.tg.send_msg(
                 chat,
@@ -79,7 +79,7 @@ pub async fn answer_tap(
     // DM shares one (chat,None) key across panes.
     {
         let mut tw = s.typewait.lock().await;
-        if tw.get(&(chat, thread)).map(|p| p == pane).unwrap_or(false) {
+        if tw.get(&(chat, thread)).map(|(p, _)| p == pane).unwrap_or(false) {
             tw.remove(&(chat, thread));
         }
     }

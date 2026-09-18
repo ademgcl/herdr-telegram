@@ -225,8 +225,8 @@ impl State {
     /// /kill would eat the owner's next message as typed input into a
     /// pane that no longer exists.
     pub(crate) async fn clear_waiters(&self, pane: &str) {
-        self.typewait.lock().await.retain(|_, p| p != pane);
-        self.keywait.lock().await.retain(|_, p| p != pane);
+        self.typewait.lock().await.retain(|_, (p, _)| p != pane);
+        self.keywait.lock().await.retain(|_, (p, _)| p != pane);
         // No runwait line: values are workspace ids (never panes) and
         // expiry lives in hygiene — nothing pane-bound to drop here.
     }

@@ -120,14 +120,14 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     if cmd == "/reset" {
         // Own-pane-only like the agent flavor: an arg is refused, never
-        // a cross-pane reset on a typo.
+        // a cross-pane reset on a typo. Spawned: must not stall the pump.
         if !arg.is_empty() {
             s.tg
                 .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
                 .await;
             return;
         }
-        let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
+        super::reset::spawn_single_topic_reset(&s, chat, Some(thread_id), pane.to_string());
         return;
     }
     if cmd == "/read" || cmd == "/output" {

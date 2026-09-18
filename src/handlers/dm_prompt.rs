@@ -8,7 +8,7 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     // Peek first (mirrors topics): a blockop race or failed send must
     // not consume the waiter — the retry is just sending again.
     // Self-healing: a stale corpse evicts instead of bricking answers.
-    let Some(wpane) = s.typewait.lock().await.get(&(chat, None)).cloned() else {
+    let Some(wpane) = s.typewait.lock().await.get(&(chat, None)).map(|(p, _)| p.clone()) else {
         return false;
     };
     if s.block_held(&wpane).await {

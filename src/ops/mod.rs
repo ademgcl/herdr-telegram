@@ -11,6 +11,8 @@ mod launchd;
 mod mask;
 mod proc;
 
+pub(crate) use cmd::rotate_log_if_huge;
+
 use crate::types::Res;
 
 /// Print one display line, secrets masked.

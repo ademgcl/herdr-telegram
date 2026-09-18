@@ -96,7 +96,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.keywait
                 .lock()
                 .await
-                .insert((chat, thread), pane.to_string());
+                .insert((chat, thread), (pane.to_string(), Instant::now()));
             s.set_focus(pane).await;
             s.tg.edit_msg(
                 chat,

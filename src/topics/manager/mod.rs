@@ -9,7 +9,6 @@ use crate::{
 use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
-    time::Instant,
 };
 
 pub struct TopicManager {
@@ -17,7 +16,6 @@ pub struct TopicManager {
     pub(crate) socket: Option<String>,
     pub(crate) storage: TopicStorage,
     pub(crate) tg: TelegramClient,
-    pub(crate) last_title_write: Mutex<HashMap<String, Instant>>,
     pub(crate) last_kind: Mutex<HashMap<String, String>>,
     pub(crate) creating: Mutex<HashSet<String>>,
     pub(crate) probe_cursor: Mutex<usize>,
@@ -52,7 +50,6 @@ impl TopicManager {
             socket,
             storage: TopicStorage::new(),
             tg,
-            last_title_write: Mutex::new(HashMap::new()),
             last_kind: Mutex::new(HashMap::new()),
             creating: Mutex::new(HashSet::new()),
             probe_cursor: Mutex::new(0),
@@ -82,10 +79,6 @@ impl TopicManager {
         if !self.storage.remove_if_thread(pane, thread) {
             return false;
         }
-        self.last_title_write
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(pane);
         // Kind memory dies with the mapping: a remint must re-observe,
         // never inherit a stale flip (and dead panes must not
         // accumulate here unbounded).

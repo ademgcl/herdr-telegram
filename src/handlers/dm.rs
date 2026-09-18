@@ -181,9 +181,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         let s2 = s.clone();
         let target = arg.to_string();
         if !target.is_empty() {
-            tokio::spawn(async move {
-                let _ = super::reset::run_single_topic_reset(&s2, chat, None, &target).await;
-            });
+            super::reset::spawn_single_topic_reset(&s2, chat, None, target);
         } else {
             tokio::spawn(async move { super::reset::run_paced_reset(&s2, chat, None).await });
         }

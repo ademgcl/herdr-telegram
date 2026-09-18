@@ -57,18 +57,32 @@ pub async fn repoint_dest_if_remapped(
     drop(dest);
     // Retire the old-thread card where it lives (live_dest), never the
     // new dest — or the old thread freezes on "working…" while the reply
-    // lands in the new one. Fail-closed: mid without dest drops. Bounded
-    // like the handoff retire — a slow Telegram must not stall settle
-    // past the tick (a miss heals next tick via the slot rules).
-    if let Some(mid) = live_mid.take() {
-        if let Some((lchat, _)) = live_dest.take() {
-            let _ = tokio::time::timeout(
+    // lands in the new one. Fail-closed: mid without dest drops. Take
+    // the slot only on landed/gone — a transient failure (timeout,
+    // flood-wait) keeps it for the new turn to adopt instead of
+    // freezing the old card (same rule as the handoff retire).
+    // Bounded like the handoff retire — a slow Telegram must not stall
+    // settle past the tick (a miss heals next tick via the slot rules).
+    let retire = match (live_mid.as_ref(), live_dest.as_ref()) {
+        (Some(mid), Some((lchat, _))) => {
+            let mid = *mid;
+            let lchat = *lchat;
+            let r = tokio::time::timeout(
                 Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
                 s.tg.try_edit_msg(lchat, mid, "🔄 continued in new topic", None),
             )
             .await;
+            match r {
+                Ok(Ok(())) => true,
+                Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
+                Err(_) => false,
+            }
         }
-    } else {
+        // Fail-closed split (mid without dest): drop without guessing.
+        _ => true,
+    };
+    if retire {
+        live_mid.take();
         live_dest.take();
     }
     // Migrate the durable only when it still holds the pre-migration

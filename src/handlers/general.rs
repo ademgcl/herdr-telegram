@@ -50,7 +50,7 @@ pub(crate) async fn handle_general_forum_message(
     // A race lost to a resume falls through to normal routing below.
     // Peek first (mirrors topics): failures keep the waiter for retry.
     // Self-healing: a stale corpse evicts instead of bricking answers.
-    if let Some(wpane) = s.typewait.lock().await.get(&(chat, thread_id)).cloned() {
+    if let Some(wpane) = s.typewait.lock().await.get(&(chat, thread_id)).map(|(p, _)| p.clone()) {
         if s.block_held(&wpane).await {
             s.tg.send_msg(
                 chat,
@@ -152,9 +152,7 @@ pub(crate) async fn handle_general_forum_message(
         let s2 = s.clone();
         let target = arg.to_string();
         if !target.is_empty() {
-            tokio::spawn(async move {
-                let _ = super::reset::run_single_topic_reset(&s2, chat, thread_id, &target).await;
-            });
+            super::reset::spawn_single_topic_reset(&s2, chat, thread_id, target);
         } else {
             tokio::spawn(async move { super::reset::run_paced_reset(&s2, chat, thread_id).await });
         }
