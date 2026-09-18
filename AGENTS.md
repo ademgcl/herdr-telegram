@@ -12,6 +12,11 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 - Min code, max greatness: smallest diff that fully fixes, zero dead code; A+ or rework.
 - Fail-closed: ambiguous reads/errors → no write, no buzz.
 - No personal identifiers in tracked files/commits; secrets in untracked files only.
+- New command needs: router arm + help + menu scope + README + test, or not at all. Help ≡ router (parity test per surface; only `/start`+`/help` exempt).
+- State grows by split: new map needs expiry + prune.
+- Cards: strip before slow RPC, reconcile every arm; overwrite-only, text untouched; contention silent (no strip).
+- Loop notices get burst guards: time-bounded per-key dedup (pure helper + test), never forever-mute.
+- Single source per string: dup'd literals re-drift.
 
 ## 2. Layout
 
