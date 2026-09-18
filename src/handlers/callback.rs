@@ -109,7 +109,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
         ("R", Some(ws)) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             if !spaces.iter().any(|w| w.id == *ws) {
-                s.tg.edit_msg(chat, msg_id, &format!("workspace {ws} is gone"), None)
+                s.tg.edit_msg(chat, msg_id, &format!("space {ws} is gone"), None)
                     .await;
                 s.forget_target(chat, msg_id).await;
                 return;

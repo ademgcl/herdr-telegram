@@ -108,7 +108,7 @@ pub async fn answer_tap(
             } else {
                 let (q, opts) = live_card(&screen);
                 let text = format!(
-                    "⚠️ that button expired — current dialog:\n\n{}",
+                    "⚠️ that button expired — current question:\n\n{}",
                     blocked_card_text(&q)
                 );
                 let kb = Some(blocked_kb(pane, &opts));
@@ -216,7 +216,7 @@ pub async fn answer_tap(
                         format!("⌨️ sent {sent} — check the pane")
                     } else {
                         format!(
-                            "⚠️ sent {sent} but the dialog still shows — /card for fresh buttons, /esc to dismiss, or answer on the PC"
+                            "⚠️ sent {sent} but the question is still up — /card for fresh buttons, /esc to dismiss, or answer on the PC"
                         )
                     };
                     let mid = s.tg.send_msg(chat, thread, &text, None).await;

@@ -73,7 +73,7 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
         let after = read_screen_visible(socket, pane, 30).await;
         if dialog_stalled(&before, &after) {
             return Err(TypeError::Failed(
-                "text sent but the dialog didn't advance — tap a button instead, or answer on the PC".into(),
+                "text sent but the question didn't advance — tap a button instead, or answer on the PC".into(),
             ));
         }
         // Advanced: stamp NOTHING. The delayed refresh + watchdog post

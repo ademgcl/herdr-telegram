@@ -33,7 +33,7 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
                 s.tg.send_msg(
                     chat,
                     thread,
-                    "⚠️ card failed — try /read, or answer on PC",
+                    "⚠️ card failed — try /read, or answer on the PC",
                     None,
                 )
                 .await;
