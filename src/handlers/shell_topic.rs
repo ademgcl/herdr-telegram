@@ -1,6 +1,6 @@
 /// Message routing for agentless-topic panes: the shell command set.
 /// Bare text runs as a command (any agent binary re-enters by itself). Split
-/// from shell.rs (ops) under the 300-line file cap.
+/// from handlers/shell under the 300-line file cap.
 use crate::{
     handlers::forum::bare_cmd,
     herdr::client::{read_shell_output, send_pane_keys},

@@ -1,4 +1,4 @@
-//! Watcher retire paths for shared state. Split from `jobs` (300-line
+//! Watcher retire paths for shared state. Split from `state` (300-line
 //! file limit): loud user-cancel, quiet pane-death retire, global cancel.
 //! All single-pane retires are last-writer-wins (snapshot + remove-if-same
 //! Arc) and never nest async locks.

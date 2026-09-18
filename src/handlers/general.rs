@@ -22,7 +22,7 @@ pub(crate) async fn handle_general_forum_message(
                    • `/agents` — open spaces & agents control panel\n\
                    • `/spawn <kind> [space]` — spawn a new agent & topic\n\
                     • `/shell [space]` — open a fresh shell pane & topic\n\
-                    • `/pane [space]` — shell tab in this space, stays here\n\
+                    • `/pane [space]` — shell pane in this space, stays here\n\
                     • `/space [name]` — new space + shell topic\n\
                    • `/model` — inside an agent topic: model picker\n\
                    • `/history` — inside an agent topic: recent prompts\n\

@@ -64,8 +64,8 @@ impl TelegramClient {
                 Ok(v) => return Ok(v),
                 Err(e) => {
                     let msg = e.to_string();
-                    if super::errors::topic_missing(&msg)
-                        || super::errors::topic_not_modified(&msg)
+                    if crate::telegram::topic_missing(&msg)
+                        || crate::telegram::topic_not_modified(&msg)
                         || msg.contains("message is not modified")
                         || msg.contains("not enough rights")
                         || msg.contains("bot was blocked")
@@ -128,7 +128,7 @@ impl TelegramClient {
                 {"command": "quit", "description": "drop the agent to a shell (topic/DM)"},
                 {"command": "kill", "description": "close the pane completely (topic/DM)"},
                 {"command": "shell", "description": "open a fresh shell pane"},
-                {"command": "pane", "description": "shell tab in this space, stays here"},
+                {"command": "pane", "description": "shell pane in this space, stays here"},
                 {"command": "split", "description": "sibling shell pane (topic/DM)"},
                 {"command": "read", "description": "recent output of focused agent (topic/DM)"},
                 {"command": "output", "description": "alias of /read with line count (topic/DM)"},

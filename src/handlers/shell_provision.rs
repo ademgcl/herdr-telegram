@@ -64,7 +64,7 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
     open_shell_inner(s, chat, thread, ws, true).await;
 }
 
-/// `/pane [space]`: same opener as a sidecar — new shell tab + topic,
+/// `/pane [space]`: same opener as a sidecar — new shell pane + topic,
 /// card + open-topic button, focus stays where it is (like /split,
 /// unlike /shell). `ws_id` is already resolved.
 async fn open_pane(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str) {

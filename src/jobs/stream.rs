@@ -40,7 +40,7 @@ impl EvStream {
         let mut reader = BufReader::new(reader);
         let mut ack = String::new();
         reader.read_line(&mut ack).await?;
-        if crate::herdr::rpc::ack_rejected(&ack) {
+        if crate::herdr::client::ack_rejected(&ack) {
             return Err(format!("event subscribe rejected: {}", ack.trim()).into());
         }
         Ok(Self { reader })
