@@ -53,6 +53,13 @@ pub async fn settle_books(
     if !s.jobs.lock().await.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
         return;
     }
+    // Final generation re-check at clear time (detached Relaxed loads
+    // above): an identical re-prompt ("continue"×2) landing between the
+    // checks and this clear bumps the epoch without changing the text —
+    // text equality alone would wipe the successor's intent.
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        return;
+    }
     s.clear_pending_if_matches(pane, chat, th, &prompt).await;
     // Re-check the epoch under the map guard with no await after: reuse
     // keeps the SAME Arc (ptr_eq alone cannot tell a successor apart),

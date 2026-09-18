@@ -153,14 +153,18 @@ pub async fn enqueue_prompt(
             // Co-owned prompts remain: watcher and intent stay.
             return;
         }
-        // Nothing owed: retire synchronously (stopped jobs are also
-        // replaced, never reused) so the next enqueue starts clean.
-        // (Without this it finalizes on the untouched screen — the bogus
-        // "(no captured output)" card.) No notify: the watcher exits
-        // silently at its loop top instead of posting "cancelled" for a
-        // retire that was never a user cancel.
+        // Nothing owed: retire the map entry synchronously (stopped jobs
+        // are also replaced, never reused) so the next enqueue starts
+        // clean. (Without this it finalizes on the untouched screen —
+        // the bogus "(no captured output)" card.) Never clear the
+        // durable slot here: this submit recorded nothing, so any intent
+        // present belongs to a racing shell command (shared slot) or a
+        // stale corpse (bounded by the 24h reap) — wiping it eats a
+        // foreign reply. No notify: the watcher exits silently at its
+        // loop top instead of posting "cancelled" for a retire that was
+        // never a user cancel.
         job.mark_stopped();
-        let owned = {
+        {
             let mut map = s.jobs.lock().await;
             if map
                 .get(&pane)
@@ -168,19 +172,12 @@ pub async fn enqueue_prompt(
                 .unwrap_or(false)
             {
                 map.remove(&pane);
-                true
-            } else {
-                false
             }
-        };
-        // Dropped the jobs guard BEFORE the pending lock + disk write
-        // (never nest jobs→pending). Stop our typing now: a parked
-        // watcher (5s tick / 60s backoff) would else type into the void
-        // until it exits — shell-aware (a racing shell submit's pending
-        // keeps its task; an agent successor re-mints via jobs).
-        if owned {
-            s.clear_pending(&pane).await;
         }
+        // Stop our typing now: a parked watcher (5s tick / 60s backoff)
+        // would else type into the void until it exits — shell-aware (a
+        // racing shell submit's pending keeps its task; an agent
+        // successor re-mints via jobs).
         s.stop_shell_typing(&pane).await;
         return;
     }

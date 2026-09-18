@@ -247,7 +247,7 @@ impl State {
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashMap::new()),
             spawnop: Mutex::new(HashMap::new()),
-            spawndone: Mutex::new(HashMap::new()),
+            spawndone: Mutex::new(crate::handlers::callback_spawn::load_spawndone()),
             blocked_card: Mutex::new(HashMap::new()),
             history: Mutex::new(HashMap::new()),
             shell_gen: Mutex::new(HashMap::new()),

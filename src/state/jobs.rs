@@ -220,9 +220,10 @@ impl State {
         self.shell_gen.lock().await.get(pane).copied() == Some(epoch)
     }
 
-    /// Clear the shell intent only for our own generation (same TOCTOU
-    /// as `clear_pending_if_matches`, plus the generation): a resubmit
-    /// racing the send owns the slot now, even byte-identical text.
+    /// Clear the shell intent only for our own generation: text first,
+    /// epoch second (submit order is remember-then-bump), then the
+    /// atomic text check-and-remove — a resubmit racing the send owns
+    /// the slot now, even byte-identical text.
     pub async fn clear_shell_if_matches(
         &self,
         pane: &str,
@@ -231,10 +232,33 @@ impl State {
         prompt: &str,
         epoch: u64,
     ) -> bool {
+        let mine = self
+            .pending
+            .lock()
+            .await
+            .get(pane)
+            .map(|p| p.chat == chat && p.thread == thread && p.prompt == prompt)
+            .unwrap_or(false);
+        if !mine {
+            return false;
+        }
         if !self.shell_epoch_is(pane, epoch).await {
             return false;
         }
         self.clear_pending_if_matches(pane, chat, thread, prompt).await
+    }
+
+    /// Install a shell generation only when the pane has none (boot
+    /// follower): a live submit racing boot owns the slot — stealing
+    /// its epoch would retire both settles and lose the reply. Returns
+    /// the installed generation, or None when a live submit won.
+    pub async fn bump_shell_epoch_if_absent(&self, pane: &str) -> Option<u64> {
+        let mut map = self.shell_gen.lock().await;
+        if map.contains_key(pane) {
+            return None;
+        }
+        map.insert(pane.to_string(), 1);
+        Some(1)
     }
 
     /// End one pane's stall episode (limit alert, stuck timer, absence

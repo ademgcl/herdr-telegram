@@ -133,14 +133,10 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
         super::escape::handle_card_topic(s, chat, thread, pane).await;
         return;
     }
-    // Exclusive waiter: drop sibling run/key waiters for this key so
-    // the next message types instead of running. Never clobber a
-    // waiter armed for a DIFFERENT pane on the same key (DM shares
-    // one (chat,None) key across panes — the next secret text would
-    // type into the wrong session): refuse and keep the first arm.
+    // Refuse BEFORE mutating anything: an armed shell command in the
+    // sibling waiters is live work — dropping it for a refused arm
+    // loses the command and misroutes the next message as a prompt.
     // Same-pane re-arms refresh the instant and proceed.
-    s.runwait.lock().await.remove(&(chat, thread));
-    s.keywait.lock().await.remove(&(chat, thread));
     let occupant = s.typewait.lock().await.get(&(chat, thread)).map(|(p, _)| p.clone());
     if let Some(other) = occupant
         && other != pane
@@ -156,6 +152,10 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
         .await;
         return;
     }
+    // Exclusive waiter: drop sibling run/key waiters for this key so
+    // the next message types instead of running.
+    s.runwait.lock().await.remove(&(chat, thread));
+    s.keywait.lock().await.remove(&(chat, thread));
     s.typewait.lock().await.insert(
         (chat, thread),
         (pane.to_string(), std::time::Instant::now()),

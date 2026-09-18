@@ -3,6 +3,45 @@ use crate::{
     state::AppState,
     ui::{agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb, ws_label},
 };
+use std::{collections::HashMap, time::Instant};
+
+/// Disk copy of the spawn dedup (`spawn:<chat>:<msg>` per line): the
+/// offset acks AFTER handling, so a crash between mint and ack replays
+/// the tap inside STALE_SECS — RAM-only dedup would double-mint
+/// billable resources. Loaded at boot with every entry counting as
+/// fresh (over-dedup fails safe: the owner retaps a fresh card with a
+/// fresh key). Rewritten on every stamp from live RAM keys, so stale
+/// disk entries vanish after the first post-boot spawn (no hygiene).
+fn spawn_done_path() -> std::path::PathBuf {
+    crate::state::state_dir().join("spawn.done")
+}
+
+/// Boot load for `State.spawndone` (see module docs on freshness).
+pub(crate) fn load_spawndone() -> HashMap<String, Instant> {
+    let now = Instant::now();
+    std::fs::read_to_string(spawn_done_path())
+        .map(|txt| {
+            txt.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(|l| (l.to_string(), now))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Stamp one minted key (RAM + disk, single lock, disk after).
+pub(crate) async fn stamp_spawndone(s: &AppState, key: String) {
+    let keys: Vec<String> = {
+        let mut done = s.spawndone.lock().await;
+        done.insert(key, Instant::now());
+        done.keys().cloned().collect()
+    };
+    // Same dedup set the next boot loads: stale lines never survive a
+    // post-boot stamp (only live RAM keys persist).
+    let body = keys.join("\n");
+    let _ = crate::types::write_private(&spawn_done_path(), body.as_bytes());
+}
 
 /// True when a billable resource was minted (workspace / agent): the
 /// caller stamps the persistent spawn dedup so a sequential retap stands

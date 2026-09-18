@@ -37,41 +37,6 @@ pub(crate) async fn panes_once(
     }
 }
 
-/// DM-mode shell flip: no topics exist, but `status` still drives the
-/// limit scanner — a PC-side quit would keep its last agent status
-/// forever and quota words in ordinary shell output would buzz false
-/// ❗ cards. Flip shell-reused panes (status + episode only — no topic,
-/// no report); dead panes stay for `reap_orphans` below. Split from
-/// `reconcile` (300-line file limit).
-pub(crate) async fn flip_dm_shells(
-    s: &AppState,
-    live_panes: &HashSet<String>,
-    pane_list: &mut Option<HashSet<String>>,
-) {
-    let missing: Vec<String> = {
-        let st = s.status.lock().await;
-        st.keys()
-            .filter(|p| !live_panes.contains(*p) && st.get(*p).map(|v| v != "shell").unwrap_or(false))
-            .cloned()
-            .collect()
-    };
-    if missing.is_empty() {
-        return;
-    }
-    let Some(panes) = panes_once(s, pane_list).await else {
-        return;
-    };
-    if panes.is_empty() {
-        return;
-    }
-    for pane in missing {
-        if panes.contains(&pane) {
-            s.status.lock().await.insert(pane.clone(), "shell".to_string());
-            s.clear_limit_episode(&pane).await;
-        }
-    }
-}
-
 /// Reap mode-independent orphans: DM-mode prompts can orphan jobs,
 /// durable intent, and per-pane maps for externally-closed panes (no
 /// topic mapping exists to trigger the forum close flow). Live panes
@@ -162,20 +127,41 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // the just-cleared dead panes, so ∪ would keep
             // everything clear_pane missed.
             if reaping {
-                for pane in &known {
-                    if !live.contains(pane) {
-                        // Job-only retire: the durable intent is
-                        // boot-recover's reporter for dead panes
-                        // ("pane gone before reply arrived") — a loud
-                        // retire would wipe it the same tick the
-                        // forum branch above restored it, and a
-                        // "✋ cancelled" card on a dead pane is noise.
-                        // Waiters still die via clear_pane below, maps
-                        // via the retains; lingering intent is bounded
-                        // by recover's 24h stale drop.
-                        s.cancel_job_only_for(pane).await;
-                        s.clear_pane(pane).await;
+                // Double-confirm suspected deaths: a single `list_panes`
+                // miss retires the job + clears the pane, leaving the
+                // intent watcherless until restart. Re-fetch fresh (cache
+                // bypass) and retire only panes missing twice. A failed
+                // or empty confirm falls back to the first affirmative
+                // read (Err/empty FIRST reads already no-op above/below).
+                let dying: Vec<String> = known
+                    .iter()
+                    .filter(|p| !live.contains(*p))
+                    .cloned()
+                    .collect();
+                let dying = if dying.is_empty() {
+                    dying
+                } else {
+                    let first = live.clone();
+                    *pane_list = None;
+                    match panes_once(s, pane_list).await {
+                        Some(fresh) if !fresh.is_empty() => {
+                            dying.into_iter().filter(|p| !fresh.contains(p)).collect()
+                        }
+                        _ => {
+                            eprintln!("[reconcile] confirm read failed, using first read");
+                            *pane_list = Some(first);
+                            dying
+                        }
                     }
+                };
+                for pane in &dying {
+                    // Job-only retire: the durable intent is boot-recover's
+                    // reporter for dead panes — a loud retire would wipe it
+                    // the same tick the forum branch restored it. Waiters
+                    // die via clear_pane, maps via the retains; lingering
+                    // intent is bounded by the 24h stale drop.
+                    s.cancel_job_only_for(pane).await;
+                    s.clear_pane(pane).await;
                 }
             }
             s.seen.lock().await.retain(|p, _| live.contains(p));

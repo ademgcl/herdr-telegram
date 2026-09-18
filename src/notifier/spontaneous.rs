@@ -24,11 +24,13 @@ pub(crate) async fn post_spontaneous_card(
 ) -> bool {
     // NOTE: deliberately NOT touching focus here — background pushes must
     // never hijack where the owner's next plain-text message gets delivered.
+    // DM mode has no topics: the reply hint names the DM, not a topic.
     let text = match settled {
-        "blocked" => format!(
+        "blocked" if s.cfg.forum.is_some() => format!(
             "{} {body}\n↩️ reply or type in topic to answer",
             emoji("blocked")
         ),
+        "blocked" => format!("{} {body}\n↩️ reply here to answer", emoji("blocked")),
         _ => body.to_string(),
     };
     let parts = chunks(&text, MAX_MSG_UNITS);

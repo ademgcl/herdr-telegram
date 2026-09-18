@@ -6,10 +6,11 @@ use crate::{
     handlers::reset::is_resetting,
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
     handlers::titles::sync_titles_with,
-    herdr::client::{list_agents, list_workspaces, read_shell_output},
+    herdr::client::{get_agent, list_agents, list_workspaces, read_shell_output},
     herdr::labels::{pane_facts, tab_labels},
     jobs::finalize::report,
-    notifier::hygiene::{flip_dm_shells, panes_once, reap_orphans},
+    notifier::hygiene::{panes_once, reap_orphans},
+    notifier::hygiene_flip::flip_dm_shells,
     notifier::limits::scan_limits,
     notifier::status::observe_status,
     state::AppState,
@@ -71,6 +72,21 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
             .filter(|p| !live_panes.contains(*p))
             .cloned()
             .collect();
+        // Vanish confirm: a single `list_agents` dropout (Ok but
+        // partial) must not flip a live agent to shell (false "quit"
+        // card + watcher retire). `get_agent` re-proves each suspect —
+        // only the still-missing proceed. Suspects-only, so the steady
+        // state costs zero extra RPCs.
+        let mut confirmed = Vec::with_capacity(missing.len());
+        for pane in missing {
+            match get_agent(&s.cfg.socket, &pane).await {
+                Ok(_) => {
+                    live_panes.insert(pane);
+                }
+                Err(_) => confirmed.push(pane),
+            }
+        }
+        let missing = confirmed;
         if !missing.is_empty() {
             match panes_once(s, &mut pane_list).await {
                 Some(panes) if panes.is_empty() => {

@@ -166,10 +166,12 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     }
     let (out, settled) = await_shell_settle(s, pane, before, chat, thread).await;
     // /cancel during the settle clears the intent: a stale card must not
-    // post for cancelled work. Generation-guarded too: an identical
-    // re-command owns the slot now even when the text matches.
-    if !s.shell_epoch_is(pane, epoch).await
-        || !s.pending_matches(pane, chat, thread, cmd).await
+    // post for cancelled work. Generation-guarded too: submit order is
+    // remember-then-bump, so check pending first and epoch last — any
+    // resubmit that remembered necessarily bumped after, and the epoch
+    // re-check catches even a byte-identical re-command.
+    if !s.pending_matches(pane, chat, thread, cmd).await
+        || !s.shell_epoch_is(pane, epoch).await
     {
         s.stop_shell_typing(pane).await;
         return;
@@ -207,8 +209,8 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     for _ in 0..SHELL_FOLLOW_UP_ROUNDS {
         let (next, done) = await_shell_settle(s, pane, &settle_base, chat, thread).await;
         settle_base = next.clone();
-        if !s.shell_epoch_is(pane, epoch).await
-            || !s.pending_matches(pane, chat, thread, cmd).await
+        if !s.pending_matches(pane, chat, thread, cmd).await
+            || !s.shell_epoch_is(pane, epoch).await
         {
             s.stop_shell_typing(pane).await;
             return;
@@ -243,8 +245,8 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     // command — and rare (agent flips retire above long before this).
     // Flip-guarded like the loop: the last round may have passed the
     // check as shell just before the flip landed.
-    if !s.shell_epoch_is(pane, epoch).await
-        || !s.pending_matches(pane, chat, thread, cmd).await
+    if !s.pending_matches(pane, chat, thread, cmd).await
+        || !s.shell_epoch_is(pane, epoch).await
     {
         s.stop_shell_typing(pane).await;
         return;

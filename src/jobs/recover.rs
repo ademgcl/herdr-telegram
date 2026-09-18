@@ -77,15 +77,23 @@ pub async fn recover_pending(s: &AppState) {
                                     // like the foreground path.
                                     println!("[recover] shell quiet, keeping {pane}");
                                     let (s2, pane2, pp2) = (s.clone(), pane.clone(), pp.clone());
+                                    // Ownership check BEFORE the follower: a
+                                    // live resubmit racing boot owns the slot
+                                    // (its bump would be stolen by ours —
+                                    // both settles retiring loses the reply).
+                                    if !s2.pending_matches(&pane2, pp2.chat, pp2.thread, &pp2.prompt).await {
+                                        continue;
+                                    }
+                                    let Some(epoch) = s2.bump_shell_epoch_if_absent(&pane2).await
+                                    else {
+                                        continue;
+                                    };
                                     tokio::spawn(async move {
                                         let before =
                                             crate::handlers::shell_common::shell_snapshot(
                                                 &s2, &pane2,
                                             )
                                             .await;
-                                        // Own the slot for this follower: a
-                                        // live resubmit racing boot owns it.
-                                        let epoch = s2.bump_shell_epoch(&pane2).await;
                                         crate::handlers::shell_common::settle_report_shell(
                                             &s2,
                                             crate::handlers::shell_common::ShellSettle {

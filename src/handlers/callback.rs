@@ -107,7 +107,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                     None => return,
                 };
             if super::callback_spawn::handle_new_space(&s, chat, msg_id, thread).await {
-                s.spawndone.lock().await.insert(key, std::time::Instant::now());
+                super::callback_spawn::stamp_spawndone(&s, key).await;
             }
         }
         ("k", Some(r)) => {
@@ -132,7 +132,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                 None => super::callback_spawn::handle_spawn(&s, chat, msg_id, r, None).await,
             };
             if minted {
-                s.spawndone.lock().await.insert(key, std::time::Instant::now());
+                super::callback_spawn::stamp_spawndone(&s, key).await;
             }
         }
         ("K", Some(pane)) => {
