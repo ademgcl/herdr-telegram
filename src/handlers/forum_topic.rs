@@ -247,13 +247,17 @@ pub(crate) async fn handle_topic_agent_message(
                 enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
             }
             Err(e) => {
-                // In-flight tap owns the card; a failed card post falls
-                // back to text so the error is never silent. Self-healing
-                // peek: a stale corpse evicts instead of refusing rescue.
+                // In-flight tap owns the card; the reason always shows
+                // (a takes-option refuse with only a fresh card leaves
+                // the user guessing why) — then fresh buttons when the
+                // card lands, text fallback when it doesn't.
                 if s.block_held(pane).await {
                     s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None).await;
-                } else if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
-                    s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
+                } else {
+                    s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None).await;
+                    if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
+                        s.tg.send_msg(chat, Some(thread_id), crate::ui::CARD_FAILED_PC, None).await;
+                    }
                 }
             }
         }

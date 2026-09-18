@@ -38,7 +38,8 @@ pub(crate) async fn post_spontaneous_card(
         body.len()
     );
 
-    let mut delivered = false;
+    let mut landed = 0usize;
+    let mut expected = 0usize;
     if let Some(forum) = s.cfg.forum {
         // Liveness before sync: never re-mint a dead pane's topic.
         // Fail-open on Err/empty (a herdr blip must not eat replies).
@@ -70,13 +71,14 @@ pub(crate) async fn post_spontaneous_card(
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if let Some(m) = mid {
-                    delivered = true;
+                    landed += 1;
                     if settled == "done" {
                         let _ = s.tg.set_reaction(forum, m, Some("✅")).await;
                     }
                 }
                 s.remember(forum, mid, pane).await;
             }
+            expected = parts.len();
         }
     } else {
         // DM immediate: no sync RPC, check immediately before sends.
@@ -93,7 +95,7 @@ pub(crate) async fn post_spontaneous_card(
             for part in &parts {
                 let mid = s.tg.send_msg(*id, None, part, None).await;
                 if let Some(m) = mid {
-                    delivered = true;
+                    landed += 1;
                     if settled == "done" {
                         let _ = s.tg.set_reaction(*id, m, Some("✅")).await;
                     }
@@ -101,12 +103,18 @@ pub(crate) async fn post_spontaneous_card(
                 s.remember(*id, mid, pane).await;
             }
         }
+        expected = parts.len() * s.cfg.owners.len();
     }
-    if delivered {
+    // All-or-nothing: a partial multi-part push must not stamp
+    // last_done (it would suppress the next settle) — the retry
+    // reposts the full body. Single-part keeps the old any-landed
+    // semantics via the same count check.
+    let complete = expected > 0 && landed >= expected;
+    if complete {
         s.last_done
             .lock()
             .await
             .insert(pane.to_string(), std::time::Instant::now());
     }
-    delivered
+    complete
 }

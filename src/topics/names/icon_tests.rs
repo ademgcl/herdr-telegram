@@ -47,10 +47,11 @@ fn test_icon_needs_update() {
         icon_needs_update(Some("5417915203100613993"), "agy"),
         Some("5309832892262654231")
     );
-    // Current, missing (creation path owns), unknown, and user
-    // customs → no write.
+    // Current, unknown, and user customs → no write. Missing heals
+    // (a create-time icon RPC failure must not keep the default glyph
+    // forever — sync_inner/creation both converge on it).
     assert_eq!(icon_needs_update(Some("5417915203100613993"), "shell"), None);
-    assert_eq!(icon_needs_update(None, "agy"), None);
+    assert_eq!(icon_needs_update(None, "agy"), Some("5309832892262654231"));
     assert_eq!(icon_needs_update(Some("5350554349074391003"), "?"), None);
     assert_eq!(icon_needs_update(Some("1234567890"), "agy"), None);
     assert_eq!(icon_needs_update(Some(""), "agy"), None);

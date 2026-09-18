@@ -98,8 +98,6 @@ pub async fn enqueue_prompt(
     sustain.abort();
     if let Err(e) = submit_res {
         println!("[jobs] submit error: {e}");
-        // Owed = prior prompts only (this one was never recorded).
-        let owed = *job.pending.lock().await;
         // The submitter always hears the truth about their own submit,
         // even when older work stays covered by the running watcher.
         let msg = e.to_string();
@@ -146,7 +144,12 @@ pub async fn enqueue_prompt(
             )
             .await;
         }
-        if owed > 0 {
+        // Live re-read (never the pre-report snapshot): a concurrent
+        // successful submit landing during the report sends above bumped
+        // pending — retiring on a stale owed==0 would wipe its cover +
+        // durable intent (silent prompt loss). This one was never
+        // recorded, so live pending is prior prompts only.
+        if *job.pending.lock().await > 0 {
             // Co-owned prompts remain: watcher and intent stay.
             return;
         }

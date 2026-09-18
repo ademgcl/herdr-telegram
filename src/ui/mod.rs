@@ -52,3 +52,7 @@ pub fn typed_ack(pane: &str) -> String {
 /// landing across an agent→shell flip: fail-closed, never run as shell).
 pub const STALE_TYPEWAIT_SHELL: &str =
     "that answer was armed for a question, but this is now a shell — re-send as a shell command if intended";
+
+/// Single source for the card-failure fallback (failed type + failed
+/// repost: answer on the PC). Dup'd literals re-drift — use this.
+pub const CARD_FAILED_PC: &str = "card failed too — answer on the PC";

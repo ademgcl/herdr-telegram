@@ -165,7 +165,10 @@ async fn send_with(
     // Track the location too: a PC-side answer strips it (buttons must
     // not outlive the dialog they answered).
     if let Some(m) = mid {
-        s.blocked_sig.lock().await.insert(pane.to_string(), q);
+        // Stamp the full dialog_sig (question + options, never bare q):
+        // refresh compares sigs, so a bare-q stamp never matches an
+        // option dialog and reposts every tick (spam).
+        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(screen));
         surfaces::repoint_card(s, pane, chat, m).await;
         let _ = s.tg.set_reaction(chat, m, Some("❗")).await;
     }

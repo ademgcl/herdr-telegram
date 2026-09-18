@@ -28,10 +28,10 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
         // Fail-closed: a "/" answer must become a prompt, never DM
         // control (a literal "/kill" as an answer must not kill).
         Err(super::tap::TypeError::Resumed) => {
-            s.typewait.lock().await.remove(&(chat, None));
             if text.trim_start().starts_with('/') {
                 match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
                     Ok(a) => {
+                        s.typewait.lock().await.remove(&(chat, None));
                         enqueue_prompt(
                             crate::state::AppState::clone(s),
                             chat,
@@ -42,12 +42,20 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
                         .await;
                     }
                     Err(_) => {
+                        // Unreadable re-read after a resume: keep the
+                        // waiter (never consume on ambiguous read) so the
+                        // retry re-routes instead of dropping the answer.
+                        s.typewait.lock().await.insert(
+                            (chat, None),
+                            (wpane, std::time::Instant::now()),
+                        );
                         s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                             .await;
                     }
                 }
                 return true;
             }
+            s.typewait.lock().await.remove(&(chat, None));
             false
         }
         Err(e) => {
@@ -137,13 +145,15 @@ pub(crate) async fn handle_bare_prompt(
                 .await;
             }
             Err(e) => {
-                // In-flight tap owns the card; a failed card post falls
-                // back to text so the error is never silent. Self-healing
-                // peek: a stale corpse evicts instead of refusing rescue.
+                // Same why-plus-card rule as topics: the reason always
+                // shows, then fresh buttons (or text fallback).
                 if s.block_held(&row.pane).await {
                     s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None).await;
-                } else if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
-                    s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e} — card failed too, answer on the PC"), None).await;
+                } else {
+                    s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await;
+                    if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
+                        s.tg.send_msg(chat, None, crate::ui::CARD_FAILED_PC, None).await;
+                    }
                 }
             }
         }

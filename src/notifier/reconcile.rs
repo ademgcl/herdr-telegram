@@ -25,6 +25,12 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         return;
     }
     let Ok(rows) = list_agents(&s.cfg.socket).await else {
+        // Degraded herdr must not stall hygiene: age-prunes (waiters,
+        // guards, notice stamps, 24h intent) run without any RPC, and
+        // the live-wipe half safely no-ops on a failed pane list.
+        // (Reset still skips above — it owns topic lifecycle.)
+        let mut pane_list: Option<HashSet<String>> = None;
+        reap_orphans(s, &mut pane_list).await;
         return;
     };
 

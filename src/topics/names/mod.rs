@@ -116,9 +116,10 @@ pub fn is_bot_icon(id: &str) -> bool {
 }
 
 /// Icon to write when the pane's kind is `kind` and the stored icon is
-/// `stored`: `Some` only for bot-owned stale icons (kind flip since the
-/// last write) — `None` covers current, missing (creation path owns
-/// those), `?`/empty kinds, and user customs.
+/// `stored`: `Some` for bot-owned stale icons (kind flip since the last
+/// write) AND for missing icons with a known kind (a create-time icon
+/// RPC failure must heal on the next tick, not keep the default glyph
+/// forever) — `None` covers current, `?`/empty kinds, and user customs.
 pub fn icon_needs_update(stored: Option<&str>, kind: &str) -> Option<&'static str> {
     let k = kind.trim().to_lowercase();
     if k.is_empty() || k == "?" {
@@ -126,6 +127,7 @@ pub fn icon_needs_update(stored: Option<&str>, kind: &str) -> Option<&'static st
     }
     let want = context_icon_emoji_id(&k);
     match stored {
+        None => Some(want),
         Some(cur) if is_bot_icon(cur) && cur != want => Some(want),
         _ => None,
     }

@@ -70,6 +70,10 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
             "that question takes an option — tap a button, or /card for fresh buttons".into(),
         ));
     }
+    // Strip before the slow send (cards rule: strip before slow RPC):
+    // buttons stay live across the 1.5s send otherwise, and a double
+    // type contends silent on blockop — text untouched, markup-only.
+    crate::handlers::dialog::strip_tracked(s, pane).await;
     if let Err(e) = send_pane_input(socket, pane, text).await {
         return Err(TypeError::Failed(e.to_string()));
     }

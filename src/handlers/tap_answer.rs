@@ -1,7 +1,7 @@
 use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, live_card, parse_options, winner_lines},
+    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card, parse_options, winner_lines},
     herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
@@ -160,12 +160,12 @@ pub async fn answer_tap(
                     .await
                     .is_ok()
                 {
-                    s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                    s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
                     s.remember(chat, Some(msg_id), pane).await;
                     // This card is current — strip sibling surfaces.
                     crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
                 } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
-                    s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                    s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
                     s.remember(chat, Some(mid), pane).await;
                     // Settle the fresh surface; the tapped card may be
                     // untracked (pre-restart post) — strip it too.
@@ -200,7 +200,7 @@ pub async fn answer_tap(
                         .is_ok()
                     {
                         let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
-                        s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
                         s.remember(chat, Some(msg_id), pane).await;
                         // This card is current — strip sibling surfaces.
                         crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
@@ -215,7 +215,7 @@ pub async fn answer_tap(
                         .await
                     {
                         let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
-                        s.blocked_sig.lock().await.insert(pane.to_string(), q);
+                        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
                         s.remember(chat, Some(mid), pane).await;
                         // Settle the fresh surface; the tapped card may be
                         // untracked (pre-restart post) — strip it too.

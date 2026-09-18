@@ -45,6 +45,14 @@ pub async fn settle_books(
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         return;
     }
+    // Successor-Arc guard (no await under it): a re-arm minted a NEW job
+    // while the submit RPC was in flight — our books landed on the
+    // retired Arc and the durable slot now belongs to the successor. An
+    // identical re-prompt ("continue"×2) matches textually, so text
+    // equality alone would wipe the live intent (silent reply loss).
+    if !s.jobs.lock().await.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
+        return;
+    }
     s.clear_pending_if_matches(pane, chat, th, &prompt).await;
     // Re-check the epoch under the map guard with no await after: reuse
     // keeps the SAME Arc (ptr_eq alone cannot tell a successor apart),
