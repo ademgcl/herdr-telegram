@@ -36,6 +36,7 @@ pub mod title_rules;
 pub mod titles;
 pub mod titles_space;
 pub mod topic_edit;
+pub mod topic_read;
 
 pub use callback::handle_callback;
 pub use dm::handle_dm_message;

@@ -155,4 +155,5 @@ pub async fn enqueue_prompt(
     s.set_focus(&pane).await;
     s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
         .await;
+    s.push_history(&pane, &req.text).await;
 }

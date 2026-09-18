@@ -133,6 +133,7 @@ impl TelegramClient {
                 {"command": "read", "description": "recent output of focused agent (topic/DM)"},
                 {"command": "output", "description": "alias of /read with line count (topic/DM)"},
                 {"command": "status", "description": "agent card for focused agent (topic/DM)"},
+                {"command": "history", "description": "recent prompts you sent (topic/DM)"},
                 {"command": "cancel", "description": "abort pending prompts / keys-mode"},
                 {"command": "reset", "description": "paced reset of all topics (forum)"},
                 {"command": "card", "description": "re-post question + buttons (topic/DM)"},

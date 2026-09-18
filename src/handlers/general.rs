@@ -25,6 +25,7 @@ pub(crate) async fn handle_general_forum_message(
                     • `/pane [space]` — shell tab in this space, stays here\n\
                     • `/space [name]` — new space + shell topic\n\
                    • `/model` — inside an agent topic: model picker\n\
+                   • `/history` — inside an agent topic: recent prompts\n\
                    • `/card` `/esc` — inside an agent topic: fresh buttons / guarded dismiss\n\
                    • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
                     • `/cancel [all|<pane>]` — abort focused job(s), all = everything\n\n\
@@ -183,6 +184,17 @@ pub(crate) async fn handle_general_forum_message(
             chat,
             thread_id,
             "open an agent's topic and run `/model` there — each topic is one agent.",
+            None,
+        )
+        .await;
+        return;
+    }
+
+    if cmd == "/history" {
+        s.tg.send_msg(
+            chat,
+            thread_id,
+            "open an agent's topic and run `/history` there — each topic is one agent.",
             None,
         )
         .await;

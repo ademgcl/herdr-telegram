@@ -144,6 +144,24 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/history" {
+        match super::target::dm_pane(&s, &rows, "", &reply_pane).await {
+            Some(pane) => {
+                crate::state::history::send_history(&s, chat, None, &pane, arg).await;
+            }
+            None => {
+                s.tg.send_msg(
+                    chat,
+                    None,
+                    "who? reply to an agent card or tap one in /agents",
+                    None,
+                )
+                .await;
+            }
+        }
+        return;
+    }
+
     // Parity with General: bare resets all topics (paced), a target
     // resets one. Forum-only underneath — DM-only answers gracefully.
     if cmd == "/reset" || cmd == "/reset_topics" {

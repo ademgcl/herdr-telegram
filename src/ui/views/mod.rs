@@ -211,7 +211,8 @@ pub fn help_text() -> &'static str {
      /read     recent output of focused agent (/output too)\n\
      /card     re-post the question + buttons (never stuck)\n\
      /esc      guarded Esc: dismiss, blocked-only\n\
-     /status   refresh agent status card\n\
+      /status   refresh agent status card\n\
+      /history [n]  prompts you sent here (cross-device catch-up)\n\
       /reset    paced reset of all topics (re-sync from Herdr)\n\
       /cancel [all|<pane>] abort focused job(s), all = everything / exit keys-mode\n\
      /keys <pane> y enter   send raw keys\n\n\
@@ -225,6 +226,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
         "🤖 **{kind}** topic [{pane}]\n\n\
          • Plain text sends a prompt to this agent\n\
          • `/read` or `/output` — fetch recent terminal output\n\
+         • `/history [n]` — recent prompts you sent here\n\
          • `/model` — current model + free-Zen picker (opencode)\n\
          • `/quit` — drop the agent to a shell (busy confirms)\n\
          • `/kill` — close this pane completely (confirms first)\n\
@@ -249,6 +251,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • Plain text runs as a shell command\n\
          • `opencode`, `claude`, … — run one to re-enter as agent\n\
          • `/read` — recent shell output (`/output` too)\n\
+         • `/history [n]` — recent shell commands\n\
          • `/esc` — send Esc (vim toggles mode)\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
           • `/space [name]` — new space + shell topic\n\

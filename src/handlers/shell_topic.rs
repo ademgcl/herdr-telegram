@@ -116,6 +116,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         }
         return;
     }
+    if cmd == "/history" {
+        crate::state::history::send_history(&s, chat, Some(thread_id), pane, arg).await;
+        return;
+    }
     if cmd == "/keys" {
         if arg.is_empty() {
             s.tg.send_msg(chat, Some(thread_id), "usage: `/keys y enter`", None)

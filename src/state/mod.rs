@@ -16,7 +16,9 @@ use tokio::sync::Mutex;
 
 pub(crate) mod cancel;
 pub(crate) mod guard;
+pub(crate) mod history;
 mod jobs;
+mod targets;
 
 pub use self::guard::OpGuard;
 
@@ -88,6 +90,9 @@ pub struct State {
     /// chat (forum once, each owner DM once). A PC-side answer strips
     /// these (buttons must not outlive the dialog); resolve consumes.
     pub blocked_card: Mutex<HashMap<String, Vec<(i64, i64)>>>,
+    /// Owner→pane texts for `/history` catch-up (RAM-only: prompts
+    /// carry secrets, never disk). Bounded per pane, pruned with it.
+    pub history: Mutex<HashMap<String, std::collections::VecDeque<String>>>,
     /// Active background typing indicator tasks for working panes.
     pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
@@ -205,57 +210,9 @@ impl State {
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashMap::new()),
             blocked_card: Mutex::new(HashMap::new()),
+            history: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
         }))
-    }
-
-    pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
-        let Some(msg_id) = msg_id else { return };
-        self.topics.record_msg(pane, msg_id);
-        // Lock order (never inverted anywhere): torder → targets.
-        let mut ord = self.torder.lock().await;
-        let mut map = self.targets.lock().await;
-        while map.len() >= 512 {
-            match ord.pop_front() {
-                Some(old) => {
-                    map.remove(&old);
-                }
-                None => break,
-            }
-        }
-        if map.insert((chat, msg_id), pane.to_string()).is_none() {
-            ord.push_back((chat, msg_id));
-        }
-    }
-
-    /// Retire one card target (same lock order): `targets.remove` alone
-    /// leaks the `torder` entry until the 512-cap overflow.
-    pub async fn forget_target(&self, chat: i64, msg_id: i64) {
-        let mut ord = self.torder.lock().await;
-        let mut map = self.targets.lock().await;
-        map.remove(&(chat, msg_id));
-        ord.retain(|k| *k != (chat, msg_id));
-    }
-
-    pub async fn set_focus(&self, pane: &str) {
-        // Memory first, disk second: concurrent focuses must converge
-        // disk vs RAM on the same winner (disk-first can resurrect loser).
-        *self.focus.lock().await = Some(pane.to_string());
-        let file = Self::focus_file();
-        let mut tmp = file.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        if crate::types::write_private(&tmp, pane.as_bytes()).is_ok() {
-            if std::fs::rename(&tmp, &file).is_err() {
-                eprintln!("[state] focus rename failed (disk full?)");
-            }
-        } else {
-            eprintln!("[state] focus write failed (disk full?)");
-        }
-    }
-
-    pub async fn get_focus(&self) -> Option<String> {
-        self.focus.lock().await.clone()
     }
 
     /// Drop armed input waiters for a dead pane: a typewait surviving
@@ -285,6 +242,7 @@ impl State {
         self.clear_limit_episode(pane).await;
         self.blocked_sig.lock().await.remove(pane);
         self.blocked_card.lock().await.remove(pane);
+        self.history.lock().await.remove(pane);
         // Fresh guards die with the pane (dead/kill/reset/shell-flip is
         // an abort, not a flap): pane names are reminted, so preserving
         // a fresh guard would brick the successor until stale. A single

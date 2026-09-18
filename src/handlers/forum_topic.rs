@@ -1,7 +1,7 @@
 //! Agent-topic message routing: commands + bare-message prompts.
 //! Split from `forum` (300-line file limit).
 use crate::{
-    herdr::client::{get_agent, list_agents, list_panes, read_agent_output, send_agent_keys},
+    herdr::client::{get_agent, list_agents, list_panes, send_agent_keys},
     jobs::enqueue_prompt,
     state::AppState,
     ui::{agent_card_kb, build_agent_card_text, topic_help_text},
@@ -180,21 +180,12 @@ pub(crate) async fn handle_topic_agent_message(
     // (Typewait is consumed above, before commands.)
 
     if cmd == "/read" || cmd == "/output" {
-        let lines = arg.parse::<u32>().map(|n| n.clamp(1, 400)).unwrap_or(80);
-        match read_agent_output(&s.cfg.socket, pane, lines).await {
-            Ok(out) => {
-                let body = if out.is_empty() {
-                    "(no output)".into()
-                } else {
-                    out
-                };
-                s.tg.send_msg(chat, Some(thread_id), &body, None).await;
-            }
-            Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
-                    .await;
-            }
-        }
+        super::topic_read::handle_read_agent(&s, chat, thread_id, pane, arg).await;
+        return;
+    }
+
+    if cmd == "/history" {
+        crate::state::history::send_history(&s, chat, Some(thread_id), pane, arg).await;
         return;
     }
 
