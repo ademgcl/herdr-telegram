@@ -156,6 +156,38 @@ impl TelegramClient {
         .await?;
         Ok(())
     }
+
+    /// Fire-and-forget menu registration: the menu persists server-side
+    /// once set, so a blip at boot must not fail the boot (fail-dead =
+    /// launchd crash-loop for the whole outage). Boot continues
+    /// immediately; this converges in the background with capped backoff.
+    /// A 401/Unauthorized is a dead token, not dead net: log FATAL and
+    /// stop (retrying a certain-401 forever only burns log) — but never
+    /// exit: that would skip the offset flush and replay recent messages
+    /// as duplicate submits on reboot. Fix .env + restart.
+    pub fn spawn_menu_sync(self) {
+        tokio::spawn(async move {
+            let mut wait = 5u64;
+            loop {
+                match self.set_my_commands().await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        let msg = self.redact(&e.to_string());
+                        if msg.contains("401") || msg.contains("Unauthorized") {
+                            eprintln!(
+                                "[telegram] FATAL: setMyCommands Unauthorized — token invalid, fix .env + restart ({msg})"
+                            );
+                            break;
+                        }
+                        // Redact: error text can carry the token in URL form.
+                        eprintln!("[telegram] setMyCommands failed, retry in {wait}s: {msg}");
+                        tokio::time::sleep(Duration::from_secs(wait)).await;
+                        wait = (wait * 2).min(300);
+                    }
+                }
+            }
+        });
+    }
 }
 
 #[cfg(test)]

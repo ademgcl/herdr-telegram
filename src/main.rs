@@ -112,31 +112,10 @@ async fn main() -> Res<()> {
         println!("[telegram] operating in direct message mode");
     }
 
-    // Register Telegram menu commands (retry: a blip here must not
-    // fail the boot, but a dead token must — fail fast after retries).
-    let mut menu_err = String::new();
-    for attempt in 1..=3 {
-        match s.tg.set_my_commands().await {
-            Ok(()) => {
-                menu_err.clear();
-                break;
-            }
-            Err(e) => {
-                // Redact like the poll loop: error text can carry the
-                // token in URL form.
-                menu_err = s.tg.redact(&e.to_string());
-                eprintln!("[telegram] setMyCommands failed (attempt {attempt}/3): {menu_err}");
-                if attempt < 3 {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-        }
-    }
-    if !menu_err.is_empty() {
-        return Err(
-            format!("telegram setMyCommands failed (is the token valid?): {menu_err}").into(),
-        );
-    }
+    // Register Telegram menu commands without failing the boot: the
+    // menu persists server-side once set, so an outage at boot must not
+    // crash-loop the process under launchd — converge in background.
+    s.tg.clone().spawn_menu_sync();
 
     // Re-arm prompt watchers orphaned by a restart FIRST (replies would
     // else be lost), then seed agent status without alert noise. Order
@@ -199,6 +178,9 @@ async fn main() -> Res<()> {
     // a double-scan (seed reconcile just ran above).
     watchdog_tick.tick().await;
 
+    // Consecutive poll failures for capped backoff (instant failures
+    // like DNS-down must not hot-loop the log every 5s all outage).
+    let mut poll_fails: u32 = 0;
     loop {
         tokio::select! {
             _ = shutdown_signal() => {
@@ -215,6 +197,7 @@ async fn main() -> Res<()> {
             } => {
                 match updates {
                     Ok(list) => {
+                        poll_fails = 0;
                         if !list.is_empty() {
                             println!("[tg] poll ok: {} update(s)", list.len());
                         }
@@ -243,13 +226,15 @@ async fn main() -> Res<()> {
                         }
                     }
                     Err(e) => {
+                        poll_fails = poll_fails.saturating_add(1);
                         let msg = s.tg.redact(&e.to_string());
                         if msg.contains("Conflict") {
                             eprintln!("[tg] poll conflict (overlap), backing off 30s: {msg}");
                             tokio::time::sleep(Duration::from_secs(30)).await;
                         } else {
-                            eprintln!("[tg] poll failed: {msg}");
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            let wait = crate::telegram::polling::poll_backoff_secs(poll_fails);
+                            eprintln!("[tg] poll failed (retry in {wait}s): {msg}");
+                            tokio::time::sleep(Duration::from_secs(wait)).await;
                         }
                     }
                 }
