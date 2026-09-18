@@ -75,6 +75,16 @@ pub async fn run_single_topic_reset(
     };
     let census = tab_census(&facts);
 
+    // Fail-closed like the reads above: a mistyped pane must refuse,
+    // never mint a ghost topic for a name herdr never reported.
+    if !facts.contains_key(&pane) {
+        let msg = format!("⚠️ no such pane `{pane}` — see /agents");
+        if chat != 0 {
+            s.tg.send_msg(chat, thread_id, &msg, None).await;
+        }
+        return Err(msg.into());
+    }
+
     let had_job = s.cancel_jobs_for(&pane).await;
 
     let (kind, status, raw_title) = if let Ok(agent) = get_agent(&s.cfg.socket, &pane).await {

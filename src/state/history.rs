@@ -64,19 +64,14 @@ impl State {
     }
 }
 
-/// Clamp a `/history [n]` arg: default 5, hard cap HISTORY_CAP.
-/// Single source — every surface parses through here. Pure for tests.
-pub fn parse_history_n(arg: &str) -> usize {
-    arg.parse::<usize>()
-        .map(|n| n.clamp(1, HISTORY_CAP))
-        .unwrap_or(5)
-}
-
-/// `/history [n]` shared responder for every topic flavor + DM: last
-/// prompts to this pane, oldest→newest. Clone under the lock, format
-/// + send outside it.
-pub async fn send_history(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, arg: &str) {
-    let body = s.history_render(pane, parse_history_n(arg)).await;
+/// `/history` shared responder for every topic flavor + DM: last
+/// prompts to this pane, oldest→newest. Takes the validated count
+/// (callers parse via `parse_count`, already 1..=HISTORY_CAP — passing
+/// raw `arg` here re-parsed leniently and diverged, e.g. `-5`
+/// validated 1 but served 5). Clone under the lock, format + send
+/// outside it.
+pub async fn send_history(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, n: usize) {
+    let body = s.history_render(pane, n).await;
     s.tg.send_msg(chat, thread, &body, None).await;
 }
 
@@ -106,14 +101,5 @@ mod tests {
         assert_eq!(history_text(&l, 2), "1. b\n2. c");
         assert_eq!(history_text(&l, 0), "1. c");
         assert_eq!(history_text(&l, 99), "1. a\n2. b\n3. c");
-    }
-
-    #[test]
-    fn test_parse_history_n_defaults_clamps_and_caps() {
-        assert_eq!(parse_history_n(""), 5);
-        assert_eq!(parse_history_n("nope"), 5);
-        assert_eq!(parse_history_n("3"), 3);
-        assert_eq!(parse_history_n("0"), 1);
-        assert_eq!(parse_history_n("99"), HISTORY_CAP);
     }
 }

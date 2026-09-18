@@ -2,7 +2,7 @@ use super::forum::bare_cmd;
 use crate::{
     herdr::client::{list_agents, list_workspaces, spawn_agent},
     state::AppState,
-    ui::{build_menu_text, main_menu_kb, ws_label},
+    ui::{build_menu_text, general_help_text, main_menu_kb, ws_label},
 };
 
 pub(crate) async fn handle_general_forum_message(
@@ -18,19 +18,7 @@ pub(crate) async fn handle_general_forum_message(
     let cmd = bare_cmd(raw_cmd);
 
     if cmd == "/start" || cmd == "/help" {
-        let msg = "🤖 **Herdr Telegram Bot**\n\n\
-                   • `/agents` — open spaces & agents control panel\n\
-                   • `/spawn <kind> [space]` — spawn a new agent & topic\n\
-                    • `/shell [space]` — open a fresh shell pane & topic\n\
-                    • `/pane [space]` — shell pane in this space, stays here\n\
-                    • `/space [name]` — new space + shell topic\n\
-                   • `/model` — inside an agent topic: model picker\n\
-                   • `/history` — inside an agent topic: recent prompts\n\
-                   • `/card` `/esc` — inside an agent topic: fresh buttons / guarded dismiss\n\
-                   • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
-                    • `/cancel [all|<pane>]` — abort focused job(s), all = everything\n\n\
-                   💡 Each active agent has its own dedicated topic in this group! Switch to an agent's topic to chat with it directly.";
-        s.tg.send_msg(chat, thread_id, msg, None).await;
+        s.tg.send_msg(chat, thread_id, general_help_text(), None).await;
         return;
     }
 
@@ -217,7 +205,19 @@ pub(crate) async fn handle_general_forum_message(
         return;
     }
 
-    if cmd == "/reset" || cmd == "/reset_topics" {
+    // Topic/DM-scoped commands redirect (they need a pane context —
+    // same pattern as the `/model` redirect above, one arm for all).
+    if matches!(
+        cmd,
+        "/quit" | "/kill" | "/split" | "/read" | "/output" | "/status" | "/keys"
+    ) {
+        s.tg
+            .send_msg(chat, thread_id, crate::ui::scope_text::REDIRECT_TOPIC_SCOPED, None)
+            .await;
+        return;
+    }
+
+    if cmd == "/reset" {
         let s2 = s.clone();
         let target = arg.to_string();
         if !target.is_empty() {

@@ -114,33 +114,43 @@ impl TelegramClient {
         }
     }
 
+    /// Global menu table: (command, description). Single source for the
+    /// setMyCommands payload and its scope test. Scope tags live in the
+    /// descriptions: untagged = responds on every surface (full function
+    /// or redirect/refusal guidance), `(topic/DM)` = full function there
+    /// with a General redirect, `(forum)`-free: reset is paced-everywhere
+    /// with per-topic behavior inside topics (see description).
+    pub(crate) const MENU_COMMANDS: &[(&str, &str)] = &[
+        ("start", "how to drive agents from here"),
+        ("agents", "open control panel (spaces + agents)"),
+        ("spawn", "spawn a new agent: /spawn <kind> [space]"),
+        ("space", "new space + shell topic"),
+        ("model", "current model + free-Zen picker (topic/DM)"),
+        ("quit", "drop the agent to a shell (topic/DM)"),
+        ("kill", "close the pane completely (topic/DM)"),
+        ("shell", "open a fresh shell pane"),
+        ("pane", "shell pane in this space, stays here"),
+        ("split", "sibling shell pane (topic/DM)"),
+        ("read", "recent output of focused agent (topic/DM)"),
+        ("output", "alias of /read with line count (topic/DM)"),
+        ("status", "agent card for focused agent (topic/DM)"),
+        ("history", "recent prompts you sent (topic/DM)"),
+        ("cancel", "abort pending prompts / keys-mode"),
+        ("reset", "reset topics (paced all; per-topic inside topics)"),
+        ("card", "re-post question + buttons (topic/DM)"),
+        ("esc", "guarded Esc dismiss, blocked-only (topic/DM)"),
+        ("keys", "/keys <pane> y enter — send raw keys (topic/DM)"),
+        ("help", "how to drive agents from here"),
+    ];
+
     pub async fn set_my_commands(&self) -> Res<()> {
+        let commands: Vec<Value> = TelegramClient::MENU_COMMANDS
+            .iter()
+            .map(|(command, description)| json!({"command": command, "description": description}))
+            .collect();
         self.call(
             "setMyCommands",
-            json!({"commands": [
-                // Menu is global: entries that fail in General carry a
-                // (topic/DM) scope tag instead of staying hidden.
-                {"command": "start", "description": "how to drive agents from here"},
-                {"command": "agents", "description": "open control panel (spaces + agents)"},
-                {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
-                {"command": "space", "description": "new space + shell topic"},
-                {"command": "model", "description": "current model + free-Zen picker (topic/DM)"},
-                {"command": "quit", "description": "drop the agent to a shell (topic/DM)"},
-                {"command": "kill", "description": "close the pane completely (topic/DM)"},
-                {"command": "shell", "description": "open a fresh shell pane"},
-                {"command": "pane", "description": "shell pane in this space, stays here"},
-                {"command": "split", "description": "sibling shell pane (topic/DM)"},
-                {"command": "read", "description": "recent output of focused agent (topic/DM)"},
-                {"command": "output", "description": "alias of /read with line count (topic/DM)"},
-                {"command": "status", "description": "agent card for focused agent (topic/DM)"},
-                {"command": "history", "description": "recent prompts you sent (topic/DM)"},
-                {"command": "cancel", "description": "abort pending prompts / keys-mode"},
-                {"command": "reset", "description": "paced reset of all topics (forum)"},
-                {"command": "card", "description": "re-post question + buttons (topic/DM)"},
-                {"command": "esc", "description": "guarded Esc dismiss, blocked-only (topic/DM)"},
-                {"command": "keys", "description": "/keys <pane> y enter — send raw keys (topic/DM)"},
-                {"command": "help", "description": "how to drive agents from here"},
-            ]}),
+            json!({"commands": commands}),
             Duration::from_secs(15),
         )
         .await?;
@@ -184,5 +194,37 @@ mod tests {
         );
         assert_eq!(TelegramClient::retry_after("connection reset"), None);
         assert_eq!(TelegramClient::retry_after("retry after many"), None);
+    }
+
+    #[test]
+    fn test_menu_names_tags_and_no_alias() {
+        // Scope contract (not prose): every menu name, its tag shape, and
+        // the deleted alias staying absent. Tags = full-function scope;
+        // untagged = responds on every surface (full or guidance).
+        // (topic/DM)-tagged: full function there + General redirect.
+        let tagged = [
+            "model", "quit", "kill", "split", "read", "output", "status", "history",
+            "card", "esc", "keys",
+        ];
+        // Global: full, redirect, or refusal on every surface.
+        let global = [
+            "start", "agents", "spawn", "space", "shell", "pane", "cancel", "help",
+        ];
+        let names: Vec<&str> = TelegramClient::MENU_COMMANDS.iter().map(|(c, _)| *c).collect();
+        assert_eq!(names.len(), tagged.len() + global.len() + 1, "menu grew?");
+        for cmd in tagged {
+            let desc = TelegramClient::MENU_COMMANDS.iter().find(|(c, _)| *c == cmd).unwrap().1;
+            assert!(desc.contains("(topic/DM)"), "{cmd} lost its scope tag");
+        }
+        for cmd in global {
+            let desc = TelegramClient::MENU_COMMANDS.iter().find(|(c, _)| *c == cmd).unwrap().1;
+            assert!(!desc.contains("(topic/DM)"), "{cmd} gained a scope tag");
+        }
+        let reset = TelegramClient::MENU_COMMANDS.iter().find(|(c, _)| *c == "reset").unwrap().1;
+        assert!(reset.contains("paced"), "reset lost its paced marker");
+        assert!(
+            !TelegramClient::MENU_COMMANDS.iter().any(|(c, _)| *c == "reset_topics"),
+            "deleted alias resurrected in menu"
+        );
     }
 }

@@ -3,7 +3,10 @@ use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output, send_agent_keys},
     state::AppState,
     types::AgentRow,
-    ui::{agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb},
+    ui::{
+        agent_card_kb, build_agent_card_text, build_menu_text, main_menu_kb,
+        scope_text::{READ_CAP, TOPIC_READ_DEFAULT},
+    },
 };
 
 pub(crate) async fn handle_agents(s: &AppState, chat: i64, rows: &[AgentRow]) {
@@ -88,14 +91,16 @@ pub(crate) async fn handle_read(
         Some((head, tail)) => match tail.parse::<i64>() {
             Ok(n) if resolve_target(rows, Some(arg)).is_none() => {
                 let head = head.trim();
-                let count = n.clamp(1, 400) as u32;
+                let count = n.clamp(1, READ_CAP as i64) as u32;
                 (if head.is_empty() { None } else { Some(head) }, count)
             }
-            _ => (Some(arg), 80),
+            _ => (Some(arg), TOPIC_READ_DEFAULT),
         },
         None => match arg.parse::<i64>() {
-            Ok(n) if resolve_target(rows, Some(arg)).is_none() => (None, n.clamp(1, 400) as u32),
-            _ => (if arg.is_empty() { None } else { Some(arg) }, 80),
+            Ok(n) if resolve_target(rows, Some(arg)).is_none() => {
+                (None, n.clamp(1, READ_CAP as i64) as u32)
+            }
+            _ => (if arg.is_empty() { None } else { Some(arg) }, TOPIC_READ_DEFAULT),
         },
     };
     // Corpse reply with exactly one live agent: the sole-agent shortcut

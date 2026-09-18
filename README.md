@@ -38,9 +38,9 @@ launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop before manual runs —
 
 ## Use
 
-- General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/pane [space]` `/model` (use in topic) `/start` `/reset` (all topics) `/cancel` `/help`
-- Agent topic: plain text = prompt. `/read` `/output` `/model` `/quit` `/kill` `/keys` `/status` `/shell` `/pane [space]` `/space` `/split` `/card` `/esc` `/cancel` `/reset` (this topic) `/history [n]` `/help`
-- Shell topic: plain text = shell input; `/esc` sends a raw Esc. No agent here, so `/card`, `/model` and `/quit` refuse. No `/shell` — use `/pane`; everything else matches the agent list (see `/help`).
+- General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/pane [space]` `/model` (use in topic) `/start` `/reset` (all topics) `/cancel` `/help` — topic/DM commands (`/quit` `/kill` `/split` `/read` `/output` `/status` `/keys`) redirect here with guidance.
+- Agent topic: plain text = prompt. `/read [n]` `/output [n]` `/model` `/quit` `/kill` `/keys` `/status` `/shell` `/pane [space]` `/space` `/split` `/card` `/esc` `/cancel` `/reset` (this topic, bare only) `/history [n]` `/help` (+ `/start` shows help; `/agents` `/spawn` redirect to General/DM).
+- Shell topic: plain text = shell input; `/esc` sends a raw Esc. No agent here, so `/card`, `/model` and `/quit` refuse; no `/shell` — use `/pane`; `/agents` `/spawn` redirect to General/DM; everything else matches the agent list (see `/help`).
 - `/space [name]` creates a space and opens its shell topic — works in any topic.
 - `/spawn opencode` in General opens its topic. DMs take the full set (reply picks the agent).
 - No buttons and stuck? `/card` re-posts the card; `/esc` dismisses blocked dialogs.

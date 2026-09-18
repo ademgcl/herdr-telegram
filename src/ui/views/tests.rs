@@ -50,6 +50,100 @@ fn test_dm_help_lists_every_dm_command() {
     assert!(!help.contains("[workspace]"), "DM help must not use [workspace]");
 }
 
+/// Backtick-fenced `/commands` inside a help text — the documented set
+/// for bidirectional Help≡router checks (first token only, so
+/// "`/read [n]`" counts as /read).
+fn fenced_cmds(help: &str) -> std::collections::HashSet<String> {
+    help.split('`')
+        .skip(1)
+        .step_by(2)
+        .filter_map(|s| s.split_whitespace().next())
+        .filter(|w| w.starts_with('/'))
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric() && c != '/' && c != '_')
+                .to_string()
+        })
+        .collect()
+}
+
+/// Both directions with one explicit exemption: every router arm
+/// documented (no silent commands), nothing documented without an arm
+/// (no dead ends). Exemption: /space works via the forum.rs
+/// pre-dispatch intercept (no per-file arm). (/start+/help are escape
+/// hatches — skipped in arm lists where unlisted by design.)
+fn assert_parity(help: &str, arms: &[&str], surface: &str) {
+    let documented = fenced_cmds(help);
+    let mut armed: std::collections::HashSet<String> =
+        arms.iter().map(|s| s.to_string()).collect();
+    armed.insert("/space".to_string());
+    for cmd in &armed {
+        assert!(documented.contains(cmd), "{surface} help hides {cmd}");
+    }
+    for cmd in documented {
+        assert!(armed.contains(&cmd), "{surface} help lists unarmed {cmd}");
+    }
+}
+
+#[test]
+fn test_topic_help_matches_topic_router() {
+    // Arms in forum_topic.rs (+ /space intercept; /help never lists
+    // itself — AGENTS.md-exempt escape hatch).
+    let help = topic_help_text("w1:p1", "opencode");
+    assert_parity(
+        &help,
+        &[
+            "/start", "/agents", "/spawn", "/reset", "/cancel", "/card",
+            "/esc", "/quit", "/kill", "/split", "/pane", "/shell", "/read",
+            "/output", "/history", "/keys", "/status", "/model",
+        ],
+        "topic",
+    );
+}
+
+#[test]
+fn test_shell_help_matches_shell_router() {
+    // Arms in shell_topic.rs (+ /space intercept); refuses count as arms.
+    let help = shell_help_text("w1:p1");
+    assert_parity(
+        &help,
+        &[
+            "/start", "/agents", "/spawn", "/shell", "/reset", "/quit",
+            "/kill", "/split", "/pane", "/cancel", "/card", "/esc", "/read",
+            "/output", "/history", "/keys", "/status", "/model",
+        ],
+        "shell",
+    );
+}
+
+#[test]
+fn test_general_help_matches_general_router() {
+    // Arms in general.rs (+ /space intercept); redirect arms count.
+    // (/start + /help unlisted by design — escape hatches.)
+    assert_parity(
+        general_help_text(),
+        &[
+            "/agents", "/spawn", "/cancel", "/card", "/esc", "/model", "/history",
+            "/shell", "/pane", "/reset", "/quit", "/kill", "/split", "/read",
+            "/output", "/status", "/keys",
+        ],
+        "general",
+    );
+}
+
+#[test]
+fn test_dm_help_matches_dm_router() {
+    // Arms in dm.rs (+ /space arm, listed like the rest here).
+    assert_parity(
+        help_text(),
+        &[
+            "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell",
+            "/pane", "/split", "/read", "/output", "/card", "/esc", "/status",
+            "/history", "/reset", "/cancel", "/keys",
+        ],
+        "dm",
+    );
+}
+
 #[test]
 fn test_ws_label() {
     let spaces = vec![

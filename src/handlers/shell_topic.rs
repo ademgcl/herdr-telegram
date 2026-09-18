@@ -5,7 +5,13 @@ use crate::{
     handlers::forum::bare_cmd,
     herdr::client::{read_shell_output, send_pane_keys},
     state::AppState,
-    ui::shell_help_text,
+    ui::{
+        scope_text::{
+            READ_CAP, SHELL_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC,
+            USAGE_RESET_TOPIC, parse_count, redirect_general_dm,
+        },
+        shell_help_text,
+    },
 };
 
 pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &str, text: &str) {
@@ -20,12 +26,39 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     // forever, so drop it on entry.
     s.typewait.lock().await.remove(&(chat, Some(thread_id)));
 
-    if cmd == "/help" {
+    if cmd == "/help" || cmd == "/start" {
         s.tg.send_msg(chat, Some(thread_id), &shell_help_text(pane), None)
             .await;
         return;
     }
+    // General/DM-only commands redirect (see forum_topic): text
+    // guidance, no action.
+    if cmd == "/agents" || cmd == "/spawn" {
+        s.tg
+            .send_msg(chat, Some(thread_id), &redirect_general_dm(cmd), None)
+            .await;
+        return;
+    }
+    if cmd == "/shell" {
+        s.tg
+            .send_msg(
+                chat,
+                Some(thread_id),
+                "already in a shell topic — `/pane` for a second shell here.",
+                None,
+            )
+            .await;
+        return;
+    }
     if cmd == "/reset" {
+        // Own-pane-only like the agent flavor: an arg is refused, never
+        // a cross-pane reset on a typo.
+        if !arg.is_empty() {
+            s.tg
+                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
+                .await;
+            return;
+        }
         let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
         return;
     }
@@ -99,7 +132,12 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if cmd == "/read" || cmd == "/output" {
-        let lines = arg.parse::<u32>().map(|n| n.clamp(1, 400)).unwrap_or(60);
+        // Own-pane-only with a count (see forum_topic): pane-shaped args
+        // refuse instead of parsing as a count.
+        let Some(lines) = parse_count(arg, SHELL_READ_DEFAULT, READ_CAP) else {
+            s.tg.send_msg(chat, Some(thread_id), USAGE_READ_TOPIC, None).await;
+            return;
+        };
         match read_shell_output(&s.cfg.socket, pane, lines).await {
             Ok(out) => {
                 let body = if out.trim().is_empty() {
@@ -117,13 +155,29 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if cmd == "/history" {
-        crate::state::history::send_history(&s, chat, Some(thread_id), pane, arg).await;
+        // Counts only (see forum_topic): foreign text was silently
+        // defaulting to this pane's last 5 — refuse instead.
+        match parse_count(arg, 5, crate::state::history::HISTORY_CAP as u32) {
+            Some(n) => {
+                crate::state::history::send_history(&s, chat, Some(thread_id), pane, n as usize)
+                    .await;
+            }
+            None => {
+                s.tg.send_msg(chat, Some(thread_id), USAGE_HISTORY_TOPIC, None).await;
+            }
+        }
         return;
     }
     if cmd == "/keys" {
         if arg.is_empty() {
-            s.tg.send_msg(chat, Some(thread_id), "usage: `/keys y enter`", None)
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::scope_text::USAGE_KEYS_BARE, None)
                 .await;
+            return;
+        }
+        // Pane-shaped first tokens refuse (see topic_keys): they were
+        // typed as keystrokes into the live shell.
+        if let Some(usage) = super::topic_keys::guard_keys_first_token(&s, arg).await {
+            s.tg.send_msg(chat, Some(thread_id), &usage, None).await;
             return;
         }
         let keys: Vec<&str> = arg.split_whitespace().collect();

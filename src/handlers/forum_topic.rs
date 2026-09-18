@@ -1,13 +1,17 @@
 //! Agent-topic message routing: commands + bare-message prompts.
 //! Split from `forum` (300-line file limit).
 use crate::{
-    herdr::client::{get_agent, list_agents, list_panes, send_agent_keys},
+    herdr::client::{get_agent, list_agents, list_panes},
     jobs::enqueue_prompt,
     state::AppState,
-    ui::{agent_card_kb, build_agent_card_text, topic_help_text},
+    ui::{
+        agent_card_kb, build_agent_card_text,
+        scope_text::{READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC, parse_count, redirect_general_dm},
+        topic_help_text,
+    },
 };
 
-use super::forum::bare_cmd;
+use super::{forum::bare_cmd, topic_keys::handle_topic_keys_agent};
 
 pub(crate) async fn handle_topic_agent_message(
     s: AppState,
@@ -31,7 +35,7 @@ pub(crate) async fn handle_topic_agent_message(
         let live = list_panes(&s.cfg.socket).await.map(|l| l.contains(&pane.to_string())).unwrap_or(true);
         let agent = list_agents(&s.cfg.socket).await.map(|a| a.iter().any(|r| r.pane == pane)).unwrap_or(true);
         if live && agent {
-            s.tg.send_msg(chat, Some(thread_id), "⚠️ herdr status unreadable — try again", None).await;
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::scope_text::HERDR_RETRY, None).await;
             return;
         }
         super::shell_topic::handle_shell_topic(s, chat, thread_id, pane, text).await;
@@ -47,7 +51,7 @@ pub(crate) async fn handle_topic_agent_message(
         text.chars().count()
     );
 
-    if cmd == "/help" {
+    if cmd == "/help" || cmd == "/start" {
         s.tg.send_msg(
             chat,
             Some(thread_id),
@@ -58,7 +62,24 @@ pub(crate) async fn handle_topic_agent_message(
         return;
     }
 
+    // General/DM-only commands redirect (topics serve their own agent):
+    // text guidance, no action (General's redirect precedent).
+    if cmd == "/agents" || cmd == "/spawn" {
+        s.tg
+            .send_msg(chat, Some(thread_id), &redirect_general_dm(cmd), None)
+            .await;
+        return;
+    }
+
     if cmd == "/reset" {
+        // Own-pane-only: an arg names another pane — refuse (a typo must
+        // never reset the wrong pane).
+        if !arg.is_empty() {
+            s.tg
+                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
+                .await;
+            return;
+        }
         let _ = super::reset::run_single_topic_reset(&s, chat, Some(thread_id), pane).await;
         return;
     }
@@ -180,45 +201,34 @@ pub(crate) async fn handle_topic_agent_message(
     // (Typewait is consumed above, before commands.)
 
     if cmd == "/read" || cmd == "/output" {
-        super::topic_read::handle_read_agent(&s, chat, thread_id, pane, arg).await;
+        // Own-pane-only with a count: pane-shaped args refuse instead of
+        // parsing as a count (that misread served this pane on a typo).
+        match parse_count(arg, TOPIC_READ_DEFAULT, READ_CAP) {
+            Some(n) => super::topic_read::handle_read_agent(&s, chat, thread_id, pane, n).await,
+            None => {
+                s.tg.send_msg(chat, Some(thread_id), USAGE_READ_TOPIC, None).await;
+            }
+        }
         return;
     }
 
     if cmd == "/history" {
-        crate::state::history::send_history(&s, chat, Some(thread_id), pane, arg).await;
+        // Counts only: foreign text was silently defaulting to this
+        // pane's last 5 — refuse instead (validated count flows through).
+        match parse_count(arg, 5, crate::state::history::HISTORY_CAP as u32) {
+            Some(n) => {
+                crate::state::history::send_history(&s, chat, Some(thread_id), pane, n as usize)
+                    .await;
+            }
+            None => {
+                s.tg.send_msg(chat, Some(thread_id), USAGE_HISTORY_TOPIC, None).await;
+            }
+        }
         return;
     }
 
     if cmd == "/keys" {
-        if arg.is_empty() {
-            s.tg.send_msg(chat, Some(thread_id), "usage: `/keys y enter`", None)
-                .await;
-            return;
-        }
-        let keys: Vec<&str> = arg.split_whitespace().collect();
-        // Never interleave with an owned key sequence: a tap answer
-        // (blockop) or model switch (modelop) in flight owns the pane's
-        // input until it lands. Self-healing peeks: stale evicts.
-        if s.block_held(pane).await || s.model_held(pane).await {
-            s.tg.send_msg(
-                chat,
-                Some(thread_id),
-                "tap/model op in flight — wait a beat",
-                None,
-            )
-            .await;
-            return;
-        }
-        match send_agent_keys(&s.cfg.socket, pane, &keys).await {
-            Ok(_) => {
-                s.tg.send_msg(chat, Some(thread_id), "⌨️ keys sent", None)
-                    .await;
-            }
-            Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
-                    .await;
-            }
-        }
+        handle_topic_keys_agent(&s, chat, thread_id, pane, arg).await;
         return;
     }
 

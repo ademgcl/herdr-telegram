@@ -145,9 +145,22 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd == "/history" {
+        // Counts only (topics share the rule): a pane-shaped arg was
+        // silently dropped to a default-count read of the focus pane.
+        // The validated count flows through (never re-parsed downstream).
+        let Some(n) = crate::ui::scope_text::parse_count(
+            arg,
+            5,
+            crate::state::history::HISTORY_CAP as u32,
+        ) else {
+            s.tg
+                .send_msg(chat, None, crate::ui::scope_text::USAGE_HISTORY_DM, None)
+                .await;
+            return;
+        };
         match super::target::dm_pane(&s, &rows, "", &reply_pane).await {
             Some(pane) => {
-                crate::state::history::send_history(&s, chat, None, &pane, arg).await;
+                crate::state::history::send_history(&s, chat, None, &pane, n as usize).await;
             }
             None => {
                 s.tg.send_msg(
@@ -164,7 +177,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
 
     // Parity with General: bare resets all topics (paced), a target
     // resets one. Forum-only underneath — DM-only answers gracefully.
-    if cmd == "/reset" || cmd == "/reset_topics" {
+    if cmd == "/reset" {
         let s2 = s.clone();
         let target = arg.to_string();
         if !target.is_empty() {
