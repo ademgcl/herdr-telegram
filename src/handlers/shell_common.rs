@@ -1,6 +1,10 @@
-use crate::{herdr::client::read_shell_output, jobs::stream::delta, state::AppState, ui::tail_fit};
+use super::shell_settle::await_shell_settle;
+use crate::{jobs::stream::delta, state::AppState, ui::tail_fit};
 use serde_json::Value;
-use tokio::time::{Duration, sleep};
+
+// Re-exported for the submit paths (`shell_run`, boot-recover): the
+// snapshot reader lives in `shell_settle` with its poll-loop consumer.
+pub(crate) use super::shell_settle::shell_snapshot;
 
 /// Pure reply body so tests cover the shape without I/O.
 pub fn format_shell_reply(cmd: &str, output: &str) -> String {
@@ -10,67 +14,6 @@ pub fn format_shell_reply(cmd: &str, output: &str) -> String {
         output.trim().to_string()
     };
     format!("$ {cmd}\n{body}")
-}
-
-/// Read one shell snapshot (best effort).
-pub(crate) async fn shell_snapshot(s: &AppState, pane: &str) -> String {
-    read_shell_output(&s.cfg.socket, pane, 60)
-        .await
-        .unwrap_or_default()
-}
-
-/// Wait for the shell to settle after submitting: poll until two
-/// consecutive reads agree AND differ from the pre-send screen (or ~15s).
-/// A fixed sleep races slow shell startups (pyenv rehash etc.) and slow
-/// commands — the read then catches the typed echo with no output yet.
-/// Returns whether the screen stabilized: callers must say so when it
-/// did not, never present partial output as final. Aborts early when the
-/// pane's pending intent vanishes: /cancel then waits out at most one
-/// sleep plus one in-flight herdr read (no hard 1s bound — reads can
-/// take 30s+, but the abort itself adds no extra budget). The early
-/// return carries whatever was last read (empty on the first round);
-/// callers gate on the intent anyway, so it always stays silent.
-/// Sustains the 1:1 typing indicator inside the 1s poll loop (spawned,
-/// never awaited inline so a slow send never delays settle reads):
-/// without this any command over ~5s goes dark past the ≈5s expiry,
-/// and DM shells have no typing task to backstop them at all.
-pub(crate) async fn await_shell_settle(
-    s: &AppState,
-    pane: &str,
-    before: &str,
-    chat: i64,
-    thread: Option<i64>,
-) -> (String, bool) {
-    let mut last = String::new();
-    let mut stable = 0u32;
-    let mut cur = String::new();
-    for i in 0..15u32 {
-        // Direct dest touch on the shared typing cadence (well inside
-        // the ≈5s expiry).
-        if i.is_multiple_of(crate::state::TYPING_TICK_SECS as u32) {
-            let tg = s.tg.clone();
-            tokio::spawn(async move {
-                tg.typing(chat, thread).await;
-            });
-        }
-        sleep(Duration::from_secs(1)).await;
-        // Prompt abort, not a settle verdict: the caller gates on the
-        // intent anyway — this just skips dead sleeping.
-        if !s.pending.lock().await.contains_key(pane) {
-            return (cur, false);
-        }
-        cur = shell_snapshot(s, pane).await;
-        if cur != before && cur == last {
-            stable += 1;
-            if stable >= 2 {
-                return (cur, true);
-            }
-        } else {
-            stable = 0;
-        }
-        last = cur.clone();
-    }
-    (cur, false)
 }
 
 pub fn shell_card_text(pane: &str) -> String {
@@ -199,9 +142,16 @@ pub(crate) async fn settle_report_shell(
     kb: Option<Value>,
 ) {
     // 1:1 working↔typing: shells run up to ~5 min with no watcher.
-    // `start_typing` no-ops in DM; the settle loop touches dest directly.
+    // `start_typing` no-ops in DM; the instant touch below plus the
+    // settle loop's sustain task cover both (spawned, never awaited —
+    // a slow send must not delay the first settle read).
     s.start_typing(pane).await;
-    s.tg.typing(chat, thread).await;
+    {
+        let tg = s.tg.clone();
+        tokio::spawn(async move {
+            tg.typing(chat, thread).await;
+        });
+    }
     let (out, settled) = await_shell_settle(s, pane, before, chat, thread).await;
     // /cancel during the settle clears the intent: a stale card must not
     // post for cancelled work.
@@ -222,7 +172,9 @@ pub(crate) async fn settle_report_shell(
     s.remember(chat, mid, pane).await;
     if mid.is_none() {
         // Delivery-tracked: the intent survives for boot-recover instead
-        // of eating the reply. No follow-up without a first card.
+        // of eating the reply. No follow-up without a first card — and
+        // no typing either: typing ↔ live worker, and nothing sustains
+        // one now (boot-recover re-arms both together on restart).
         s.stop_shell_typing(pane).await;
         return;
     }

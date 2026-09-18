@@ -1,11 +1,28 @@
 //! Telegram send-message params + silent/buzz sends.
 use super::client::TelegramClient;
-use crate::{types::Res, ui::fit_msg};
+use crate::{
+    types::{Res, LIVE_RPC_TIMEOUT_SECS},
+    ui::fit_msg,
+};
 use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Telegram animated message effect ID for fire/flame (urgent alerts: blocked, limit stall).
 pub const EFFECT_FIRE: &str = "5104841245755180586";
+
+/// True when an edit error means the card is definitely gone or
+/// uneditable (deleted topic/thread, removed message, lost rights) —
+/// callers may post a fresh card without duplicating a live one.
+/// Any other error (timeout, flood-wait exhaustion, network) leaves
+/// the card plausibly alive: callers must keep the slot and retry the
+/// edit, never send fresh. Single source for the fatal match below.
+pub fn edit_gone(msg: &str) -> bool {
+    super::errors::topic_missing(msg)
+        || msg.contains("message to edit not found")
+        || msg.contains("message can't be edited")
+        || msg.contains(super::errors::NO_RIGHTS)
+        || msg.contains(super::errors::BOT_BLOCKED)
+}
 
 pub fn build_send_msg_params(
     chat_id: i64,
@@ -45,12 +62,25 @@ impl TelegramClient {
     }
 
     /// Silent send (no buzz): progress the user watches, not hears.
-    /// Single attempt (a missed ack is harmless — output adopts the
-    /// live slot, folds retire it); None on any failure.
+    /// Single attempt with a short deadline (a missed stream send is
+    /// harmless — output adopts the slot, folds retire it); None on any
+    /// failure.
+    /// The deadline IS the bound — callers await this directly with no
+    /// outer timeout, so a card delivered before the deadline is always
+    /// tracked (an outer timeout firing first would orphan an untracked
+    /// live card that the next tick duplicates with a fresh send).
+    /// Residual race: a send landing server-side after the deadline
+    /// still reads as a miss and retries fresh (Telegram has no
+    /// idempotency key) — rare against a 4s local send, and confined to
+    /// sends; edits always retry in place and never duplicate.
     pub async fn send_silent(&self, chat_id: i64, thread_id: Option<i64>, text: &str) -> Option<i64> {
         let params = build_send_msg_params(chat_id, thread_id, text, None, None, true);
         match self
-            .call("sendMessage", params, Duration::from_secs(15))
+            .call(
+                "sendMessage",
+                params,
+                Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
+            )
             .await
         {
             Ok(v) => v["message_id"].as_i64(),
@@ -160,12 +190,7 @@ impl TelegramClient {
                     if msg.contains("message is not modified") {
                         return Ok(());
                     }
-                    if super::errors::topic_missing(&msg)
-                        || msg.contains("message to edit not found")
-                        || msg.contains("message can't be edited")
-                        || msg.contains("not enough rights")
-                        || msg.contains("bot was blocked")
-                    {
+                    if edit_gone(&msg) {
                         eprintln!("editMessageText fatal: {}", self.redact(&msg));
                         return Err(msg.into());
                     }

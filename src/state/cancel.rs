@@ -18,8 +18,10 @@ impl State {
     /// live successor keeps its task.
     pub async fn cancel_jobs_for(self: &Arc<Self>, pane: &str) -> bool {
         let cur = self.jobs.lock().await.get(pane).cloned();
-        // Typing: ownership-checked (a live successor keeps its task).
-        self.stop_typing_unless_owned(pane).await;
+        // Typing: shell-aware ownership check (a live agent successor
+        // or a pending shell keeps its task; an orphan stops here —
+        // the Some branch relies on this for the no-job case too).
+        self.stop_shell_typing(pane).await;
         let Some(job) = cur else {
             // No job: a successor inserted after still wins — leave it
             // alone; otherwise clear orphan/shell intent (suppresses cards).
@@ -46,6 +48,12 @@ impl State {
         self.clear_limit_episode(pane).await;
         // Disarm a pending settle debounce (armed card must not land after).
         self.debounce.lock().await.remove(pane);
+        // After removal the pane is unowned, so this actually stops the
+        // task now (the pre-removal stop above is a no-op while the job
+        // is present — without this the indicator lingers on the
+        // watcher's footer, up to a 60s backoff away). Shell-aware: a
+        // racing shell submit's pending keeps its task.
+        self.stop_shell_typing(pane).await;
         job.mark_stopped();
         // Bump the epoch: an in-flight finalize aborts at its next checkpoint
         // instead of posting into a cancelled world.
@@ -72,7 +80,8 @@ impl State {
             self.debounce.lock().await.remove(pane);
             // No watcher left to reap the typing task — stop it here
             // (the job path below relies on the watcher's own footer).
-            self.stop_typing_unless_owned(pane).await;
+            // Shell-aware: a concurrent shell submit keeps its task.
+            self.stop_shell_typing(pane).await;
             return false;
         };
         if !Self::remove_if_same(&self.jobs, pane, &job).await {
@@ -81,8 +90,10 @@ impl State {
         self.clear_pending(pane).await;
         self.clear_waiters(pane).await;
         self.debounce.lock().await.remove(pane);
-        // After removal: unowned, so this actually stops the task.
-        self.stop_typing_unless_owned(pane).await;
+        // After removal: unowned, so this actually stops the task
+        // (shell-aware like the loud path — a racing shell submit keeps
+        // its task via its pending).
+        self.stop_shell_typing(pane).await;
         job.mark_stopped();
         job.epoch.fetch_add(1, Ordering::Relaxed);
         true
@@ -221,80 +232,5 @@ pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::jobs::job::Job;
-    use crate::jobs::persist::PendingPrompt;
-
-    fn prompt(chat: i64) -> PendingPrompt {
-        PendingPrompt { chat, thread: None, prompt: "hi".into(), started_unix: 0 } // fmt:keep 1-line (300-line file limit)
-    }
-
-    #[tokio::test]
-    async fn test_cancel_retires_job_and_bumps_epoch() {
-        let (s, _dir) = isolated_state();
-        let job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("t:p1".into(), job.clone());
-        s.pending.lock().await.insert("t:p1".into(), prompt(1));
-        assert!(s.cancel_jobs_for("t:p1").await);
-        assert!(job.is_stopped());
-        assert_eq!(job.epoch.load(Ordering::Relaxed), 1);
-        assert!(!s.jobs.lock().await.contains_key("t:p1"));
-        assert!(!s.pending.lock().await.contains_key("t:p1"));
-    }
-
-    #[tokio::test]
-    async fn test_remove_if_same_is_last_writer_wins() {
-        let (s, _dir) = isolated_state();
-        let old = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("t:p1".into(), old.clone());
-        assert!(State::remove_if_same(&s.jobs, "t:p1", &old).await);
-        // Successor inserted after the snapshot survives.
-        let a = Job::new(vec![], 1, None);
-        let b = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("t:p1".into(), a.clone());
-        s.jobs.lock().await.insert("t:p1".into(), b.clone());
-        assert!(!State::remove_if_same(&s.jobs, "t:p1", &a).await);
-        assert!(Arc::ptr_eq(
-            &s.jobs.lock().await.get("t:p1").unwrap().clone(),
-            &b
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_quiet_retires_silently() {
-        // Quiet retire removes the job like loud but without the cancel
-        // notify (the parked watcher exits silently via is_stopped).
-        let (s, _dir) = isolated_state();
-        let job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("t:p1".into(), job.clone());
-        assert!(s.cancel_jobs_for_quiet("t:p1").await);
-        assert!(job.is_stopped());
-        assert_eq!(job.epoch.load(Ordering::Relaxed), 1);
-        assert!(!s.jobs.lock().await.contains_key("t:p1"));
-    }
-
-    #[tokio::test]
-    async fn test_job_only_preserves_pending_intent() {
-        // Already-shell branch: stale watcher dies, live shell intent stays.
-        let (s, _dir) = isolated_state();
-        let job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("t:p1".into(), job.clone());
-        s.pending.lock().await.insert("t:p1".into(), prompt(1));
-        assert!(s.cancel_job_only_for("t:p1").await);
-        assert!(job.is_stopped());
-        assert!(s.pending.lock().await.contains_key("t:p1"));
-    }
-
-    #[tokio::test]
-    async fn test_cancel_all_counts_and_stops() {
-        let (s, _dir) = isolated_state();
-        let a = Job::new(vec![], 1, None);
-        let b = Job::new(vec![], 2, None);
-        s.jobs.lock().await.insert("t:p1".into(), a.clone());
-        s.jobs.lock().await.insert("t:p2".into(), b.clone());
-        assert_eq!(s.cancel_all_jobs().await, 2);
-        assert!(a.is_stopped() && b.is_stopped());
-        assert!(s.jobs.lock().await.is_empty());
-    }
-}
+#[path = "cancel_tests.rs"]
+mod tests;

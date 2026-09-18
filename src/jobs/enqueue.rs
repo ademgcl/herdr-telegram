@@ -66,23 +66,27 @@ pub async fn enqueue_prompt(
     // epoch (it would reset the live watcher's stream state for nothing)
     // nor overwrite dest/prompt with undelivered text.
     // Reservation-window cover: the 30s submit RPC runs before the
-    // watcher exists — light the indicator now. `start_typing` no-ops
-    // in DM mode, so touch dest directly + sustain it until submit
-    // lands (else a DM submit sits dark up to 30s).
+    // watcher exists — light the indicator now and sustain it until
+    // submit lands (else the window sits dark). Unconditional: DM has
+    // no typing task at all, and a forum pane still unmapped pauses
+    // its task — both need the loop; where the task runs too the
+    // touches are idempotent refreshes. Spawned, never awaited.
     s.start_typing(&pane).await;
-    s.tg.typing(req.chat_id, req.message_thread_id).await;
-    let sustain = if s.cfg.forum.is_none() {
+    {
         let tg = s.tg.clone();
         let (c, t) = (req.chat_id, req.message_thread_id);
-        Some(tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(crate::state::TYPING_TICK_SECS)).await;
-                tg.typing(c, t).await;
-            }
-        }))
-    } else {
-        None
-    };
+        tokio::spawn(async move {
+            tg.typing(c, t).await;
+        });
+    }
+    let tg = s.tg.clone();
+    let (c, t) = (req.chat_id, req.message_thread_id);
+    let sustain = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(crate::state::TYPING_TICK_SECS)).await;
+            tg.typing(c, t).await;
+        }
+    });
     let submit_res = rpc_t(
         &s.cfg.socket,
         "agent.prompt",
@@ -90,9 +94,7 @@ pub async fn enqueue_prompt(
         30,
     )
     .await;
-    if let Some(h) = sustain {
-        h.abort();
-    }
+    sustain.abort();
     if let Err(e) = submit_res {
         println!("[jobs] submit error: {e}");
         // Owed = prior prompts only (this one was never recorded).
@@ -139,11 +141,12 @@ pub async fn enqueue_prompt(
         // Dropped the jobs guard BEFORE the pending lock + disk write
         // (never nest jobs→pending). Stop our typing now: a parked
         // watcher (5s tick / 60s backoff) would else type into the void
-        // until it exits — unless_owned keeps a successor's task.
+        // until it exits — shell-aware (a racing shell submit's pending
+        // keeps its task; an agent successor re-mints via jobs).
         if owned {
             s.clear_pending(&pane).await;
         }
-        s.stop_typing_unless_owned(&pane).await;
+        s.stop_shell_typing(&pane).await;
         return;
     }
     // Delivered: last-wins dest/prompt/epoch, durable intent so a restart

@@ -28,11 +28,25 @@ pub async fn settle_books(
     // would eat their reply's intent while ours is already delivered.
     let prompt = job.prompt.lock().await.clone();
     let (chat, th) = *job.dest.lock().await;
+    // Re-check after the snapshots above: a submit interleaving here
+    // owns the pane now — wiping its intent loses the reply. Same
+    // cover rule as the entry check (deferred prompts stay owed).
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        let mut p = job.pending.lock().await;
+        *p = p.saturating_sub(entry_pending);
+        return;
+    }
     if s.pending_matches(pane, chat, th, &prompt).await {
         s.clear_pending(pane).await;
     }
+    // Re-check the epoch under the map guard with no await after: reuse
+    // keeps the SAME Arc (ptr_eq alone cannot tell a successor apart),
+    // so a submit landing between the checks above and this remove
+    // would else lose its map entry from under a live watcher.
     let mut map = s.jobs.lock().await;
-    if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
+    if job.epoch.load(Ordering::Relaxed) == entry_epoch
+        && map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false)
+    {
         map.remove(pane);
         println!("[prompt] watcher retired: {pane}");
     }

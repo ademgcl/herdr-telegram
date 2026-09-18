@@ -127,6 +127,50 @@ impl State {
             .unwrap_or(false)
     }
 
+    /// Atomic check-and-remember for race-prone restores (remap
+    /// migration, reconcile owed-intent restores): under ONE `pending`
+    /// guard with no await inside, remember `set` only when the slot is
+    /// vacant or still holds the `check` triple. A separate check-then-
+    /// remember across awaits lets a submit landing between them be
+    /// overwritten by corpse text (lost reply) — and holding the guard
+    /// across `pending_matches` deadlocks (non-reentrant tokio Mutex).
+    /// Timestamp + clone inside the guard (no await), disk write after
+    /// (never hold `pending` across serde + blocking fs). True when
+    /// anything was written.
+    pub async fn remember_pending_cas(
+        &self,
+        pane: &str,
+        check: (i64, Option<i64>, &str),
+        set: (i64, Option<i64>, &str),
+    ) -> bool {
+        let snap = {
+            let mut map = self.pending.lock().await;
+            let mine = match map.get(pane) {
+                None => true,
+                Some(p) => p.chat == check.0 && p.thread == check.1 && p.prompt == check.2,
+            };
+            if !mine {
+                return false;
+            }
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            map.insert(
+                pane.to_string(),
+                PendingPrompt {
+                    chat: set.0,
+                    thread: set.1,
+                    prompt: set.2.to_string(),
+                    started_unix: now,
+                },
+            );
+            map.clone()
+        };
+        persist::save_file(&persist::store_path(), &snap);
+        true
+    }
+
     /// End one pane's stall episode (limit alert, stuck timer, absence
     /// streak, send cooldown) — called on shell flips and pane death, or
     /// after confirmed-clean reads. Working flicker deliberately does NOT

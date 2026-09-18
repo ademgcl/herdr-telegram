@@ -104,8 +104,15 @@ pub async fn settle_step(
     // caller's herdr-error arm does the same) so a post-outage sample
     // never counts as persistence spanning the blackout. A settled-kind
     // flip (done→blocked→idle) also clears: persistence of one kind is
-    // not persistence of another.
+    // not persistence of another. A supersede/cancel landing during the
+    // sleep owns the pane even when the kind is unchanged (fast
+    // done→done): the pre-sleep epoch below catches it.
+    let epoch_at_entry = job.epoch.load(Ordering::Relaxed);
     tokio::time::sleep(Duration::from_millis(750)).await;
+    if job.epoch.load(Ordering::Relaxed) != epoch_at_entry {
+        *settled_since = None;
+        return SettleStep::Continue;
+    }
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if a.status == "working" => {
             *settled_since = None;
@@ -133,6 +140,13 @@ pub async fn settle_step(
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
     repoint_dest_if_remapped(s, pane, job, live_mid, live_dest, epoch_before).await;
+    // A submit landing during the remap fold owns the pane: finalize
+    // captures its entry epoch AFTER the remap RPCs and would mistake
+    // the old status/acc for the new prompt's — stop here instead.
+    if job.epoch.load(Ordering::Relaxed) != epoch_before {
+        *settled_since = None;
+        return SettleStep::Continue;
+    }
     let retry = finalize(s, pane, job, status, live_mid, live_dest, acc).await;
     // finalize consumes the live slot on success — drop its
     // address too, or a later reset would edit the final card.

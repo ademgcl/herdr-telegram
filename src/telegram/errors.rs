@@ -7,6 +7,13 @@ pub fn topic_missing(err: &str) -> bool {
         || err.contains("TOPIC_DELETED")
 }
 
+/// Shared fatal-permission markers: the retry-fatal, edit-gone and
+/// reaction-ignored predicates below differ (single source is per
+/// predicate), but these two literals are shared so a Telegram wording
+/// change edits one place, never three.
+pub const NO_RIGHTS: &str = "not enough rights";
+pub const BOT_BLOCKED: &str = "bot was blocked";
+
 /// Already showing that title — converged, not a failure. Callers store
 /// and stay quiet instead of retry-spamming every tick.
 pub fn topic_not_modified(err: &str) -> bool {

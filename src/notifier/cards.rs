@@ -1,6 +1,5 @@
 //! Debounced spontaneous pushes: a settle must hold before its answer
-//! buzzes, so micro-settle flicker mid-task stays silent. Blocked (needs
-//! input) bypasses the debounce in the caller and posts immediately.
+//! buzzes (micro-settle flicker stays silent; blocked posts immediately).
 
 use crate::{
     herdr::client::{get_agent, list_workspaces, read_agent_output},
@@ -10,28 +9,44 @@ use crate::{
     types::MAX_MSG_UNITS,
     ui::{chunks, emoji, ws_label},
 };
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 /// A settle must hold this long before a spontaneous answer pushes —
 /// micro-settle flicker mid-task stays silent instead of buzzing.
 /// Blocked (needs input) always pushes immediately.
 pub(crate) const SETTLE_DEBOUNCE_SECS: u64 = 15;
 
+/// Pure reset-arm consume (testable without the 15s debounce sleep): a
+/// stale arm left armed would abort the post-reset retry — consume only
+/// the exact arm, never a newer one.
+pub(crate) fn consume_reset_arm(
+    db: &mut HashMap<String, (String, Instant)>,
+    pane: &str,
+    armed_at: Instant,
+) {
+    if db.get(pane).map(|(_, at)| at == &armed_at).unwrap_or(false) {
+        db.remove(pane);
+    }
+}
+
 /// Debounced spontaneous push: posts the fresh reply only if this settle
-/// is still current (no newer transition, no prompt takeover, no newer
-/// card) after the grace period. Baseline anchors on delivery AND on
-/// stray/empty (else the same stray re-RPCs every settle forever).
+/// is still current after the grace period. Baselines anchor on delivery
+/// AND on stray/empty (else the same stray re-RPCs every settle forever).
 pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Instant) {
     tokio::time::sleep(Duration::from_secs(SETTLE_DEBOUNCE_SECS)).await;
-    // No spontaneous cards during reset: threads are dying/respawning,
-    // posting a card would burn the 429 budget. Baseline is not consumed —
-    // the first tick after reset re-sees the delta.
+    // No spontaneous cards during reset (threads dying; 429 budget).
+    // Baseline unconsumed (next tick re-sees the delta); the arm IS
+    // consumed (see consume_reset_arm): stale would abort the retry.
     if crate::handlers::reset::is_resetting() {
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
     {
-        // Single guard: a newer arm inserted between a separate get and
-        // remove would be deleted with the stale one (dropped answer).
+        // Single guard: a newer arm must not be deleted with the stale
+        // one (dropped answer).
         let mut db = s.debounce.lock().await;
         let cur = db.get(&pane).cloned();
         if cur
@@ -46,10 +61,8 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     if s.jobs.lock().await.contains_key(&pane) {
         return;
     }
-    // Settle holds across idle↔done sampling: a fast done→idle collapses
-    // (no re-arm), so the done-armed check must still fire on idle —
-    // else the fresh delta rots and no card ever posts. Blocked still
-    // needs exact match (dialog turnover below re-arms its own checks).
+    // Settle holds across idle↔done sampling: a fast done→idle collapses,
+    // so the done-armed check still fires on idle (blocked needs exact).
     let settled_ok = s
         .status
         .lock()
@@ -79,9 +92,8 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .lines()
         .map(|l| l.trim_end().to_string())
         .collect();
-    // Post-read re-check: a prompt that landed during the RPCs above owns
-    // the pane now — the watcher's final card covers it, never us too.
-    // Same for a final that stamped last_done while we were reading.
+    // Post-read re-check: a prompt/final that landed during the read
+    // owns the pane now — never double-post with the watcher.
     if s.jobs.lock().await.contains_key(&pane) {
         return;
     }
@@ -95,8 +107,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         return;
     }
     // Outage/unknown (Err collapsed above): never anchor an empty
-    // screen — it would wipe a good baseline and repost full scrollback
-    // as fresh on the next settle.
+    // screen — it would wipe a good baseline and repost scrollback.
     if screen.is_empty() {
         return;
     }
@@ -108,10 +119,8 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     };
     let body = join_trimmed(&final_block(&source, ""));
     // Baseline anchors on delivery; stray/empty also anchors (same-screen
-    // strays must not re-RPC every settle). Drops (topic race, outage)
-    // leave the delta for the next tick — see post_spontaneous_card.
-    // Reset started mid-debounce: threads are dying — never sync/post
-    // into the migration (the re-check at wake is 15s+ of RPCs old).
+    // strays must not re-RPC every settle). Drops leave the delta.
+    // Reset mid-debounce: never sync/post into the migration.
     if crate::handlers::reset::is_resetting() {
         return;
     }
@@ -124,15 +133,14 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     let raw_space = ws_label(&spaces, &ws_id);
     s.topics.sync_topic(&pane, &kind, raw_space).await;
     // Single stray chars (picker echoes, vim residue) never page; real
-    // shorts ("ok", "done") do. Empty stays silent — but the baseline
-    // still advances so the stray doesn't haunt every future settle.
+    // shorts ("ok", "done") do. Empty stays silent but advances the
+    // baseline so the stray doesn't haunt future settles.
     if body.chars().count() < 2 {
         s.seen.lock().await.insert(pane.clone(), screen);
         return;
     }
-    // Pre-post re-check (narrows the check→send window to just the send
-    // RPC): a job/final that landed during get_agent/spaces/sync above
-    // owns the reply now — never double-post with the watcher.
+    // Pre-post re-check (window = send RPC only): a job/final that
+    // landed during get_agent/spaces/sync owns the reply now.
     if s.jobs.lock().await.contains_key(&pane) {
         return;
     }
@@ -145,11 +153,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     {
         return;
     }
-    // Bounded retry on SEND outage only: a blip exactly at settle must
-    // not eat a one-shot reply no future transition would surface. Two
-    // extra tries, then the next transition owns it as before. Refusals
-    // (job takeover, newer last_done, newer arm, status moved on) break
-    // instead of spinning 30s on a stale screen; reset aborts the loop.
+    // Bounded retry on SEND outage only (a blip must not eat a one-shot
+    // reply). Two extra tries, then the next transition owns it.
+    // Refusals (takeover, newer last_done/arm, moved-on) break instead
+    // of spinning; reset aborts the loop.
     let mut delivered = false;
     for _ in 0..3 {
         if crate::handlers::reset::is_resetting() {
@@ -200,12 +207,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
 
 /// Answer push: the body alone (never a status-word lead), plus the reply
 /// affordance when input is needed. Blocked keeps its urgent prefix.
-/// Returns true when at least one part was delivered: drops (topic race,
-/// Telegram outage) must neither stamp `last_done` (it would suppress the
-/// next settle) nor consume the caller's baseline.
-/// `armed_at`: settle debounce instant (Some) or None (DM immediate) —
-/// re-checked AFTER the sync RPC, immediately before the first send, so
-/// the check→send window is the send RPC only (no sync RPC between).
+/// True when a part landed: drops must neither stamp `last_done` (it
+/// would suppress the next settle) nor consume the caller's baseline.
+/// `armed_at`: settle instant (Some) or None (DM immediate) — re-checked
+/// AFTER the sync RPC, right before the first send (window = send only).
 pub(crate) async fn post_spontaneous_card(
     s: &AppState,
     pane: &str,
@@ -289,3 +294,7 @@ pub(crate) async fn post_spontaneous_card(
     }
     delivered
 }
+
+#[cfg(test)]
+#[path = "cards_tests.rs"]
+mod tests;

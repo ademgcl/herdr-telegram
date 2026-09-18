@@ -8,7 +8,7 @@ pub mod reaction;
 pub mod router;
 
 pub use client::TelegramClient;
-pub use errors::{topic_missing, topic_not_modified};
+pub use errors::{BOT_BLOCKED, NO_RIGHTS, topic_missing, topic_not_modified};
 pub use messages::EFFECT_FIRE;
 pub use polling::get_updates;
 pub use router::handle_update;

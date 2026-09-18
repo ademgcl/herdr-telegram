@@ -24,6 +24,7 @@ pub mod shell_common;
 pub mod shell_lifecycle;
 pub mod shell_provision;
 pub mod shell_run;
+pub mod shell_settle;
 pub mod shell_topic;
 pub mod space;
 pub mod tap;

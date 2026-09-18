@@ -172,6 +172,60 @@ pub async fn is_shell_pane(socket: &str, pane: &str) -> bool {
     super::agents::get_agent(socket, pane).await.is_err()
 }
 
+/// True when the shell sits at a prompt (the foreground group is the
+/// shell itself): the completion signal for shell settle (see
+/// `await_shell_settle`). A running command owns the foreground group
+/// instead — screen stability alone false-settles slow commands whose
+/// typed echo sits unchanged for seconds before output arrives. None
+/// on any RPC/parse failure: callers degrade to a longer timing-only
+/// bar, never guess from unknown.
+pub async fn is_shell_idle(socket: &str, pane: &str) -> Option<bool> {
+    let r = rpc_t(
+        socket,
+        "pane.process_info",
+        json!({"pane_id": pane}),
+        PROCESS_INFO_TIMEOUT_SECS,
+    )
+    .await
+    .ok()?;
+    parse_shell_idle(&r)
+}
+
+/// Bound for the settle busy-probe: process info is a local table read
+/// (milliseconds) — a slow one degrades to the timing bar fast, never
+/// holds settle rounds hostage behind the 30s default RPC timeout.
+const PROCESS_INFO_TIMEOUT_SECS: u64 = 10;
+
+/// Pure parse (tests cover the shape without I/O): idle only when the
+/// foreground group AND every listed pid agree it is the shell. Foreign
+/// anywhere reads busy (the list lags the group across fork/exec);
+/// empty list defers to the group id (missing too = unknown, never
+/// idle); all-shell without group id = unknown (builtins stay invisible
+/// — accepted residual, quiet long ones settle on the timing bar).
+pub fn parse_shell_idle(v: &serde_json::Value) -> Option<bool> {
+    let info = v.get("process_info")?;
+    let shell = info.get("shell_pid")?.as_u64()?;
+    let pgid = info
+        .get("foreground_process_group_id")
+        .and_then(serde_json::Value::as_u64);
+    let fg = info.get("foreground_processes")?.as_array()?;
+    for p in fg {
+        match p.get("pid").and_then(serde_json::Value::as_u64) {
+            Some(pid) if pid == shell => {}
+            Some(_) => return Some(false),
+            None => return None,
+        }
+    }
+    if fg.is_empty() {
+        // No listed processes: the group id is the only signal.
+        return pgid.map(|g| g == shell);
+    }
+    // Non-empty list needs the group id too: builtins and old servers
+    // report an all-shell list with no confirmation — unknown degrades
+    // to the longer timing bar, never a fast idle verdict.
+    pgid.map(|g| g == shell)
+}
+
 /// Lowest pane in a JUST-CREATED `ws`, verified shell (never an
 /// agent). None → caller must `tab.create` instead of hijacking.
 pub async fn first_shell_pane(socket: &str, ws: &str) -> Option<String> {

@@ -3,7 +3,6 @@
 //! from `finalize`/`settle` (300-line file limit). One task per prompt;
 //! supersede/cancel retire via epoch + cancel signal, never by killing.
 use crate::jobs::episode::BuzzEpisode;
-use crate::jobs::live::LIVE_RPC_TIMEOUT_SECS;
 use crate::jobs::report::{CANCELLED, RUN_ENDED, fold_live};
 use crate::jobs::stall::watch_stall;
 use crate::{
@@ -22,9 +21,6 @@ use tokio::time::{Duration, Instant};
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
 /// Safety-net tick in case herdr events are unavailable.
 const FALLBACK_TICK_SECS: u64 = 5;
-/// Debounced-ack delay: slow prompts feel heard, instant answers skip
-/// it. Under one tick period so the first loop tick fires deterministically.
-const ACK_DEBOUNCE_MILLIS: u64 = 1500;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
@@ -68,14 +64,29 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // the piggyback period past expiry. Spawned, never awaited inline.
     let mut typing_tick = tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
     typing_tick.tick().await;
-    // Debounced silent ack: if nothing worth showing landed quickly,
-    // post one buzz-free "working" row into the live slot — instant
-    // answers skip it entirely (no flicker), slow ones feel heard.
-    // First output edits it instead of sending fresh; every fold path
-    // already retires the slot, so it can never strand. Due sits under
-    // one tick period so the first loop tick fires it deterministically.
-    let mut ack_due = Instant::now() + Duration::from_millis(ACK_DEBOUNCE_MILLIS);
-    let mut acked = false;
+    // Time-based sustain task: the ticker arm above falls through to
+    // blocking work (30s agent reads, 45s stall scans), so sick-herdr
+    // rounds would stretch the sustain gap past the ≈5s expiry — in DM
+    // nothing else backstops it. Reads the live dest every round (a
+    // handoff retargets mid-watch); aborted once in the exit epilogue.
+    let sustain = {
+        let tg = s.tg.clone();
+        let job = job.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(crate::state::TYPING_TICK_SECS)).await;
+                if job.is_stopped() {
+                    break;
+                }
+                let (c, t) = *job.dest.lock().await;
+                tg.typing(c, t).await;
+            }
+        })
+    };
+    // Instant feedback is the typing indicator (sustained below on the
+    // shared cadence, well inside the ≈5s expiry, so a returning client
+    // sees it within ~2s): no empty "working" card — the live slot stays
+    // empty until real output lands, then streams contentfully.
     // First settled sample arms the report timer (see settle.rs): agy
     // idles briefly between phases mid-run, and retiring on that
     // transient leaves the agent working unwatched. Cleared on working
@@ -101,20 +112,14 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             settled_since = None;
             acc.clear();
             retry_wait = FALLBACK_TICK_SECS;
-            // New turn re-arms the debounced ack with it: a reused
-            // watcher owes the new prompt its own feedback.
-            acked = false;
-            ack_due = Instant::now() + Duration::from_millis(ACK_DEBOUNCE_MILLIS);
+            // Herdr-error streak belongs to the old prompt: 11 failures
+            // there + 1 here must not back the new prompt off for 60s.
+            fails = 0;
             live.rearm();
-            // Retire the old live card instead of orphaning it frozen.
-            if let Some(mid) = live.mid.take() {
-                if let Some((chat, _)) = live.dest.take() {
-                    s.tg.edit_msg(chat, mid, "🔄 superseded by a newer prompt", None)
-                        .await;
-                }
-            } else {
-                live.dest = None;
-            }
+            // Retire the old live card instead of orphaning it frozen
+            // (bounded handoff; a transient failure keeps the slot for
+            // the new turn to adopt, never duplicates).
+            live.retire_for_handoff(&s).await;
             job.baseline_ok.store(false, Ordering::Relaxed);
         }
 
@@ -147,18 +152,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 break;
             }
             _ = typing_tick.tick() => {
-                let (dchat, dth) = *job.dest.lock().await;
-                let tg = s.tg.clone();
-                tokio::spawn(async move {
-                    tg.typing(dchat, dth).await;
-                });
-                // One-shot debounced ack: silent row for slow runs, instant
-                // answers skip it. Bounded; only a landed row arms it.
-                if !acked && settled_since.is_none() && live.mid.is_none() && !job.is_stopped() && Instant::now() >= ack_due
-                {
-                    let ok = tokio::time::timeout(Duration::from_secs(LIVE_RPC_TIMEOUT_SECS), super::report::post_silent_ack(&s, dchat, dth, &mut live.mid, &mut live.dest)).await.unwrap_or(false);
-                    acked = ok;
-                }
+                // Poll driver only now (the sustain task above owns the
+                // indicator): empty working cards are gone by design, and
+                // instant feedback is typing, sustained time-based.
                 // Falls through to a poll cycle below (no `continue`):
                 // restarting the 5s fallback sleep on every typing tick
                 // would starve it on quiet panes, leaving settle/stall
@@ -266,6 +262,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         .await;
     }
 
+    // Every `break` above converges here: single abort site for the
+    // sustain task (it also self-exits on stop as backstop).
+    sustain.abort();
     // Retire only if the map still points at THIS watcher (no newer job took over)
     {
         let mut map = s.jobs.lock().await;

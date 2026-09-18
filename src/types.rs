@@ -6,6 +6,11 @@ pub const STALE_SECS: u64 = 600;
 /// time-bounded like stale notices, never forever-mute, never spam.
 pub const NAGGED_SECS: u64 = 86400;
 pub const LIVE_EDIT_COOLDOWN_SECS: u64 = 4;
+/// Bound for silent live RPCs (stream edits/sends, handoff retire):
+/// flood-wait retries must not stall settle past the tick — a miss
+/// retries next tick. Single source for jobs + telegram (distinct from
+/// the edit cooldown above, same seconds by design).
+pub const LIVE_RPC_TIMEOUT_SECS: u64 = 4;
 pub const MAX_MSG_UNITS: usize = 3900;
 pub const SINGLE_INSTANCE_PORT: u16 = 47319;
 /// Herdr socket protocol this bot is built against (see `herdr api schema`).

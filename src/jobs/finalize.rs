@@ -4,7 +4,7 @@
 //! Stamps (baseline, done-mark, books) are epoch-gated: a submit landing
 //! mid-RPC owns the pane, and the old prompt must stamp nothing.
 use crate::{
-    handlers::dialog::send_blocked_card,
+    handlers::dialog::{dialog_sig, send_blocked_card},
     herdr::client::read_screen_adaptive,
     jobs::{
         arbitrate::select_final_body,
@@ -20,14 +20,11 @@ use crate::{
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-/// Turn the live message into the final result card from the generic,
-/// provider-agnostic screen stream, arbitrated against one settled
-/// read (see select_final_body).
-/// (herdr exposes only raw TUI text for every provider — no clean-text
-/// API — so answers ride on the chrome-filtered stream, never raw tails.)
-/// Returns true when nothing was delivered (read outage OR every card
-/// part failed to send) so the watcher loop retries instead of retiring
-/// the intent.
+/// Turn the live message into the final result card: last-segment reply
+/// arbitrated against one settled read (see select_final_body — herdr
+/// exposes only raw TUI text, so answers ride the filtered stream).
+/// True when nothing was delivered (outage or all parts failed) so the
+/// watcher retries instead of retiring the intent.
 pub async fn finalize(
     s: &AppState,
     pane: &str,
@@ -51,9 +48,7 @@ pub async fn finalize(
     let mut screen = read_screen_adaptive(&s.cfg.socket, pane).await;
     let mut body = select_final_body(acc, &screen, &prompt);
     // TUI-lag race: status flips settled a beat before the frame
-    // renders the answer. Two delayed re-reads (~4s) rescue fast-task
-    // replies; lag beyond that needs a fresh transition (vanishingly
-    // rare next to stalling every empty settle).
+    // renders. Two delayed re-reads (~4s) rescue fast-task replies.
     if body.is_empty() {
         for _ in 0..2 {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -87,12 +82,15 @@ pub async fn finalize(
                 acc.clear();
                 return false;
             }
-            s.seen.lock().await.insert(pane.to_string(), snapshot);
-            // Fold the live slot: retiring with it set would orphan a
-            // frozen "working…" card (the caller only drops the address
-            // when the slot is already consumed). Address comes from the
-            // live slot itself, never job.dest (remap race).
+            // Fold the live slot (retiring with it set orphans a frozen
+            // card); address from the slot itself, never job.dest.
             fold_live(s, live_dest, live_mid, RUN_ENDED).await;
+            // Gated like every stamp path: a submit racing the fold owns
+            // the pane — anchoring our empty snapshot would eat the fresh
+            // baseline its reply needs.
+            if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+                s.seen.lock().await.insert(pane.to_string(), snapshot);
+            }
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -116,13 +114,18 @@ pub async fn finalize(
         // Boot seed already carded this exact dialog: observe + books
         // only, or the same question buzzes twice with ❗.
         if s.blocked_sig.lock().await.get(pane)
-            .map(|v| v == &crate::handlers::dialog::dialog_sig(&snapshot))
+            .map(|v| v == &dialog_sig(&snapshot))
             .unwrap_or(false)
         {
+            // Superseded mid-RPCs: observe nothing stale.
+            if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+                acc.clear();
+                return false;
+            }
             observe_status(s, pane, settled, true, "job").await;
             // Any live slot duplicates the already-buzzed question card:
-            // fold it whether it holds streamed output or only the silent
-            // ack, or the working card freezes next to the question.
+            // fold its streamed output, or the working card freezes next
+            // to the question.
             fold_live(
                 s,
                 live_dest,
@@ -134,22 +137,29 @@ pub async fn finalize(
             return false;
         }
         let (chat, th) = *job.dest.lock().await;
+        // Superseded mid-RPCs: post/consume nothing (the handoff retires
+        // the live slot; consuming it strands a stale ❗ with no owner).
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            acc.clear();
+            return false;
+        }
         // Retire the live working card in place (address from the slot,
         // never job.dest): the question card posts fresh below.
         // Fail-closed: mid without dest drops without editing rather
         // than guessing the thread after a remap.
         if let Some(mid) = live_mid.take() {
             if let Some((lchat, _)) = live_dest.take() {
-                s.tg.edit_msg(
-                    lchat,
-                    mid,
-                    "⛔ blocked — needs input (see next message)",
-                    None,
-                )
-                .await;
+                s.tg.edit_msg(lchat, mid, "⛔ blocked — needs input (see next message)", None)
+                    .await;
             }
         } else {
             live_dest.take();
+        }
+        // Re-check after the retire edit: a submit during it owns the
+        // pane — the ❗ card below would buzz stale beside its prompt.
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            acc.clear();
+            return false;
         }
         let posted = send_blocked_card(s, chat, th, pane).await;
         // Silent icon sync (later observations dedupe via blocked_sig).
@@ -180,12 +190,18 @@ pub async fn finalize(
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return false;
     }
-    // Empty non-blocked settle: post nothing, but anchor the evaluated
-    // screen so the span doesn't rot in the baseline and resurface as a
-    // stale "fresh" delta on the next transition (the spontaneous path
-    // re-evaluates from here and stays quiet on no change). A live card
+    // Empty non-blocked settle: post nothing, but anchor the screen so
+    // the span never resurfaces as a stale "fresh" delta. A live card
     // is retired, not orphaned frozen on "working…".
     if body.is_empty() {
+        // Gate before observing: a submit racing the RPCs above owns
+        // the pane — observe nothing, consume nothing (its handoff
+        // retires the live slot; consuming here would land a stale edit
+        // the cancel arm then double-posts).
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            acc.clear();
+            return false;
+        }
         observe_status(s, pane, settled, true, "job").await;
         // Address from the slot (remap-safe); mid without dest drops
         // without editing (fail-closed, never wrong thread).
@@ -205,21 +221,28 @@ pub async fn finalize(
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return false;
     }
-    let text = body.clone();
-    let parts = chunks(&text, MAX_MSG_UNITS);
+    let parts = chunks(&body, MAX_MSG_UNITS);
 
-    observe_status(s, pane, settled, true, "job").await;
-    // Leaving blocked state clears the dialog signature (blocked path
-    // returns above, so this only runs for settled non-blocked).
-    s.blocked_sig.lock().await.remove(pane);
-    let (chat, th) = *job.dest.lock().await;
-    // A newer submit mid-post would retarget the card: re-check before
-    // touching Telegram or stamping anything.
+    // Gate before observing/touching: a newer submit mid-post would
+    // retarget the card and corrupt the status reflection.
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         println!("[prompt] finalize {pane}: superseded before post, dropping");
         acc.clear();
         return false;
     }
+    observe_status(s, pane, settled, true, "job").await;
+    let (chat, th) = *job.dest.lock().await;
+    // And after: a submit during the observe RPCs above retargets.
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        println!("[prompt] finalize {pane}: superseded before post, dropping");
+        acc.clear();
+        return false;
+    }
+    // Leaving blocked state clears the dialog signature (blocked path
+    // returns above, so this only runs for settled non-blocked).
+    // After the gate: a submit racing the RPCs above must keep its
+    // dedup, or its fresh question card double-buzzes with ❗.
+    s.blocked_sig.lock().await.remove(pane);
     println!(
         "[prompt] finalize {pane}: {} part(s), body {} chars",
         parts.len(),
@@ -243,16 +266,10 @@ pub async fn finalize(
     }
     // Total delivery failure: keep the intent and retry like a read
     // outage — retiring here would lose the reply with no re-arm.
-    // (Stamps below describe a card the user saw; failed posts stamp
-    // nothing, so the retry re-posts from an intact baseline.)
-    // Known limit: a multi-send is not atomic. `delivered` is any-part,
-    // so an outage/revocation landing mid-post truncates and retires:
-    // the landed prefix posts with no explicit truncation marker
-    // (missing tail, never silent loss of the whole reply). Duplication
-    // happens only on total failure (nothing landed): the retry re-posts
-    // from part 0. Skipping landed parts instead would risk the opposite
-    // (a failed send that actually landed goes missing with no trace).
-    // Per-call retries (3 sends + 3 flood-waits) narrow the window.
+    // Known limit: a multi-send is not atomic (`delivered` is any-part,
+    // so a mid-post outage truncates: missing tail, never silent loss).
+    // Duplication happens only on total failure (retry re-posts from
+    // part 0); per-call retries narrow the window.
     if !delivered {
         println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
         return true;
@@ -262,11 +279,16 @@ pub async fn finalize(
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.
-    s.last_done
-        .lock()
-        .await
-        .insert(pane.to_string(), std::time::Instant::now());
-    s.seen.lock().await.insert(pane.to_string(), snapshot);
+    // Epoch-gated like the blocked/empty paths: a submit landing during
+    // the fold owns the pane — anchoring its fresh output away into our
+    // stale snapshot would eat the reply.
+    if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+        s.last_done
+            .lock()
+            .await
+            .insert(pane.to_string(), std::time::Instant::now());
+        s.seen.lock().await.insert(pane.to_string(), snapshot);
+    }
     settle_books(s, pane, job, entry_epoch, entry_pending).await;
     false
 }

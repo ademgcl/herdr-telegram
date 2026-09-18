@@ -1,8 +1,16 @@
 //! Dead-pane hygiene: mode-independent reaping of jobs, durable intent,
 //! and per-pane maps for externally-closed panes. Split from `reconcile`
 //! (300-line file limit).
-use crate::{herdr::client::list_panes, state::AppState};
+use crate::{
+    herdr::client::list_panes,
+    jobs::{persist, recover::recoverable},
+    state::{
+        AppState,
+        guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, reap_stale},
+    },
+};
 use std::collections::HashSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Cached single `list_panes` per tick (shared with the forum block):
 /// 1 RPC, not 2. Fail-open: Err keeps everything.
@@ -79,6 +87,28 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // panes (no job/intent) never enter `known` above — retain
             // live-only or dead panes leak 20 rows each forever.
             s.history.lock().await.retain(|p, _| live.contains(p));
+            // Stale dead-pane intent: boot-recover drops >24h intents,
+            // but without a restart in-uptime dead intents accumulate
+            // forever. Same 24h bound here, persisted like any clear.
+            {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let snap = {
+                    let mut m = s.pending.lock().await;
+                    let before = m.len();
+                    m.retain(|_, pp| recoverable(pp.started_unix, now));
+                    if m.len() == before {
+                        None
+                    } else {
+                        Some(m.clone())
+                    }
+                };
+                if let Some(snap) = snap {
+                    persist::save_file(&persist::store_path(), &snap);
+                }
+            }
             // status+last_change under one scope (order status→last_change,
             // no awaits inside): an event inserting between torn retains
             // would orphan status without its change instant and skip
@@ -107,7 +137,6 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // same guarantee. Peeks self-evict too — this tick is only
             // the backstop. Log after drop (never hold a guard across I/O).
             {
-                use crate::state::guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, reap_stale};
                 let now = std::time::Instant::now();
                 let reaped_tap = {
                     let mut m = s.blockop.lock().await;
@@ -150,124 +179,5 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        jobs::job::Job,
-        state::{
-            cancel::isolated_state,
-            guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS},
-        },
-    };
-    use std::time::{Duration, Instant};
-
-    #[tokio::test]
-    async fn test_reap_keeps_live_clears_dead() {
-        // Injected pane list: no herdr RPC — dead panes retire, live
-        // panes (jobs, intent, maps) survive untouched.
-        let (s, _dir) = isolated_state();
-        let dead_job = Job::new(vec![], 1, None);
-        let live_job = Job::new(vec![], 1, None);
-        s.jobs
-            .lock()
-            .await
-            .insert("dead:p1".into(), dead_job.clone());
-        s.jobs
-            .lock()
-            .await
-            .insert("live:p1".into(), live_job.clone());
-        s.status
-            .lock()
-            .await
-            .insert("dead:p1".into(), "working".into());
-        s.status
-            .lock()
-            .await
-            .insert("live:p1".into(), "working".into());
-        let mut cache = Some(HashSet::from(["live:p1".to_string()]));
-        reap_orphans(&s, &mut cache).await;
-        assert!(!s.jobs.lock().await.contains_key("dead:p1"));
-        assert!(dead_job.is_stopped());
-        assert!(s.jobs.lock().await.contains_key("live:p1"));
-        assert!(!live_job.is_stopped());
-        assert!(!s.status.lock().await.contains_key("dead:p1"));
-        assert!(s.status.lock().await.contains_key("live:p1"));
-    }
-
-    #[tokio::test]
-    async fn test_reap_empty_list_is_fail_open() {
-        // Transient Ok([]) must read as "unknown", never "all dead".
-        let (s, _dir) = isolated_state();
-        let job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("w1:p1".into(), job.clone());
-        let mut cache = Some(HashSet::new());
-        reap_orphans(&s, &mut cache).await;
-        assert!(s.jobs.lock().await.contains_key("w1:p1"));
-        assert!(!job.is_stopped());
-    }
-
-    #[tokio::test]
-    async fn test_reap_clears_stale_guards_keeps_fresh() {
-        // Prod wiring: live-stale corpses reap under their own
-        // threshold, live-fresh survives, dead entries vanish.
-        let (s, _dir) = isolated_state();
-        let now = Instant::now();
-        let old_tap = now - Duration::from_secs(BLOCKOP_STALE_SECS + 60);
-        let old_model = now - Duration::from_secs(MODELOP_STALE_SECS + 60);
-        s.blockop.lock().await.insert("live:p1".into(), old_tap);
-        s.blockop.lock().await.insert("live:p2".into(), now);
-        s.modelop.lock().await.insert("live:p1".into(), old_model);
-        s.modelop.lock().await.insert("live:p2".into(), now);
-        s.blockop.lock().await.insert("dead:p9".into(), now);
-        s.modelop.lock().await.insert("dead:p9".into(), now);
-        let mut cache = Some(HashSet::from(["live:p1".to_string(), "live:p2".to_string()]));
-        reap_orphans(&s, &mut cache).await;
-        assert!(!s.blockop.lock().await.contains_key("live:p1"));
-        assert!(s.blockop.lock().await.contains_key("live:p2"));
-        assert!(!s.modelop.lock().await.contains_key("live:p1"));
-        assert!(s.modelop.lock().await.contains_key("live:p2"));
-        assert!(!s.blockop.lock().await.contains_key("dead:p9"));
-        assert!(!s.modelop.lock().await.contains_key("dead:p9"));
-    }
-
-    #[tokio::test]
-    async fn test_reap_retains_dead_reply_targets() {
-        // Fail-visible corpses: a DM reply to a dead pane's card must
-        // keep its address so routing fails loudly ("pane gone") instead
-        // of silently prompting the focused live agent.
-        let (s, _dir) = isolated_state();
-        let job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("live:p1".into(), job);
-        s.targets.lock().await.insert((1, 10), "live:p1".into());
-        s.targets.lock().await.insert((1, 11), "dead:p9".into());
-        s.torder.lock().await.push_back((1, 10));
-        s.torder.lock().await.push_back((1, 11));
-        let mut cache = Some(HashSet::from(["live:p1".to_string()]));
-        reap_orphans(&s, &mut cache).await;
-        assert_eq!(
-            s.targets.lock().await.get(&(1, 10)).map(String::as_str),
-            Some("live:p1")
-        );
-        assert_eq!(
-            s.targets.lock().await.get(&(1, 11)).map(String::as_str),
-            Some("dead:p9")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_reap_keeps_armed_runwait() {
-        // runwait holds workspace ids, not panes: the tick must never
-        // misread one as a dead pane and wipe the armed shell-run waiter
-        // (the next message is an acknowledged command, not a prompt).
-        let (s, _dir) = isolated_state();
-        let job = Job::new(vec![], 1, None);
-        s.jobs.lock().await.insert("live:p1".into(), job);
-        s.runwait.lock().await.insert((1, None), "w8".into());
-        let mut cache = Some(HashSet::from(["live:p1".to_string()]));
-        reap_orphans(&s, &mut cache).await;
-        assert_eq!(
-            s.runwait.lock().await.get(&(1, None)).map(String::as_str),
-            Some("w8")
-        );
-    }
-}
+#[path = "hygiene_tests.rs"]
+mod tests;

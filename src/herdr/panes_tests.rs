@@ -75,3 +75,70 @@ fn test_best_split_direction_longer_axis() {
     assert_eq!(best_split_direction(40, 60), "down");
     assert_eq!(best_split_direction(80, 80), "right");
 }
+
+#[test]
+fn test_parse_shell_idle_busy_and_idle() {
+    // Foreground owned by a child command → busy; by the shell → idle.
+    // (Shape mirrors the live `pane.process_info` result envelope.)
+    let busy: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_process_group_id": 50209,
+            "foreground_processes": [{"pid": 50209, "cmdline": "sleep 30"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&busy), Some(false));
+    let idle: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_process_group_id": 3473,
+            "foreground_processes": [{"pid": 3473, "cmdline": "zsh"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&idle), Some(true));
+    // No group id beside an all-shell list: unconfirmed (old servers,
+    // invisible builtins) — unknown, never a fast idle verdict.
+    let no_pgid: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_processes": [{"pid": 3473, "cmdline": "zsh"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&no_pgid), None);
+    // Empty list carries no signal: the group id decides, and a
+    // missing group id means unknown — never guessed idle.
+    let empty_idle: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_process_group_id": 3473, "foreground_processes": []}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&empty_idle), Some(true));
+    let empty_busy: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_process_group_id": 50209, "foreground_processes": []}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&empty_busy), Some(false));
+    let empty_unknown: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_processes": []}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&empty_unknown), None);
+    // All-shell list contradicting the group id: the list lags across
+    // fork/exec — busy, never a bankable sample toward settle.
+    let incoherent: serde_json::Value = serde_json::from_str(
+        r#"{"process_info": {"pane_id": "w8:p1", "shell_pid": 3473,
+            "foreground_process_group_id": 50209,
+            "foreground_processes": [{"pid": 3473, "cmdline": "zsh"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_shell_idle(&incoherent), Some(false));
+    // Unusable shapes → None (caller degrades, never guesses).
+    for bad in [
+        r#"{}"#,
+        r#"{"process_info": {}}"#,
+        r#"{"process_info": {"shell_pid": 1}}"#,
+        r#"{"process_info": {"shell_pid": 1, "foreground_processes": [{"cmdline": "x"}]}}"#,
+    ] {
+        let v: serde_json::Value = serde_json::from_str(bad).unwrap();
+        assert_eq!(parse_shell_idle(&v), None);
+    }
+}

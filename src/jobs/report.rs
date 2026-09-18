@@ -1,8 +1,10 @@
 //! Delivery helpers for live prompts and reports. Split from finalize.rs.
 use crate::state::AppState;
 
-/// Live-card head: the debounced ack and the streaming card share it
-/// so the first output edit only appends content (no flicker).
+/// Live-card head: the streaming card shows fresh output under it —
+/// instant feedback before any output lands is the typing indicator,
+/// never an empty card (a content-free "working…" row is a message
+/// about nothing).
 pub const WORKING_HEAD: &str = "🔄 working…";
 /// Quiet retire text: never freeze a live "working…" card.
 pub const RUN_ENDED: &str = "⏹️ run ended";
@@ -11,7 +13,9 @@ pub const CANCELLED: &str = "✋ cancelled";
 
 /// Cancel edit: retires the live card where it lives (live_dest), never
 /// job.dest (remap race). Falls back to a fresh post at the current dest
-/// only when the edit fails — orphans nothing, double-posts nothing.
+/// only when the card is definitely gone — a transient edit failure
+/// posts nothing (a fresh send then would orphan-duplicate like the
+/// stream path refuses to), the frozen card heals on the next turn.
 pub async fn edit_live(
     s: &AppState,
     chat_id: i64,
@@ -28,8 +32,12 @@ pub async fn edit_live(
         let Some((lchat, _)) = live_dest.take() else {
             return;
         };
-        if s.tg.try_edit_msg(lchat, mid, text, None).await.is_err() {
-            report(s, chat_id, thread_id, pane, text).await;
+        match s.tg.try_edit_msg(lchat, mid, text, None).await {
+            Ok(()) => {}
+            Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
+                report(s, chat_id, thread_id, pane, text).await;
+            }
+            Err(_) => {}
         }
     } else {
         live_dest.take();
@@ -105,21 +113,3 @@ pub async fn fold_live(
     }
 }
 
-/// One-shot silent "working" into an empty live slot (debounced ack).
-/// No retry: a miss just means output adopts the slot later, folds
-/// retire it. Single source for the ack text. Returns true on delivery
-/// so the caller only arms `acked` when the row actually landed.
-pub async fn post_silent_ack(
-    s: &AppState,
-    chat: i64,
-    th: Option<i64>,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
-) -> bool {
-    if let Some(mid) = s.tg.send_silent(chat, th, WORKING_HEAD).await {
-        *live_mid = Some(mid);
-        *live_dest = Some((chat, th));
-        return true;
-    }
-    false
-}

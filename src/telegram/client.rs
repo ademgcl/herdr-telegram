@@ -67,8 +67,8 @@ impl TelegramClient {
                     if crate::telegram::topic_missing(&msg)
                         || crate::telegram::topic_not_modified(&msg)
                         || msg.contains("message is not modified")
-                        || msg.contains("not enough rights")
-                        || msg.contains("bot was blocked")
+                        || msg.contains(crate::telegram::NO_RIGHTS)
+                        || msg.contains(crate::telegram::BOT_BLOCKED)
                         || msg.contains("CHAT_ADMIN_REQUIRED")
                     {
                         return Err(e);
