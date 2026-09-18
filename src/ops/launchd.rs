@@ -1,0 +1,176 @@
+//! launchd prod install: render the service plist + bootstrap it.
+//! Replaces dev.herdr.telegram.plist.example + the README sed recipe —
+//! every key below is byte-identical in meaning (ThrottleInterval 30 +
+//! rationale included). Split from `ops` (300-line file limit).
+//!
+//! install is idempotent (bootout → write → bootstrap) and never kills:
+//! a busy guard port refuses instead of murdering a foreign owner.
+//! uninstall is bootout + rm only — it never touches supervised PIDs.
+use super::{proc, say};
+use crate::types::Res;
+use std::path::PathBuf;
+
+pub const LABEL: &str = "dev.herdr.telegram";
+
+pub fn plist_path(home: &str) -> PathBuf {
+    PathBuf::from(home).join("Library/LaunchAgents/dev.herdr.telegram.plist")
+}
+
+/// Prod must run the release binary (state/log/cwd parity with the
+/// documented setup); a debug `dev install` would pin a dev build.
+pub fn release_exe(exe: &str) -> bool {
+    exe.contains("target/release")
+}
+
+pub fn render_plist(exe: &str, dir: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n\
+         <dict>\n\
+         \t<key>Label</key>\n\
+         \t<string>{LABEL}</string>\n\
+         \t<key>ProgramArguments</key>\n\
+         \t<array>\n\
+         \t\t<string>{exe}</string>\n\
+         \t</array>\n\
+         \t<key>WorkingDirectory</key>\n\
+         \t<string>{dir}</string>\n\
+         \t<!-- ThrottleInterval 30: the bot holds a single-instance TCP guard, so a fast crash-loop would spin hot against a live/stale holder; throttling keeps restarts spaced out. -->\n\
+         \t<key>ThrottleInterval</key>\n\
+         \t<integer>30</integer>\n\
+         \t<key>RunAtLoad</key>\n\
+         \t<true/>\n\
+         \t<key>KeepAlive</key>\n\
+         \t<true/>\n\
+         \t<key>SuccessfulExit</key>\n\
+         \t<false/>\n\
+         \t<key>StandardOutPath</key>\n\
+         \t<string>{dir}/bot.log</string>\n\
+         \t<key>StandardErrorPath</key>\n\
+         \t<string>{dir}/bot.log</string>\n\
+         </dict>\n\
+         </plist>\n"
+    )
+}
+
+async fn launchctl(args: &[&str]) -> (bool, String) {
+    let out = tokio::process::Command::new("launchctl")
+        .args(args)
+        .output()
+        .await;
+    match out {
+        Ok(o) => (
+            o.status.success(),
+            String::from_utf8_lossy(&o.stderr).trim().to_string(),
+        ),
+        Err(e) => (false, e.to_string()),
+    }
+}
+
+async fn uid() -> Res<String> {
+    let out = tokio::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .await
+        .map_err(|e| format!("id -u: {e}"))?;
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("id -u returned {id:?}").into());
+    }
+    Ok(id)
+}
+
+pub async fn install(home: &str) -> Res<()> {
+    if home.is_empty() {
+        return Err("HOME not set".into());
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+    let exe = exe.to_string_lossy().into_owned();
+    if !release_exe(&exe) {
+        return Err("run dev install from ./target/release/herdr-telegram".into());
+    }
+    let dir = std::env::current_dir().map_err(|e| format!("current dir: {e}"))?;
+    let dir = dir.to_string_lossy().into_owned();
+    let path = plist_path(home);
+    let id = uid().await?;
+    // Unload a previous revision first (tolerate not-loaded);
+    // bootstrap errors when the job already exists.
+    let _ = launchctl(&["bootout", &format!("gui/{id}/{LABEL}")]).await;
+    // Fail-closed: a STILL-busy guard means a foreign owner (dev
+    // console, manual run) — restore the previous job (old plist is
+    // untouched) and refuse instead of orphaning prod.
+    let port = proc::guard_port();
+    if proc::port_busy(port) || !proc::bot_pids().is_empty() {
+        let _ = launchctl(
+            &["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()],
+        )
+        .await;
+        return Err("guard busy — dev stop/cleanup first, then dev install".into());
+    }
+    std::fs::write(&path, render_plist(&exe, &dir))
+        .map_err(|e| format!("write plist: {e}"))?;
+    let (ok, err) = launchctl(
+        &["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()],
+    )
+    .await;
+    if !ok {
+        return Err(format!("bootstrap failed: {err}").into());
+    }
+    say(home, &format!("installed {} (logs to bot.log)", path.display()));
+    Ok(())
+}
+
+pub async fn uninstall(home: &str) -> Res<()> {
+    if home.is_empty() {
+        return Err("HOME not set".into());
+    }
+    let id = uid().await?;
+    // Bootout + rm only — never stop_all: a supervised dev child is
+    // not ours to kill, and prod restarts itself while bootstrapped.
+    let _ = launchctl(&["bootout", &format!("gui/{id}/{LABEL}")]).await;
+    match tokio::fs::remove_file(plist_path(home)).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove plist: {e}").into()),
+    }
+    say(home, "uninstalled dev.herdr.telegram");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_plist_keeps_every_key() {
+        let p = render_plist("/r/target/release/herdr-telegram", "/r");
+        for key in [
+            "<string>dev.herdr.telegram</string>",
+            "<string>/r/target/release/herdr-telegram</string>",
+            "<string>/r</string>",
+            "<!-- ThrottleInterval 30:",
+            "<integer>30</integer>",
+            "<key>RunAtLoad</key>",
+            "<key>KeepAlive</key>",
+            "<key>SuccessfulExit</key>",
+            "<string>/r/bot.log</string>",
+            "<!DOCTYPE plist",
+        ] {
+            assert!(p.contains(key), "plist missing {key}");
+        }
+        assert!(!p.contains("__REPO_DIR__"), "placeholder leaked");
+    }
+
+    #[test]
+    fn test_release_exe_gate() {
+        assert!(release_exe("/r/target/release/herdr-telegram"));
+        assert!(!release_exe("/r/target/debug/herdr-telegram"));
+    }
+
+    #[test]
+    fn test_plist_path_suffix() {
+        let p = plist_path("/Users/x");
+        assert!(p.ends_with("Library/LaunchAgents/dev.herdr.telegram.plist"));
+    }
+}

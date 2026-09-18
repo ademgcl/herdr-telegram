@@ -29,9 +29,9 @@ cp .env.example .env  # fill in below
 ## Run
 
 ```sh
-sed "s|__REPO_DIR__|$(pwd)|g" dev.herdr.telegram.plist.example > ~/Library/LaunchAgents/dev.herdr.telegram.plist && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.herdr.telegram.plist  # auto-restart on crash/reboot, logs to bot.log
-launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop before manual runs — single instance only, else getUpdates Conflict
-launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev.herdr.telegram.plist  # uninstall
+./target/release/herdr-telegram dev install  # write plist + bootstrap: auto-restart on crash/reboot, logs to bot.log
+./target/release/herdr-telegram dev uninstall  # bootout + remove plist
+launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop before manual runs — single instance only, else getUpdates Conflict (`dev install` to resume prod)
 ```
 
 ## Use
@@ -46,7 +46,7 @@ launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev
 
 ## Ops
 
-`herdr-telegram dev` → console (rebuild on change, logs, topics, cleanup). One-shots: `dev status|logs|start|stop|restart|cleanup|build`. Run prod on launchd; dev stays foreground.
+`herdr-telegram dev` → console (rebuild on change, logs, topics, cleanup). One-shots: `dev status|logs|start|stop|restart|cleanup|build|install|uninstall`. Run prod on launchd; dev stays foreground.
 
 ## Security
 

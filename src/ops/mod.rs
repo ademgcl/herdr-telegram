@@ -7,6 +7,7 @@
 //! never auto-kill another owner — `cleanup`/`stop` are explicit only.
 mod cmd;
 mod console;
+mod launchd;
 mod mask;
 mod proc;
 
@@ -33,6 +34,7 @@ fn print_help() {
   logs [-n N] [--follow]: bot.log tail (masked)
   start | stop | restart: foreground supervised run / explicit stop
   cleanup               : stop bot PIDs + free the guard port (explicit)
+  install | uninstall   : write/remove launchd plist + bootstrap/bootout (prod)
   build | check         : cargo build / cargo check
   topics|reset|trigger|inspect: control-socket passthrough (see ctl)
   help                  : this help
@@ -199,6 +201,8 @@ pub async fn run(args: &[String]) -> Res<()> {
             say(&home, &format!("stopped {} process(es)", stopped.len()));
             cmd::run_foreground(&home, port).await
         }
+        "install" => launchd::install(&home).await,
+        "uninstall" => launchd::uninstall(&home).await,
         "build" => {
             let (lines, ok) = proc::cargo(&["build"], &home).await;
             for l in lines {
