@@ -45,8 +45,9 @@ pub(crate) async fn await_shell_settle(
     let mut stable = 0u32;
     let mut cur = String::new();
     for i in 0..15u32 {
-        // Direct dest touch every 4th second (≈4s cadence < ≈5s expiry).
-        if i.is_multiple_of(4) {
+        // Direct dest touch on the shared typing cadence (well inside
+        // the ≈5s expiry).
+        if i.is_multiple_of(crate::state::TYPING_TICK_SECS as u32) {
             let tg = s.tg.clone();
             tokio::spawn(async move {
                 tg.typing(chat, thread).await;

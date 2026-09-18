@@ -167,8 +167,8 @@ impl TelegramClient {
     }
 
     /// "typing…" indicator — lasts ~5s, repeat to sustain. Zero clutter.
-    /// 5s timeout (not 10s): the sustain loop ticks every 4s, so a slow
-    /// send must not stretch the period past expiry and flicker.
+    /// 5s timeout (not 10s): sustain loops re-fire well inside expiry,
+    /// so a slow send must not stretch the period past it and flicker.
     pub async fn typing(&self, chat_id: i64, thread_id: Option<i64>) {
         let mut params = json!({"chat_id": chat_id, "action": "typing"});
         if let Some(th) = thread_id {

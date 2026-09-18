@@ -76,7 +76,7 @@ pub async fn enqueue_prompt(
         let (c, t) = (req.chat_id, req.message_thread_id);
         Some(tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(crate::state::TYPING_TICK_SECS)).await;
                 tg.typing(c, t).await;
             }
         }))

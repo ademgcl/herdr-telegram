@@ -85,6 +85,13 @@ pub struct State {
 
 pub type AppState = Arc<State>;
 
+/// Typing-indicator cadence: Telegram clients expire `typing` after ~5s
+/// with no resend, and a returning client shows nothing until the next
+/// action lands — so every sustainer re-fires well inside the window
+/// (worst passive-return gap ≈ this). Single source for the typing task,
+/// the watcher piggyback, and the submit sustain loops.
+pub(crate) const TYPING_TICK_SECS: u64 = 2;
+
 /// Directory holding bot state files (jobs/focus/offset/topics).
 /// `HERDR_STATE_DIR` overrides it; default is the launch CWD (historic
 /// behavior). Launchd and manual runs MUST use the same one — split

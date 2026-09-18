@@ -176,7 +176,7 @@ impl State {
             let forum = s.cfg.forum;
             // General-origin jobs never have a thread; topic jobs use
             // theirs. 1:1 working↔typing: while unmapped (mid-job delete
-            // healing), type into General EVERY 4s tick — a ~5s-expiry
+            // healing), type into General EVERY tick — a ~5s-expiry
             // indicator must never see a gap (an earlier once-per-3-ticks
             // throttle left exactly such a dropout mid-job).
             while let Some(chat_id) = forum {
@@ -186,7 +186,7 @@ impl State {
                 } else {
                     s.tg.typing(chat_id, None).await;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(super::TYPING_TICK_SECS)).await;
             }
         });
         tasks.insert(pane.to_string(), handle);

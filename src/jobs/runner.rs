@@ -61,12 +61,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     if !job.is_stopped() {
         s.start_typing(&pane).await;
     }
-    // Dedicated typing ticker (4s < ≈5s expiry, independent of the 5s
-    // fallback + herdr RPCs): thinking pauses with no output/events go
-    // dark in DM mode without it (no typing task there), and a slow
-    // get_agent would otherwise stretch the piggyback period past
-    // expiry. Spawned, never awaited inline.
-    let mut typing_tick = tokio::time::interval(Duration::from_secs(4));
+    // Dedicated typing ticker (shared cadence, well inside the ≈5s
+    // expiry, independent of the 5s fallback + herdr RPCs): thinking
+    // pauses with no output/events go dark in DM mode without it (no
+    // typing task there), and a slow get_agent would otherwise stretch
+    // the piggyback period past expiry. Spawned, never awaited inline.
+    let mut typing_tick = tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
     typing_tick.tick().await;
     // First settled sample arms the report timer (see settle.rs): agy
     // idles briefly between phases mid-run, and retiring on that
@@ -118,8 +118,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // Output activity → stream; status change → maybe finalize.
         // The fallback tick guarantees progress even without events.
         // Events (when they fire) simply trigger an earlier wake-up.
-        // The typing arm fires every 4s and falls through to a poll
-        // cycle too (its own cost is one spawned `typing` RPC).
+        // The typing arm fires on the shared cadence and falls through
+        // to a poll cycle too (its own cost is one spawned `typing` RPC).
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 job.mark_stopped();
@@ -140,10 +140,10 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     tg.typing(dchat, dth).await;
                 });
                 // Falls through to a poll cycle below (no `continue`):
-                // restarting the 5s fallback sleep every 4s would starve
-                // it on quiet panes, leaving settle/stall 100% dependent
-                // on herdr events — the fallback exists exactly for when
-                // events are unavailable.
+                // restarting the 5s fallback sleep on every typing tick
+                // would starve it on quiet panes, leaving settle/stall
+                // 100% dependent on herdr events — the fallback exists
+                // exactly for when events are unavailable.
                 WatchEvent::Output
             }
             _ = tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)) => WatchEvent::Output,
@@ -160,7 +160,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Every wake-up: check settle first (never depend on herdr events),
         // then stream whatever output is new. (Dest typing lives on its
-        // own 4s ticker arm above, not piggybacked here.)
+        // own ticker arm above, not piggybacked here.)
         let agent = match get_agent(&s.cfg.socket, &pane).await {
             Ok(a) => {
                 fails = 0;
