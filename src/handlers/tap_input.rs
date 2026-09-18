@@ -1,6 +1,6 @@
 use super::tap_classify::dialog_stalled;
 use crate::{
-    handlers::dialog::refresh_blocked_card,
+    handlers::dialog::{parse_options, refresh_blocked_card, winner_lines},
     herdr::client::{
         get_agent, read_screen_visible, send_agent_keys, send_pane_input, send_pane_keys,
     },
@@ -60,6 +60,15 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
             return Err(TypeError::Resumed);
         }
         _ => {}
+    }
+    // 1:1 with the card (which hides Type on option dialogs): free text
+    // has nowhere to land there — typed keys + Enter can confirm the
+    // wrong highlight. Refuse before sending anything; a stale waiter
+    // racing a turnover fails here and the next message retries fresh.
+    if !parse_options(&winner_lines(&before)).is_empty() {
+        return Err(TypeError::Failed(
+            "that question takes an option — tap a button, or /card for fresh buttons".into(),
+        ));
     }
     if let Err(e) = send_pane_input(socket, pane, text).await {
         return Err(TypeError::Failed(e.to_string()));

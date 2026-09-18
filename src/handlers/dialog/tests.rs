@@ -1,5 +1,7 @@
 //! Dialog parser tests. Split from `dialog` (300-line file limit).
-use super::{blocked_kb, parse_options};
+use super::{
+    blocked_card_text, blocked_kb, parse_options, winner_lines,
+};
 use super::surfaces::{settle_select, track_card};
 use std::collections::HashMap;
 
@@ -210,5 +212,46 @@ fn test_settle_select_replaces_and_orphans_siblings() {
     let (keep, stale) = settle_select(vec![], 1, 102);
     assert_eq!(keep, vec![(1, 102)]);
     assert!(stale.is_empty());
+}
+
+#[test]
+fn test_type_button_only_without_options() {
+    // Select dialog: options navigate, free text has nowhere to land.
+    let kb = blocked_kb("w1:p1", &v(&["Allow once", "Deny"]));
+    let flat = kb.to_string();
+    assert!(!flat.contains("Type answer"), "select must not offer Type");
+    assert!(flat.contains("Dismiss"), "Dismiss always stays");
+    // Text input: no options, Type is the only way to answer in chat.
+    let kb = blocked_kb("w1:p1", &[]);
+    let flat = kb.to_string();
+    assert!(flat.contains("Type answer"), "text input needs Type");
+    assert!(flat.contains("Confirm"), "fallback Confirm stays");
+}
+
+#[test]
+fn test_blocked_card_text_promises_typing_only_without_options() {
+    let t = blocked_card_text("Pick?", &v(&["Yes", "No"]));
+    assert!(t.contains("Tap an answer."));
+    assert!(!t.contains("type it"));
+    let t = blocked_card_text("Name?", &[]);
+    assert!(t.contains("or just type it"));
+}
+
+#[test]
+fn test_winner_lines_ignores_scrollback_options() {
+    // Stale numbered list above a rule, live text question below: the
+    // text gate must see no options (same basis as tap bounds checks).
+    let screen = v(&[
+        "1. Old choice",
+        "2. Other choice",
+        "────────────────────────────────",
+        "Enter a name:",
+    ]);
+    let win = winner_lines(&screen);
+    assert!(
+        parse_options(&win).is_empty(),
+        "scrollback options must not gate text: {win:?}"
+    );
+    assert!(winner_lines(&[]).is_empty());
 }
 

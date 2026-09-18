@@ -1,7 +1,7 @@
 use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, live_card, parse_options},
+    handlers::dialog::{blocked_card_text, blocked_kb, live_card, parse_options, winner_lines},
     herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
@@ -22,6 +22,25 @@ pub async fn answer_tap(
     action: &str,
 ) {
     if action == "type" {
+        // 1:1 arming: a stale Type button racing a turnover to options
+        // must not arm a waiter that eats the next message into refuses
+        // (nor wipe the sibling run/key waiters below). Unreadable
+        // screen arms anyway — outage must not brick typing; the
+        // send-path gate backstops stale arms.
+        let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
+        if !screen.is_empty()
+            && !parse_options(&winner_lines(&screen)).is_empty()
+        {
+            s.tg.send_msg(
+                chat,
+                thread,
+                "that question takes an option — tap a button:",
+                None,
+            )
+            .await;
+            super::escape::handle_card_topic(s, chat, thread, pane).await;
+            return;
+        }
         // Exclusive waiter: drop sibling run/key waiters for this key so
         // the next message types instead of running.
         s.runwait.lock().await.remove(&(chat, thread));
@@ -109,7 +128,7 @@ pub async fn answer_tap(
                 let (q, opts) = live_card(&screen);
                 let text = format!(
                     "⚠️ that button expired — current question:\n\n{}",
-                    blocked_card_text(&q)
+                    blocked_card_text(&q, &opts)
                 );
                 let kb = Some(blocked_kb(pane, &opts));
                 if s.tg
@@ -146,7 +165,7 @@ pub async fn answer_tap(
             match classify_tap(&before, &after, still_blocked) {
                 TapResult::NewDialog => {
                     let (q, opts) = live_card(&after);
-                    let text = blocked_card_text(&q);
+                    let text = blocked_card_text(&q, &opts);
                     let kb = Some(blocked_kb(pane, &opts));
                     // Edit first; on failure post fresh — and stamp the
                     // signature ONLY on delivery, so a dropped update

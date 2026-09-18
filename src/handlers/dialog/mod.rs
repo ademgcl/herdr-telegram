@@ -62,6 +62,24 @@ pub(crate) fn dialog_sig(screen: &[String]) -> String {
     waiting_lines(screen)
 }
 
+/// Winner-segment lines for shape checks (option parse, text-input
+/// gate): a stale numbered list in scrollback must not flip bounds or
+/// the text gate. Falls back to the full screen when no block wins —
+/// callers stay permissive on unreadable screens, like `tap_keys`.
+/// Pure for tests.
+pub(crate) fn winner_lines(screen: &[String]) -> Vec<String> {
+    if screen.is_empty() {
+        return Vec::new();
+    }
+    let lines: Vec<String> = screen.iter().map(|l| deframe(l)).collect();
+    let win = dialog_block(&lines).1;
+    if win.is_empty() {
+        screen.to_vec()
+    } else {
+        win
+    }
+}
+
 fn short_label(opt: &str, idx: usize) -> String {
     let label: String = opt.chars().take(12).collect();
     format!("{}: {label}", idx + 1)
@@ -86,15 +104,30 @@ pub(crate) fn blocked_kb(pane: &str, options: &[String]) -> Value {
             {"text": "✅ Confirm ⏎", "callback_data": format!("B:allow:{pane}")},
         ]));
     }
-    rows.push(json!([
-        {"text": "🚫 Dismiss", "callback_data": format!("B:deny:{pane}")},
-        {"text": "⌨️ Type answer", "callback_data": format!("B:type:{pane}")},
-    ]));
+    // 1:1 with the live TUI: an option dialog is answered by navigating
+    // its options — free text has nowhere to land (typed keys + Enter
+    // can confirm the wrong highlight). Type shows only for option-less
+    // dialogs (text inputs), where it is the only way to answer.
+    let mut dismiss_row = vec![
+        json!({"text": "🚫 Dismiss", "callback_data": format!("B:deny:{pane}")}),
+    ];
+    if options.is_empty() {
+        dismiss_row.push(
+            json!({"text": "⌨️ Type answer", "callback_data": format!("B:type:{pane}")}),
+        );
+    }
+    rows.push(Value::Array(dismiss_row));
     Value::Array(rows)
 }
 
-pub(crate) fn blocked_card_text(q: &str) -> String {
-    format!("⛔ blocked — needs input\n\n{q}\n\nTap an answer, or just type it.")
+pub(crate) fn blocked_card_text(q: &str, options: &[String]) -> String {
+    // Same 1:1: promise typing only where the button exists.
+    let hint = if options.is_empty() {
+        "\n\nTap an answer, or just type it."
+    } else {
+        "\n\nTap an answer."
+    };
+    format!("⛔ blocked — needs input\n\n{q}{hint}")
 }
 
 async fn send_with(
@@ -112,7 +145,7 @@ async fn send_with(
         s.tg.send_msg_with_effect(
             chat,
             thread,
-            &blocked_card_text(&q),
+            &blocked_card_text(&q, &options),
             Some(blocked_kb(pane, &options)),
             Some(crate::telegram::EFFECT_FIRE),
         )

@@ -36,18 +36,11 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
         Err(_) => return TapCall::KeysFailed,
         _ => {}
     }
-    // Winner-segment basis (mirrors live_card): a stale numbered list
-    // in scrollback must not flip the branch or the bounds check.
-    let win_raw: Vec<String> = if before.is_empty() {
-        Vec::new()
-    } else {
-        let lines: Vec<String> = before
-            .iter()
-            .map(|l| crate::jobs::filter::deframe(l))
-            .collect();
-        crate::jobs::segment::dialog_block(&lines).1
-    };
-    let probe = if win_raw.is_empty() { &before } else { &win_raw };
+    // Winner-segment basis (single source: `winner_lines`): a stale
+    // numbered list in scrollback must not flip the branch or the
+    // bounds check.
+    let win = crate::handlers::dialog::winner_lines(&before);
+    let probe: &[String] = if win.is_empty() { &before } else { &win };
     let (nav, confirm, label): (Vec<&str>, Vec<&str>, String) =
         if let Some(rest) = action.strip_prefix("opt") {
             match rest.parse::<usize>() {
