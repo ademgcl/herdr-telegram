@@ -1,20 +1,25 @@
 use super::callback_parse::{gone_card, live_target, pane_live, split_action, split_head};
-use super::callback_waiters::{handle_keys_arm, handle_run_arm};
+use super::callback_waiters::{handle_agent_output, handle_keys_arm, handle_pane_output, handle_run_arm};
 use crate::{
-    herdr::client::{get_agent, list_agents, list_workspaces, read_agent_output, read_pane_output},
+    herdr::client::{get_agent, list_agents, list_workspaces},
     state::{
         AppState, OpGuard,
         guard::{SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS},
     },
     ui::{
-        agent_card_kb, btn, build_agent_card_text, build_menu_text, build_ws_text, main_menu_kb,
-        pane_output_kb, spawn_kb, workspace_kb, ws_label,
+        agent_card_kb, build_agent_card_text, build_menu_text, build_ws_text, main_menu_kb,
+        spawn_kb, workspace_kb, ws_label,
     },
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
+    // Answer the spinner FIRST, even for rejected taps: a hanging spinner
+    // leaks nothing (no info in the ack) and a silent one looks wedged.
+    if let Some(cbq_id) = cbq["id"].as_str() {
+        s.tg.answer_callback(cbq_id).await;
+    }
     let Some(from) = cbq["from"]["id"].as_i64() else {
         return;
     };
@@ -27,9 +32,6 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     let msg_id = cbq["message"]["message_id"].as_i64();
     let data = cbq["data"].as_str().unwrap_or("");
 
-    if let Some(cbq_id) = cbq["id"].as_str() {
-        s.tg.answer_callback(cbq_id).await;
-    }
     let (Some(chat), Some(msg_id)) = (chat, msg_id) else {
         return;
     };
@@ -140,19 +142,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             handle_run_arm(&s, chat, msg_id, thread, ws).await;
         }
         ("p", Some(pane)) => {
-            let Ok(out) = read_pane_output(&s.cfg.socket, pane, 120).await else {
-                gone_card(&s, chat, msg_id, pane).await;
-                return;
-            };
-            let body = if out.is_empty() {
-                "(no output)".into()
-            } else {
-                out
-            };
-            let mid =
-                s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(pane)))
-                    .await;
-            s.remember(chat, mid, pane).await;
+            handle_pane_output(&s, chat, msg_id, thread, pane).await;
         }
         ("m", None) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
@@ -215,19 +205,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
         }
         ("o", Some(pane)) => {
-            let Ok(out) = read_agent_output(&s.cfg.socket, pane, 120).await else {
-                gone_card(&s, chat, msg_id, pane).await;
-                return;
-            };
-            let body = if out.is_empty() {
-                "(no output)".into()
-            } else {
-                out
-            };
-            let kb = serde_json::json!([[btn("← back", &format!("a:{pane}"))]]);
-            let mid = s.tg.send_msg(chat, thread, &body, Some(kb)).await;
-            s.remember(chat, mid, pane).await;
-            s.set_focus(pane).await;
+            handle_agent_output(&s, chat, msg_id, thread, pane).await;
         }
         // Blocked-pane answers: B:<action>:<pane> — the tapped card is
         // updated in place (a turned-over dialog swaps question+buttons).

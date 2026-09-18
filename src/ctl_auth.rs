@@ -48,6 +48,8 @@ pub fn display_token_path() -> String {
 }
 
 /// Persist the token 0600 so only this user can read it back.
+/// `mode(0o600)` applies at create time only — a pre-existing 0644 file
+/// keeps its width — so chmod after open like `write_private` (same rule).
 pub fn write_control_token(token: &str) {
     match std::fs::OpenOptions::new()
         .write(true)
@@ -57,8 +59,14 @@ pub fn write_control_token(token: &str) {
         .open(ctl_token_path())
     {
         Ok(mut f) => {
+            use std::os::unix::fs::PermissionsExt;
+            if f.set_permissions(std::fs::Permissions::from_mode(0o600)).is_err() {
+                eprintln!("[ctl] warning: control token file may be wider than 0600");
+            }
             use std::io::Write;
-            let _ = writeln!(f, "{token}");
+            if writeln!(f, "{token}").is_err() {
+                eprintln!("[ctl] warning: cannot persist control token");
+            }
         }
         Err(e) => eprintln!("[ctl] warning: cannot persist control token: {e}"),
     }

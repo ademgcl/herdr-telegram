@@ -6,8 +6,9 @@
 //! bricks the pane until restart — exactly the stuck-second-question
 //! bug (first tap posts the new card, its drop then loses the lock
 //! race and the pane stays "in flight" forever). Three layers:
-//! * `Drop` spins boundedly (holders never hold across awaits, so
-//!   contention is microsecond-scale — a single `try_lock` was the hole).
+//! * `Drop` spins boundedly (holders never hold the tokio mutex across
+//!   awaits — only the map entry outlives RPCs — so contention is
+//!   microsecond-scale; a single `try_lock` was the hole).
 //! * claims carry instants and self-evict stale entries, so the next
 //!   user action rescues immediately instead of waiting for a tick.
 //! * peeks (`is_held` / `block_held` / `model_held`) evict stale on
@@ -169,14 +170,15 @@ impl super::State {
 impl Drop for OpGuard<'_> {
     fn drop(&mut self) {
         // No await in Drop and never blocks the executor: bounded CPU
-        // spin only (holders release immediately, never across
-        // awaits — and evict paths now log after drop, so no I/O ever
-        // widens this window). A single try_lock here was the
-        // stuck-answers bug — one lost race wedged the pane, and every
-        // answer path (`tap already in flight`, `/card`, `/esc`, typed
-        // answers) refuses while the map holds it. Generation-checked:
-        // an evict-while-running successor keeps its guard when our
-        // late drop lands.
+        // spin only. Distinguish two lifetimes: the GUARD (map entry)
+        // intentionally spans RPCs (single-flight across the post), while
+        // the MUTEX hold never crosses an await (claim/insert/drop only)
+        // — and evict paths log after drop, so no I/O ever widens this
+        // window. A single try_lock here was the stuck-answers bug — one
+        // lost race wedged the pane, and every answer path (`tap already
+        // in flight`, `/card`, `/esc`, typed answers) refuses while the
+        // map holds it. Generation-checked: an evict-while-running
+        // successor keeps its guard when our late drop lands.
         for _ in 0..DROP_SPIN_ITERS {
             if let Ok(mut set) = self.set.try_lock() {
                 if set.get(&self.pane).map(|at| *at == self.at).unwrap_or(false) {

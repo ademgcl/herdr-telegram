@@ -255,3 +255,22 @@ fn test_winner_lines_ignores_scrollback_options() {
     assert!(winner_lines(&[]).is_empty());
 }
 
+#[test]
+fn test_dialog_sig_covers_option_turnover() {
+    // Same question, different options → different sig (an option-only
+    // turnover must repost, never go silent with stale buttons).
+    let a = v(&["Allow once   Allow always   Reject"]);
+    let b = v(&["Allow once   Deny"]);
+    assert_ne!(super::dialog_sig(&a), super::dialog_sig(&b));
+    assert_eq!(super::dialog_sig(&a), super::dialog_sig(&a));
+}
+
+#[test]
+fn test_is_blank_card_guards_outage_keeps_pick() {
+    // Whitespace-only/outage read: no buzz. Blank question WITH
+    // options is a real picker and still posts.
+    assert!(super::is_blank_card(&v(&["   "])));
+    assert!(super::is_blank_card(&[]));
+    assert!(!super::is_blank_card(&v(&["Allow once   Deny"])));
+}
+

@@ -16,12 +16,20 @@ pub async fn settle_books(
     entry_epoch: u64,
     entry_pending: usize,
 ) {
-    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+    // Remove ONLY our entry share, never zero blindly: a submit landing
+    // between the epoch check and this write runs pending+=1 BEFORE its
+    // epoch bump — a moved epoch with a grown count is its signature,
+    // and a blind zero would eat the new prompt's cover (a later failed
+    // submit would read owed==0 and retire the live watcher + wipe the
+    // durable intent — silent prompt loss). Saturating-sub keeps a
+    // concurrent +1 alive on both paths.
+    {
         let mut p = job.pending.lock().await;
         *p = p.saturating_sub(entry_pending);
-        return;
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            return;
+        }
     }
-    *job.pending.lock().await = 0;
     // Clear the durable intent only if it still belongs to this prompt:
     // a shell command (or a re-entered agent prompt) may have
     // overwritten the shared per-pane slot mid-finalize — wiping it
@@ -31,11 +39,10 @@ pub async fn settle_books(
     let prompt = job.prompt.lock().await.clone();
     let (chat, th) = *job.dest.lock().await;
     // Re-check after the snapshots above: a submit interleaving here
-    // owns the pane now — wiping its intent loses the reply. Same
-    // cover rule as the entry check (deferred prompts stay owed).
+    // owns the pane now — wiping its intent loses the reply. Our share
+    // already left the count above, so this is a bare return (subtracting
+    // again would eat the newcomer's cover — see above).
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-        let mut p = job.pending.lock().await;
-        *p = p.saturating_sub(entry_pending);
         return;
     }
     s.clear_pending_if_matches(pane, chat, th, &prompt).await;

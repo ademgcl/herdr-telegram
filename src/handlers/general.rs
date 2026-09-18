@@ -64,12 +64,25 @@ pub(crate) async fn handle_general_forum_message(
         match super::tap::type_text(&s, &wpane, text).await {
             Ok(()) => {
                 s.typewait.lock().await.remove(&(chat, thread_id));
-                s.tg.send_msg(chat, thread_id, &format!("⌨️ typed into {wpane} + ⏎"), None)
+                s.tg.send_msg(chat, thread_id, &crate::ui::typed_ack(&wpane), None)
                     .await;
                 return;
             }
             Err(super::tap::TypeError::Resumed) => {
                 s.typewait.lock().await.remove(&(chat, thread_id));
+                // Raced resume: answer text must never become General
+                // control (a literal "/reset" as an answer must not
+                // wipe topics). Fall through to bare-text guidance only.
+                if cmd.starts_with('/') {
+                    s.tg.send_msg(
+                        chat,
+                        thread_id,
+                        "that answer arrived after the question moved on — re-send as a fresh prompt in the agent's topic.",
+                        None,
+                    )
+                    .await;
+                    return;
+                }
             }
             Err(e) => {
                 s.tg.send_msg(

@@ -21,7 +21,7 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         s.tg.send_msg(
             chat,
             thread,
-            "answer in flight — wait a beat, then /card",
+            crate::ui::CARD_IN_FLIGHT,
             None,
         )
         .await;

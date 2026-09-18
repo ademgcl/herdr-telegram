@@ -14,6 +14,7 @@ pub mod escape;
 pub mod forum;
 pub mod forum_topic;
 pub mod forum_topic_status;
+pub mod forum_typewait;
 pub mod general;
 pub mod interactive;
 pub mod kill;

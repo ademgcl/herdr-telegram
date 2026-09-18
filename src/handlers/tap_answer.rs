@@ -83,6 +83,19 @@ pub async fn answer_tap(
             tw.remove(&(chat, thread));
         }
     }
+    // Stale-card identity gate: turnover repoints tracking (old card
+    // stripped, new tracked), so a queued tap from a superseded card
+    // must not drive keys into the new dialog's different option set
+    // (bounds alone can't tell same-length turnovers apart). Tracked
+    // but untracked-tap → skip sends, fall into the Unknown refresh
+    // below. Empty map = restart-emptied, stay permissive.
+    let stale_card = {
+        let map = s.blocked_card.lock().await;
+        match map.get(pane) {
+            Some(v) if !v.is_empty() => !v.contains(&(chat, msg_id)),
+            _ => false,
+        }
+    };
     // Optimistic claim, BEFORE the slow herdr roundtrips: strip the
     // tapped card's buttons so the tap reads instant and cannot
     // double-fire. Text is untouched (markup-only), so every outcome
@@ -90,7 +103,11 @@ pub async fn answer_tap(
     // and can never strand live buttons on a dead end.
     s.tg.strip_buttons(chat, msg_id).await;
     println!("[tap] {pane} action={action}");
-    let call = tap_keys(&s.cfg.socket, pane, action).await;
+    let call = if stale_card {
+        TapCall::Unknown
+    } else {
+        tap_keys(&s.cfg.socket, pane, action).await
+    };
     match call {
         TapCall::Unknown => {
             // Narrowed/turned-over dialog: refresh the card in place with

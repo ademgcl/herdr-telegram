@@ -9,7 +9,7 @@ pub(crate) use super::shell_settle::shell_snapshot;
 /// Pure reply body so tests cover the shape without I/O.
 pub fn format_shell_reply(cmd: &str, output: &str) -> String {
     let body = if output.trim().is_empty() {
-        "(no output)".to_string()
+        crate::ui::NO_OUTPUT.to_string()
     } else {
         output.trim().to_string()
     };

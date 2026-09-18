@@ -173,8 +173,10 @@ impl TopicManager {
         let branch = agent.as_ref().and_then(|a| a.branch.as_deref());
         let status = agent.as_ref().map(|a| a.status.as_str()).unwrap_or("ready");
 
-        let title_or_tag = raw_title.unwrap_or(&tag);
-        let name = names::format_title(space, title_or_tag, kind);
+        // Mint with the stable tag — never the agent terminal title
+        // (titles are 1:1 with herdr TAB names, watchdog converges ≤60s;
+        // the terminal title lives only in the identity card below).
+        let name = names::format_title(space, &tag, kind);
         let color = names::workspace_icon_color(space);
         match self.tg.create_forum_topic(forum, &name, Some(color)).await {
             Ok(thread) => {

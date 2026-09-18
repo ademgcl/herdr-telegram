@@ -39,7 +39,17 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     // Shell→agent flip (`opencode` typed at the prompt) re-icons in
     // seconds via the spawned watch, not next watchdog tick.
     super::shell_lifecycle::spawn_flip_watch(s, pane);
-    settle_report_shell(s, chat, thread, pane, cmd, &before, None).await;
+    // Detached: the settle budget runs ~5.5 min and the Telegram pump is
+    // sequential — awaiting it here would head-of-line-block every pane
+    // (watchdog ≤60s violated globally, /cancel deadened for the very
+    // command stalling). Match-guarded inside (pending_matches before
+    // every post, clear-if-matches for clears): a racing resubmit owns
+    // the slot and overlapping settles retire silently.
+    let (s2, pane_o, cmd_o, before_o) =
+        (s.clone(), pane.to_string(), cmd.to_string(), before.clone());
+    tokio::spawn(async move {
+        settle_report_shell(&s2, chat, thread, &pane_o, &cmd_o, &before_o, None).await;
+    });
 }
 
 /// Workspace shell-run (⌨️ run cmd button): fresh tab in `ws`, run one
@@ -95,14 +105,16 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     s.remember_pending(&pane, chat, thread, cmd).await;
     s.push_history(&pane, cmd).await;
     super::shell_lifecycle::spawn_flip_watch(s, &pane);
-    settle_report_shell(
-        s,
-        chat,
-        thread,
-        &pane,
-        cmd,
-        &before,
+    // Detached like run_shell_cmd above: same ~5.5 min budget, same
+    // sequential-pump head-of-line block, same match-guarded safety.
+    let (s2, pane_o, cmd_o, before_o, kb) = (
+        s.clone(),
+        pane.clone(),
+        cmd.to_string(),
+        before.clone(),
         Some(pane_output_kb(&pane)),
-    )
-    .await;
+    );
+    tokio::spawn(async move {
+        settle_report_shell(&s2, chat, thread, &pane_o, &cmd_o, &before_o, kb).await;
+    });
 }

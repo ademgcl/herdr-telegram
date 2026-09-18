@@ -60,7 +60,7 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
     }
     match send_agent_keys(&s.cfg.socket, pane, &key_list).await {
         Ok(_) => {
-            s.tg.send_msg(chat, None, "⌨️ sent", None).await;
+            s.tg.send_msg(chat, None, crate::ui::KEYS_SENT, None).await;
         }
         Err(e) => {
             s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
@@ -136,7 +136,7 @@ pub(crate) async fn handle_read(
     match read_agent_output(&s.cfg.socket, &row.pane, lines).await {
         Ok(out) => {
             let body = if out.is_empty() {
-                "(no output)".into()
+                crate::ui::NO_OUTPUT.into()
             } else {
                 out
             };

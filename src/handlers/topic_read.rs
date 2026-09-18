@@ -15,7 +15,7 @@ pub(crate) async fn handle_read_agent(
     match read_agent_output(&s.cfg.socket, pane, lines).await {
         Ok(out) => {
             let body = if out.is_empty() {
-                "(no output)".into()
+                crate::ui::NO_OUTPUT.into()
             } else {
                 out
             };

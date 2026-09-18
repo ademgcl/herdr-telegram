@@ -94,9 +94,7 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // as a shell command. Fail-closed expiry, same corpse bound style
     // as the op guards. Key/type waiters expire by age too (a stale K
     // arm keys into live work, a stale Type arm answers a dead question)
-    // — pane-death reap above still applies first. (Chat-keyed notice
-    // stamps self-prune on access with their own bounds — daily nag vs
-    // 10-min stale — so a shared reap here would corrupt the daily one.)
+    // — pane-death reap above still applies first.
     {
         let now = std::time::Instant::now();
         s.runwait
@@ -111,6 +109,16 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             .lock()
             .await
             .retain(|_, (_, at)| !claim_stale(*at, now, TYPEWAIT_STALE_SECS));
+        // Chat-keyed notice stamps self-prune on access with their own
+        // bounds — but access-only pruning grows unbounded across chats
+        // (new map needs expiry + prune). Same bounds here, never
+        // pane-liveness: daily nag vs 10-min stale.
+        s.nagged.lock().await.retain(|_, at| {
+            !claim_stale(*at, now, crate::types::NAGGED_SECS)
+        });
+        s.stale_nagged.lock().await.retain(|_, at| {
+            !claim_stale(*at, now, crate::types::STALE_SECS)
+        });
     }
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.

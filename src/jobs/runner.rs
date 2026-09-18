@@ -1,4 +1,4 @@
-//! Prompt watcher loop: event stream + 5s fallback tick, live-message
+//! Prompt watcher loop: event stream + 2s poll tick, live-message
 //! streaming, stall watch, and settle→finalize on completion. Split
 //! from `finalize`/`settle` (300-line file limit). One task per prompt;
 //! supersede/cancel retire via epoch + cancel signal, never by killing.
@@ -19,8 +19,8 @@ use tokio::time::{Duration, Instant};
 
 /// Terminal statuses that end a watch cycle.
 const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"];
-/// Safety-net tick in case herdr events are unavailable.
-const FALLBACK_TICK_SECS: u64 = 5;
+/// Poll-failure backoff seed in case herdr events are unavailable.
+const RETRY_BACKOFF_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
@@ -46,7 +46,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // Delivery-retry backoff: a dead Telegram must not spin herdr reads
     // at full tick rate forever — back off, keep the intent until
     // /cancel or pane death breaks the loop.
-    let mut retry_wait = FALLBACK_TICK_SECS;
+    let mut retry_wait = RETRY_BACKOFF_SECS;
     println!("[watcher] start {pane}");
     // Job-owned typing: fresh panes are event-blind until the next
     // resubscribe (≤120s) and short bursts fall between 60s watchdog
@@ -58,11 +58,15 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         s.start_typing(&pane).await;
     }
     // Dedicated typing ticker (shared cadence, well inside the ≈5s
-    // expiry, independent of the 5s fallback + herdr RPCs): thinking
-    // pauses with no output/events go dark in DM mode without it (no
-    // typing task there), and a slow get_agent would otherwise stretch
-    // the piggyback period past expiry. Spawned, never awaited inline.
+    // expiry, independent of herdr RPCs): thinking pauses with no
+    // output/events go dark in DM mode without it (no typing task
+    // there), and a slow get_agent would otherwise stretch the
+    // piggyback period past expiry. Spawned, never awaited inline.
     let mut typing_tick = tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
+    // Skip, never Burst: after slow RPC rounds a Burst catch-up would
+    // fire ticks back-to-back, spinning tight poll cycles against an
+    // already-sick herdr. Skipped ticks simply resume the 2s cadence.
+    typing_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     typing_tick.tick().await;
     // Time-based sustain task: the ticker arm above falls through to
     // blocking work (30s agent reads, 45s stall scans), so sick-herdr
@@ -111,7 +115,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             episode.reset();
             settled_since = None;
             acc.clear();
-            retry_wait = FALLBACK_TICK_SECS;
+            retry_wait = RETRY_BACKOFF_SECS;
             // Herdr-error streak belongs to the old prompt: 11 failures
             // there + 1 here must not back the new prompt off for 60s.
             fails = 0;
@@ -134,8 +138,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         }
 
         // Output activity → stream; status change → maybe finalize.
-        // The fallback tick guarantees progress even without events.
-        // Events (when they fire) simply trigger an earlier wake-up.
+        // The typing tick doubles as the poll driver (2s cadence): every
+        // wake-up runs a poll cycle below, so progress never depends on
+        // herdr events (they only wake earlier). No separate fallback
+        // sleep arm — a second timer would never fire ahead of the 2s
+        // tick (recreated each iteration = dead code); slow-RPC catch-up
+        // is Skip above, never Burst.
         // The typing arm fires on the shared cadence and falls through
         // to a poll cycle too (its own cost is one spawned `typing` RPC).
         let _event = tokio::select! {
@@ -155,14 +163,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 // Poll driver only now (the sustain task above owns the
                 // indicator): empty working cards are gone by design, and
                 // instant feedback is typing, sustained time-based.
-                // Falls through to a poll cycle below (no `continue`):
-                // restarting the 5s fallback sleep on every typing tick
-                // would starve it on quiet panes, leaving settle/stall
-                // 100% dependent on herdr events — the fallback exists
-                // exactly for when events are unavailable.
+                // Falls through to a poll cycle below (no `continue`).
                 WatchEvent::Output
             }
-            _ = tokio::time::sleep(Duration::from_secs(FALLBACK_TICK_SECS)) => WatchEvent::Output,
             e = async {
                 match ev.as_mut() {
                     Some(stream) => stream.next().await,

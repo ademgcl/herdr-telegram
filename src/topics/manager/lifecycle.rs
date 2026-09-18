@@ -115,13 +115,24 @@ impl TopicManager {
         if self.storage.get_icon(pane).as_deref() == Some(names::context_icon_emoji_id("shell")) {
             return true;
         }
-        // Legacy tag-only marker (icon never persisted for this pane).
-        self.storage.get_icon(pane).is_none()
-            && self.storage.get_tag(pane).is_some_and(|t| {
-                t.starts_with("sh")
-                    && !t[2..].is_empty()
-                    && t[2..].chars().all(|c| c.is_ascii_digit())
-            })
+        // Durable sh<n> tag regardless of icon: a user-customized shell
+        // icon must not lose the marker (else restart misreads live
+        // shell as a fresh flip — ghost quit + eaten intent). Future
+        // unknown kinds starting with "sh" keep bot icons (fallback 🤖),
+        // so only None (legacy) or non-bot (custom) icons count — a bot
+        // fallback with an sh tag is an agent, not a shell.
+        let tag_is_sh = self.storage.get_tag(pane).is_some_and(|t| {
+            t.starts_with("sh")
+                && !t[2..].is_empty()
+                && t[2..].chars().all(|c| c.is_ascii_digit())
+        });
+        if !tag_is_sh {
+            return false;
+        }
+        match self.storage.get_icon(pane) {
+            None => true,
+            Some(id) => !names::is_bot_icon(&id),
+        }
     }
 
     /// F6: Record recent message ID for this pane.

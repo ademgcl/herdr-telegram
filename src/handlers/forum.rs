@@ -27,41 +27,32 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     // new space + shell topic to keep chatting in. Blank auto-labels.
     // Waiter precedence: an armed typed/keyed/run answer for THIS thread
     // owns the next message (DM parity) — a literal "/space …" answer
-    // must answer, never mint a billable workspace mid-dialog.
+    // must answer, never mint a billable workspace mid-dialog. Armed
+    // threads (mapped or General) skip the mint and fall through to the
+    // topic/General dispatch below, which consumes waiters first. (Waiters
+    // are keyed (chat, thread) with thread always Some in forums, so a
+    // thread-less update can never be armed — no None hole.)
     let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),
     };
     if bare_cmd(raw_cmd) == "/space" {
-        let armed_here = if let Some(th) = thread_id {
-            let k = (chat, Some(th));
-            s.typewait.lock().await.contains_key(&k)
-                || s.keywait.lock().await.contains_key(&k)
-                || s.runwait.lock().await.contains_key(&k)
-        } else {
-            false
-        };
-        if armed_here
-            && let Some(th) = thread_id
-            && let Some(pane) = s.topics.pane_of_thread(th)
-        {
-            if let Some(mid) = msg["message_id"].as_i64() {
-                s.topics.record_msg(&pane, mid);
-            }
-            println!(
-                "[forum] topic msg for {pane} ({} chars)",
-                text.chars().count()
-            );
-            super::forum_topic::handle_topic_agent_message(s, chat, th, &pane, text).await;
+        // Fail-closed: check (chat, thread_id) unconditionally — a
+        // thread-less General update can still own a (chat, None) waiter
+        // (panel taps carry no thread id), and minting is billable.
+        let k = (chat, thread_id);
+        let armed_here = s.typewait.lock().await.contains_key(&k)
+            || s.keywait.lock().await.contains_key(&k)
+            || s.runwait.lock().await.contains_key(&k);
+        if !armed_here {
+            let label = if super::space::check_label(arg) {
+                arg.to_string()
+            } else {
+                super::space::next_label(&s).await
+            };
+            super::space::open_space(&s, chat, thread_id, &label).await;
             return;
         }
-        let label = if super::space::check_label(arg) {
-            arg.to_string()
-        } else {
-            super::space::next_label(&s).await
-        };
-        super::space::open_space(&s, chat, thread_id, &label).await;
-        return;
     }
 
     // If inside an agent topic thread:

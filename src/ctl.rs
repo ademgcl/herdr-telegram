@@ -89,12 +89,23 @@ pub async fn run_control_server(s: AppState, listener: TcpListener) {
 
 pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
     let addr = format!("127.0.0.1:{port}");
-    let mut stream = match TcpStream::connect(&addr).await {
-        Ok(s) => s,
-        Err(e) => {
+    // Bounded connect: a wedged listener must fail the CLI visibly,
+    // never hang it forever (fail-closed for a dev tool too).
+    let mut stream = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        TcpStream::connect(&addr),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             eprintln!("⚠️  Cannot connect to herdr-telegram on {addr}: {e}");
             eprintln!("   Is the bot running? Start it with: herdr-telegram dev start");
             return Err(e.into());
+        }
+        Err(_) => {
+            eprintln!("⚠️  Connect to herdr-telegram on {addr} timed out — is the bot wedged?");
+            return Err("control connect timed out".into());
         }
     };
 

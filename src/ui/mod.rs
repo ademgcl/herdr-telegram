@@ -24,3 +24,31 @@ pub const TAP_MODEL_IN_FLIGHT: &str = "tap/model op in flight — wait a beat";
 
 /// Single source for the /esc contention ack (an answer owns the pane).
 pub const ESC_IN_FLIGHT: &str = "answer in flight — wait a beat, then /esc";
+
+/// Single source for the failed-submit-blocked ack when the question card
+/// is already up (or owned in flight): plain text, no second ❗ buzz.
+pub const BLOCKED_SEE_CARD: &str = "⛔ blocked — see question card";
+
+/// Single source for the /card contention ack (an answer owns the pane).
+pub const CARD_IN_FLIGHT: &str = "answer in flight — wait a beat, then /card";
+
+/// Single source for the keys-sent ack shared by every keys arm.
+pub const KEYS_SENT: &str = "⌨️ keys sent";
+
+/// Single source for the unreadable-space ack (fail-closed: never open in
+/// the wrong space).
+pub const SPACE_UNREADABLE: &str = "⚠️ could not read space — try again";
+
+/// Single source for the empty-output fallback shared by every output
+/// surface (pane/agent reads, shell results, topic reads).
+pub const NO_OUTPUT: &str = "(no output)";
+
+/// Single source for the typed-answer ack (every typed-answer surface).
+pub fn typed_ack(pane: &str) -> String {
+    format!("⌨️ typed into {pane} + ⏎")
+}
+
+/// Single source for the stranded-typewait shell refuse (typed answer
+/// landing across an agent→shell flip: fail-closed, never run as shell).
+pub const STALE_TYPEWAIT_SHELL: &str =
+    "that answer was armed for a question, but this is now a shell — re-send as a shell command if intended";

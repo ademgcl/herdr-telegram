@@ -57,9 +57,18 @@ pub(crate) fn waiting_lines(screen: &[String]) -> String {
 
 
 /// Signature of the displayed dialog: same dialog → same sig across
-/// re-reads; a turned-over dialog (allow → confirm) → new sig.
+/// re-reads; a turned-over dialog (allow → confirm, or same question
+/// with different options) → new sig. Options included: an
+/// option-only turnover must not reuse the sig and go silent with
+/// stale buttons.
 pub(crate) fn dialog_sig(screen: &[String]) -> String {
-    waiting_lines(screen)
+    let q = waiting_lines(screen);
+    let opts = parse_options(&winner_lines(screen));
+    if opts.is_empty() {
+        q
+    } else {
+        format!("{}\n{}", q, opts.join("\n"))
+    }
 }
 
 /// Winner-segment lines for shape checks (option parse, text-input
@@ -164,12 +173,26 @@ async fn send_with(
     posted
 }
 
+/// True when the screen carries no dialog content at all: blank
+/// question AND no options. A whitespace-only/outage read must not
+/// buzz `(waiting for input)` + ❗ — but a blank question WITH options
+/// is a real picker and still posts. Pure for tests.
+pub(crate) fn is_blank_card(screen: &[String]) -> bool {
+    let (q, opts) = live_card(screen);
+    opts.is_empty() && q == "(waiting for input)"
+}
+
 /// Post the interactive card: what the agent asks + one-tap answers
 /// mirroring the dialog's own options. Explicit "show me" contexts use
 /// this (always posts); status observations use [`refresh_blocked_card`].
-/// Returns true when the card was delivered.
+/// Returns true when the card was delivered. Empty/unreadable screens
+/// post nothing (parity with refresh — an explicit `/card` must not
+/// buzz `(waiting for input)` + ❗ on outage).
 pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) -> bool {
     let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
+    if screen.is_empty() || is_blank_card(&screen) {
+        return false;
+    }
     send_with(s, chat, thread, pane, &screen).await
 }
 
@@ -208,7 +231,7 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         _ => {}
     }
     let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
-    if screen.is_empty() {
+    if screen.is_empty() || is_blank_card(&screen) {
         return false;
     }
     let sig = dialog_sig(&screen);

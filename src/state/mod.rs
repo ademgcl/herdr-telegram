@@ -265,10 +265,16 @@ impl State {
         // the focused live agent. Dead entries age out via the 512-cap
         // overflow in `remember`; per-tap `forget_target` drops them.
         // A killed pane must not stay focused: the next bare message
-        // would route into the void instead of resolving fresh.
-        if self.focus.lock().await.as_deref() == Some(pane) {
-            *self.focus.lock().await = None;
-            let _ = std::fs::remove_file(Self::focus_file());
+        // would route into the void instead of resolving fresh. Single
+        // lock check-and-clear: a set_focus landing between a split check
+        // and clear would else wipe the FRESH focus (next bare message
+        // loses its target — sole-agent fallback or error).
+        {
+            let mut focus = self.focus.lock().await;
+            if focus.as_deref() == Some(pane) {
+                *focus = None;
+                let _ = std::fs::remove_file(Self::focus_file());
+            }
         }
         self.status.lock().await.remove(pane);
         self.last_done.lock().await.remove(pane);

@@ -168,7 +168,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                 if was_shell {
                     super::shell_lifecycle::spawn_flip_watch(s, &pane);
                 }
-                s.tg.send_msg(chat, thread, "keys sent", None).await;
+                s.tg.send_msg(chat, thread, crate::ui::KEYS_SENT, None).await;
             }
             Err(e) => {
                 s.tg.send_msg(chat, thread, &format!("keys failed: {e}"), None)

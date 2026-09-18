@@ -23,8 +23,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
 
     // Shell topics never consume typewaits (no blocked dialogs here): a
     // waiter stranded on this thread (stale/crafted B:type) would sit
-    // forever, so drop it on entry.
-    s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+    // forever, so drop it on entry. Fail-closed: a dropped waiter means
+    // the text was typed as a dialog answer across an agent→shell flip —
+    // never run it as a shell command blind (no write on ambiguous).
+    let had_typewait = s.typewait.lock().await.remove(&(chat, Some(thread_id))).is_some();
 
     if cmd == "/help" || cmd == "/start" {
         s.tg.send_msg(chat, Some(thread_id), &shell_help_text(pane), None)
@@ -65,6 +67,16 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     if cmd == "/esc" {
         super::escape::handle_esc_shell(&s, chat, Some(thread_id), pane).await;
+        return;
+    }
+    if had_typewait {
+        s.tg.send_msg(
+            chat,
+            Some(thread_id),
+            crate::ui::STALE_TYPEWAIT_SHELL,
+            None,
+        )
+        .await;
         return;
     }
     if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
@@ -140,7 +152,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         match read_shell_output(&s.cfg.socket, pane, lines).await {
             Ok(out) => {
                 let body = if out.trim().is_empty() {
-                    "(no output)".into()
+                    crate::ui::NO_OUTPUT.into()
                 } else {
                     out
                 };
@@ -189,7 +201,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
             Ok(_) => {
                 // Keys may have launched an agent — same instant re-icon.
                 super::shell_lifecycle::spawn_flip_watch(&s, pane);
-                s.tg.send_msg(chat, Some(thread_id), "⌨️ keys sent", None)
+                s.tg.send_msg(chat, Some(thread_id), crate::ui::KEYS_SENT, None)
                     .await;
             }
             Err(e) => {

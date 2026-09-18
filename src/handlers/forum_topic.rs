@@ -98,43 +98,17 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     // An armed typed-answer waiter wins over every command except
-    // the escapes checked above (/cancel, /card, /esc): the next message
-    // belongs to the waiting prompt — a literal "/kill" can itself be
-    // the answer a dialog is waiting for. Peek first (a blockop race or
-    // failed send must not consume the waiter); a resume race falls
-    // through. Self-healing: a stale corpse evicts instead of bricking
-    // answers.
-    if let Some(wpane) = s.typewait.lock().await.get(&(chat, Some(thread_id))).map(|(p, _)| p.clone()) {
-        if s.block_held(&wpane).await {
-            s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None).await;
+    // the escapes checked above (/cancel, /card, /esc) — see
+    // `forum_typewait` (split for the 300-line cap).
+    match super::forum_typewait::consume_typewait(&s, chat, thread_id, text, cmd.starts_with('/')).await {
+        super::forum_typewait::WaitOut::Handled => return,
+        super::forum_typewait::WaitOut::ResumedPrompt => {
+            // Raced resume: answer text must never become control —
+            // a literal "/kill" becomes a prompt (fail-closed).
+            enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
             return;
         }
-        match super::tap::type_text(&s, &wpane, text).await {
-            Ok(()) => {
-                s.typewait.lock().await.remove(&(chat, Some(thread_id)));
-                s.tg.send_msg(
-                    chat,
-                    Some(thread_id),
-                    &format!("⌨️ typed into {wpane} + ⏎"),
-                    None,
-                )
-                .await;
-                return;
-            }
-            Err(super::tap::TypeError::Resumed) => {
-                s.typewait.lock().await.remove(&(chat, Some(thread_id)));
-            }
-            Err(e) => {
-                s.tg.send_msg(
-                    chat,
-                    Some(thread_id),
-                    &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
-                    None,
-                )
-                .await;
-                return;
-            }
-        }
+        super::forum_typewait::WaitOut::Pass => {}
     }
 
     // Control plane works in-thread, after the waiters (an armed
@@ -262,7 +236,7 @@ pub(crate) async fn handle_topic_agent_message(
                 s.tg.send_msg(
                     chat,
                     Some(thread_id),
-                    &format!("⌨️ typed into {pane} + ⏎"),
+                    &crate::ui::typed_ack(pane),
                     None,
                 )
                 .await;

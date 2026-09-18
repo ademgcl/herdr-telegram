@@ -73,7 +73,7 @@ pub(crate) async fn handle_topic_keys_agent(
     match send_agent_keys(&s.cfg.socket, pane, &keys).await {
         Ok(_) => {
             s.tg
-                .send_msg(chat, Some(thread_id), "⌨️ keys sent", None)
+                .send_msg(chat, Some(thread_id), crate::ui::KEYS_SENT, None)
                 .await;
         }
         Err(e) => {

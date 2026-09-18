@@ -76,7 +76,7 @@ pub async fn open_shell(s: &AppState, chat: i64, thread: Option<i64>, ws: Option
 /// unlike /shell). `ws_id` is already resolved.
 async fn open_pane(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str) {
     if ws_id.is_empty() {
-        s.tg.send_msg(chat, thread, "⚠️ could not read space — try again", None).await;
+        s.tg.send_msg(chat, thread, crate::ui::SPACE_UNREADABLE, None).await;
         return;
     }
     create_tab_and_attach(s, chat, thread, ws_id, false).await;
@@ -97,7 +97,7 @@ pub async fn open_pane_here(s: &AppState, chat: i64, thread: Option<i64>, pane: 
     match pane_facts(&s.cfg.socket).await.ok().and_then(|m| m.get(pane).map(|f| f.ws.clone())) {
         Some(ws) if !ws.is_empty() => open_pane(s, chat, thread, &ws).await,
         _ => {
-            s.tg.send_msg(chat, thread, "⚠️ could not read space — try again", None).await;
+            s.tg.send_msg(chat, thread, crate::ui::SPACE_UNREADABLE, None).await;
         }
     }
 }

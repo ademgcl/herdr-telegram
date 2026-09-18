@@ -48,7 +48,7 @@ pub async fn try_finalize_blocked(
             s,
             live_dest,
             live_mid,
-            "⛔ blocked — see question card",
+            crate::ui::BLOCKED_SEE_CARD,
         )
         .await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;

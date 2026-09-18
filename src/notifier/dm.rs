@@ -69,5 +69,13 @@ pub(crate) async fn push_dm_alert(
             .lock()
             .await
             .insert(pane.to_string(), screen.to_vec());
+    } else if !screen.is_empty() {
+        // No recent final and a readable screen: anchor silently so the
+        // same delta doesn't re-RPC every tick (forum stray parity).
+        // Empty screens never anchor (outage must not wipe the baseline).
+        s.seen
+            .lock()
+            .await
+            .insert(pane.to_string(), screen.to_vec());
     }
 }

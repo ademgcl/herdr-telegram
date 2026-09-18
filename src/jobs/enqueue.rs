@@ -2,11 +2,11 @@
 //! watcher. Split from `runner` (300-line file limit).
 use super::runner::watch_job;
 use crate::{
-    handlers::dialog::send_blocked_card,
-    herdr::client::{read_screen, rpc_t},
+    handlers::dialog::{dialog_sig, send_blocked_card},
+    herdr::client::{read_screen, read_screen_visible, rpc_t},
     jobs::finalize::report,
     jobs::job::Job,
-    state::AppState,
+    state::{AppState, OpGuard},
     types::{AgentRow, PromptRequest},
 };
 use serde_json::json;
@@ -104,7 +104,38 @@ pub async fn enqueue_prompt(
         // even when older work stays covered by the running watcher.
         let msg = e.to_string();
         if msg.contains("blocked") {
-            send_blocked_card(&s, req.chat_id, req.message_thread_id, &pane).await;
+            // Gated post (refresh/finalize parity): a tap/finalize in
+            // flight owns the card — contention reports plainly without
+            // buzz. A sig re-check after the claim stops a second ❗ when
+            // a racing post just stamped this exact dialog (both FIRE
+            // effects otherwise — the submit-failed-because-blocked
+            // interleaving is the common case, not a corner).
+            let screen = read_screen_visible(&s.cfg.socket, &pane, 60).await;
+            if screen.is_empty() {
+                report(
+                    &s,
+                    req.chat_id,
+                    req.message_thread_id,
+                    &pane,
+                    &format!("⚠️ error: {e}"),
+                )
+                .await;
+            } else {
+                let sig = dialog_sig(&screen);
+                let dup = s.blocked_sig.lock().await.get(&pane).map(|v| v == &sig).unwrap_or(false);
+                if dup || s.block_held(&pane).await {
+                    report(&s, req.chat_id, req.message_thread_id, &pane, crate::ui::BLOCKED_SEE_CARD).await;
+                } else if let Some(_op) = OpGuard::claim(&s.blockop, &pane).await {
+                    let dup2 = s.blocked_sig.lock().await.get(&pane).map(|v| v == &sig).unwrap_or(false);
+                    if dup2 {
+                        report(&s, req.chat_id, req.message_thread_id, &pane, crate::ui::BLOCKED_SEE_CARD).await;
+                    } else {
+                        send_blocked_card(&s, req.chat_id, req.message_thread_id, &pane).await;
+                    }
+                } else {
+                    report(&s, req.chat_id, req.message_thread_id, &pane, crate::ui::BLOCKED_SEE_CARD).await;
+                }
+            }
         } else {
             report(
                 &s,
@@ -176,20 +207,62 @@ pub async fn enqueue_prompt(
         // Re-check under a fresh lock: a concurrent enqueue may have won
         // while the baseline read yielded (same pattern as the spawn
         // above) — a mapped live job is always a successor, leave it.
-        let mut map = s.jobs.lock().await;
-        let live_other = map
+        // Adopt it instead of dropping our prompt: our books already
+        // landed on the retired job and durable holds our text, so
+        // transfer the full last-wins cover (dest/prompt/pending/epoch)
+        // to the live successor — otherwise our prompt is owed to a dead
+        // watcher while the successor serves with a short count (dropped
+        // reply), or prompt/dest split from durable and leak the intent
+        // (ghost re-arm after restart). Lock-free handoff (clone the Arc,
+        // drop the map, then write — never nest jobs→pending locks, not
+        // even a fresh Job's fields while holding the map).
+        let live_other = s
+            .jobs
+            .lock()
+            .await
             .get(&pane)
             .cloned()
-            .map(|j| !j.is_stopped())
-            .unwrap_or(false);
-        if !live_other {
-            let j2 = Job::new(baseline, req.chat_id, req.message_thread_id);
-            *j2.prompt.lock().await = req.text.clone();
-            *j2.pending.lock().await = 1;
-            map.insert(pane.clone(), j2.clone());
-            drop(map);
-            println!("[jobs] re-armed watcher for {pane} (retired mid-submit)");
-            tokio::spawn(watch_job(s.clone(), pane.clone(), j2.clone()));
+            .filter(|j| !j.is_stopped());
+        match live_other {
+            None => {
+                let j2 = Job::new(baseline, req.chat_id, req.message_thread_id);
+                *j2.prompt.lock().await = req.text.clone();
+                *j2.pending.lock().await = 1;
+                // Re-check under the insert lock: a concurrent enqueue
+                // may have won while the field writes above yielded —
+                // a mapped live job is always a successor, adopt it.
+                let mut map = s.jobs.lock().await;
+                if let Some(j) = map.get(&pane).cloned().filter(|j| !j.is_stopped()) {
+                    drop(map);
+                    *j.dest.lock().await = (req.chat_id, req.message_thread_id);
+                    *j.prompt.lock().await = req.text.clone();
+                    *j.pending.lock().await += 1;
+                    j.epoch.fetch_add(1, Ordering::Relaxed);
+                    s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
+                        .await;
+                } else {
+                    map.insert(pane.clone(), j2.clone());
+                    drop(map);
+                    println!("[jobs] re-armed watcher for {pane} (retired mid-submit)");
+                    tokio::spawn(watch_job(s.clone(), pane.clone(), j2.clone()));
+                }
+            }
+            Some(j) => {
+                // Full last-wins transfer (house rule, same as the
+                // delivered-books path above): dest/prompt move to our req
+                // so they match the durable slot our delivered path just
+                // wrote — a prompt/dest split would mismatch
+                // clear_pending_if_matches and leak the intent (ghost
+                // re-arm after restart). History/focus already recorded
+                // above for the same req; durable rewrite is idempotent.
+                // (No map held here — live_other was cloned above.)
+                *j.dest.lock().await = (req.chat_id, req.message_thread_id);
+                *j.prompt.lock().await = req.text.clone();
+                *j.pending.lock().await += 1;
+                j.epoch.fetch_add(1, Ordering::Relaxed);
+                s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
+                    .await;
+            }
         }
     }
 }

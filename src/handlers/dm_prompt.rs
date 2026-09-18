@@ -19,14 +19,35 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
             s.typewait.lock().await.remove(&(chat, None));
-            s.tg.send_msg(chat, None, &format!("⌨️ typed into {wpane} + ⏎"), None)
+            s.tg.send_msg(chat, None, &crate::ui::typed_ack(&wpane), None)
                 .await;
             true
         }
         // Raced by a resume: the waiter is already consumed, so route
         // the text as a fresh prompt below instead of dropping it.
+        // Fail-closed: a "/" answer must become a prompt, never DM
+        // control (a literal "/kill" as an answer must not kill).
         Err(super::tap::TypeError::Resumed) => {
             s.typewait.lock().await.remove(&(chat, None));
+            if text.trim_start().starts_with('/') {
+                match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
+                    Ok(a) => {
+                        enqueue_prompt(
+                            crate::state::AppState::clone(s),
+                            chat,
+                            None,
+                            a.into(),
+                            text.to_string(),
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                            .await;
+                    }
+                }
+                return true;
+            }
             false
         }
         Err(e) => {
@@ -100,7 +121,7 @@ pub(crate) async fn handle_bare_prompt(
         match super::tap::type_text(s, &row.pane, &prompt_text).await {
             Ok(()) => {
                 s.set_focus(&row.pane).await;
-                s.tg.send_msg(chat, None, &format!("⌨️ typed into {} + ⏎", row.pane), None)
+                s.tg.send_msg(chat, None, &crate::ui::typed_ack(&row.pane), None)
                     .await;
             }
             // Resumed between snapshot and send: the text becomes a
