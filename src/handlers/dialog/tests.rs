@@ -1,5 +1,7 @@
 //! Dialog parser tests. Split from `dialog` (300-line file limit).
 use super::{blocked_kb, parse_options};
+use super::surfaces::{settle_select, track_card};
+use std::collections::HashMap;
 
 fn v(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
@@ -176,5 +178,37 @@ fn test_live_card_opencode_permission_wide_terminal_d2() {
         opts,
         vec!["Allow once", "Allow always", "Reject"]
     );
+}
+
+#[test]
+fn test_track_card_replaces_same_chat_appends_others() {
+    let mut map: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    assert_eq!(track_card(&mut map, "w1:p1", 1, 101), None);
+    assert_eq!(track_card(&mut map, "w1:p1", 2, 201), None);
+    // Repost in the same chat replaces and reports the evicted
+    // surface, so the caller strips it: resolve strips each live
+    // surface exactly once, never a stale mid.
+    assert_eq!(track_card(&mut map, "w1:p1", 1, 102), Some((1, 101)));
+    assert_eq!(map["w1:p1"], vec![(1, 102), (2, 201)]);
+    // Other panes are untouched.
+    assert_eq!(track_card(&mut map, "w1:p2", 1, 301), None);
+    assert_eq!(map["w1:p2"], vec![(1, 301)]);
+}
+
+#[test]
+fn test_settle_select_replaces_and_orphans_siblings() {
+    // Same-chat repost: predecessor stale, live surface kept.
+    // (Sibling entries keep scan order; order is irrelevant.)
+    let (keep, stale) = settle_select(vec![(1, 101), (2, 201)], 1, 102);
+    assert_eq!(keep, vec![(2, 201), (1, 102)]);
+    assert_eq!(stale, vec![(1, 101), (2, 201)]);
+    // Same surface again: pure no-op re-ensure.
+    let (keep, stale) = settle_select(vec![(1, 102)], 1, 102);
+    assert_eq!(keep, vec![(1, 102)]);
+    assert!(stale.is_empty());
+    // Restart-emptied map: live surface tracked from nothing.
+    let (keep, stale) = settle_select(vec![], 1, 102);
+    assert_eq!(keep, vec![(1, 102)]);
+    assert!(stale.is_empty());
 }
 

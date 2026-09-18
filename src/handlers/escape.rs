@@ -118,7 +118,9 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         .unwrap_or(true);
     match classify_tap(&before, &after, still_blocked) {
         TapResult::Resumed => {
-            s.blocked_sig.lock().await.remove(pane);
+            // The dialog is gone — strip posted buttons (topic + DM
+            // cards); the plain message below carries the outcome.
+            crate::handlers::dialog::resolve_cards(s, pane).await;
             let mid =
                 s.tg.send_msg(chat, thread, "✅ dismissed — agent resumed", None)
                     .await;

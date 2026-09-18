@@ -94,6 +94,7 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                 .retain(|p, _| live.contains(p));
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
+            s.blocked_card.lock().await.retain(|p, _| live.contains(p));
             // Corpse-tap reap: a wedged OpGuard (drop lost the lock race)
             // must never brick answers until restart — every answer path
             // refuses while blockop holds the pane. Legit taps hold

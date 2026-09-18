@@ -15,10 +15,12 @@ use crate::{
 use serde_json::{Value, json};
 
 mod options;
+mod surfaces;
 #[cfg(test)]
 mod tests;
 
 pub use options::{has_numbered_options, parse_options};
+pub(crate) use surfaces::{resolve_cards, settle_card};
 
 /// Question + options off one screen, parsed from the same final-block
 /// source the cards use — tap paths must never diverge from it.
@@ -118,8 +120,11 @@ async fn send_with(
     let posted = mid.is_some();
     // Stamp the signature only on delivery: a dropped card must stay
     // "new" so the next observation reposts instead of going silent.
+    // Track the location too: a PC-side answer strips it (buttons must
+    // not outlive the dialog they answered).
     if let Some(m) = mid {
         s.blocked_sig.lock().await.insert(pane.to_string(), q);
+        surfaces::repoint_card(s, pane, chat, m).await;
         let _ = s.tg.set_reaction(chat, m, Some("❗")).await;
     }
     s.remember(chat, mid, pane).await;
@@ -149,7 +154,9 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     }
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if a.status != "blocked" => {
-            s.blocked_sig.lock().await.remove(pane);
+            // Answered elsewhere (PC tap/dismiss, typed on the box):
+            // the posted buttons must come off, not linger as bait.
+            surfaces::resolve_cards(s, pane).await;
             return false;
         }
         // No agent here: shells never need blocked cards (a delayed
@@ -161,7 +168,7 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
                 .map(|l| l.contains(&pane.to_string()))
                 .unwrap_or(false);
             if shell {
-                s.blocked_sig.lock().await.remove(pane);
+                surfaces::resolve_cards(s, pane).await;
                 return false;
             }
         }

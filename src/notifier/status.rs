@@ -52,9 +52,15 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     }
 
     // Leaving blocked behind — its dialog sig dies with the episode so
-    // the next block episode always posts.
+    // the next block episode always posts. Buttons posted for it come
+    // off too (answered on the PC, dismissed, or typed on the box) —
+    // unless a tap owns the card right now, which reconciles itself.
     if old.as_deref() == Some("blocked") && new_status != "blocked" {
-        s.blocked_sig.lock().await.remove(pane);
+        if s.block_held(pane).await {
+            s.blocked_sig.lock().await.remove(pane);
+        } else {
+            crate::handlers::dialog::resolve_cards(s, pane).await;
+        }
     }
     // NOTE: stall episodes are NOT cleared on leaving `working` anymore.
     // Opencode retries quota stalls internally while herdr samples

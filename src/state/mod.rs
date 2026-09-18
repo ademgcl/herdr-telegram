@@ -84,6 +84,10 @@ pub struct State {
     /// Panes with a button-tap in flight — observations skip posting
     /// while set (the tap owns the card update when it lands).
     pub blockop: Mutex<HashMap<String, std::time::Instant>>,
+    /// Posted blocked-card locations per pane: (chat, msg) — one per
+    /// chat (forum once, each owner DM once). A PC-side answer strips
+    /// these (buttons must not outlive the dialog); resolve consumes.
+    pub blocked_card: Mutex<HashMap<String, Vec<(i64, i64)>>>,
     /// Active background typing indicator tasks for working panes.
     pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
 }
@@ -200,6 +204,7 @@ impl State {
             limit_send_cool: Mutex::new(HashMap::new()),
             blocked_sig: Mutex::new(HashMap::new()),
             blockop: Mutex::new(HashMap::new()),
+            blocked_card: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
         }))
     }
@@ -279,6 +284,7 @@ impl State {
         self.debounce.lock().await.remove(pane);
         self.clear_limit_episode(pane).await;
         self.blocked_sig.lock().await.remove(pane);
+        self.blocked_card.lock().await.remove(pane);
         // Fresh guards die with the pane (dead/kill/reset/shell-flip is
         // an abort, not a flap): pane names are reminted, so preserving
         // a fresh guard would brick the successor until stale. A single

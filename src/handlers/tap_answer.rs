@@ -94,6 +94,9 @@ pub async fn answer_tap(
                 )
                 .await;
                 s.remember(chat, Some(msg_id), pane).await;
+                // Sibling surfaces (DM owners) may still show this dead
+                // dialog with live buttons — the heal below resolves them.
+                delayed_refresh(s, pane).await;
                 return;
             }
             let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
@@ -116,10 +119,14 @@ pub async fn answer_tap(
                 {
                     s.blocked_sig.lock().await.insert(pane.to_string(), q);
                     s.remember(chat, Some(msg_id), pane).await;
+                    // This card is current — strip sibling surfaces.
+                    crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
                 } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
                     s.blocked_sig.lock().await.insert(pane.to_string(), q);
                     s.remember(chat, Some(mid), pane).await;
-                    // Same orphan rule as the NewDialog fallback below.
+                    // Settle the fresh surface; the tapped card may be
+                    // untracked (pre-restart post) — strip it too.
+                    crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
                     s.tg.strip_buttons(chat, msg_id).await;
                 }
             }
@@ -152,6 +159,8 @@ pub async fn answer_tap(
                         let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
                         s.blocked_sig.lock().await.insert(pane.to_string(), q);
                         s.remember(chat, Some(msg_id), pane).await;
+                        // This card is current — strip sibling surfaces.
+                        crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
                     } else if let Some(mid) =
                         s.tg.send_msg_with_effect(
                             chat,
@@ -165,8 +174,9 @@ pub async fn answer_tap(
                         let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
                         s.blocked_sig.lock().await.insert(pane.to_string(), q);
                         s.remember(chat, Some(mid), pane).await;
-                        // The old card must not keep offering superseded
-                        // buttons next to the fresh one — strip it.
+                        // Settle the fresh surface; the tapped card may be
+                        // untracked (pre-restart post) — strip it too.
+                        crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
                         s.tg.strip_buttons(chat, msg_id).await;
                     }
                 }
