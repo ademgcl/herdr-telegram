@@ -1,6 +1,7 @@
 pub mod client;
 pub mod errors;
 pub mod forum;
+pub mod markup;
 pub mod messages;
 pub mod polling;
 pub mod reaction;

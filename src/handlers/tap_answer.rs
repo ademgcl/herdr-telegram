@@ -44,12 +44,15 @@ pub async fn answer_tap(
     // Single-flight per pane: a double-tap (or two owners) must not
     // interleave key sequences into the same dialog, and observations
     // must not post over the card this tap owns. RAII: cancellation
-    // mid-tap must not wedge the pane.
+    // mid-tap must not wedge the pane. Contention drops SILENTLY: the
+    // spinner already stopped and the winning tap owns the card's next
+    // state — a chat message per double-tap is pure litter.
     let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
-        let mid =
-            s.tg.send_msg(chat, thread, "tap already in flight — wait a beat", None)
-                .await;
-        s.remember(chat, mid, pane).await;
+        // Loser's own card comes off too: the winner owns this pane's
+        // next state, and a live-buttoned orphan would offer taps the
+        // gate then refuses (winner Resumed clears the sig, so no heal
+        // re-renders it — strip, never strand).
+        s.tg.strip_buttons(chat, msg_id).await;
         return;
     };
     // A button tap supersedes an armed typed answer for THIS pane: drop
@@ -63,6 +66,12 @@ pub async fn answer_tap(
             tw.remove(&(chat, thread));
         }
     }
+    // Optimistic claim, BEFORE the slow herdr roundtrips: strip the
+    // tapped card's buttons so the tap reads instant and cannot
+    // double-fire. Text is untouched (markup-only), so every outcome
+    // below only ever overwrites — the card converges by construction
+    // and can never strand live buttons on a dead end.
+    s.tg.strip_buttons(chat, msg_id).await;
     println!("[tap] {pane} action={action}");
     let call = tap_keys(&s.cfg.socket, pane, action).await;
     match call {
@@ -93,6 +102,8 @@ pub async fn answer_tap(
             if screen.is_empty() {
                 let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
                 s.remember(chat, mid, pane).await;
+                // Unverifiable tap keeps no buttons: heal re-renders below.
+                s.tg.strip_buttons(chat, msg_id).await;
             } else {
                 let (q, opts) = live_card(&screen);
                 let text = format!(
@@ -110,6 +121,8 @@ pub async fn answer_tap(
                 } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
                     s.blocked_sig.lock().await.insert(pane.to_string(), q);
                     s.remember(chat, Some(mid), pane).await;
+                    // Same orphan rule as the NewDialog fallback below.
+                    s.tg.strip_buttons(chat, msg_id).await;
                 }
             }
             delayed_refresh(s, pane).await;
@@ -119,6 +132,9 @@ pub async fn answer_tap(
                 s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
                     .await;
             s.remember(chat, mid, pane).await;
+            // Converge the tapped card (pending strip may have failed):
+            // original text stands, buttons come off, heal follows.
+            s.tg.strip_buttons(chat, msg_id).await;
             delayed_refresh(s, pane).await;
         }
         TapCall::Landed(send, before, after, still_blocked) => {
@@ -151,23 +167,36 @@ pub async fn answer_tap(
                         let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
                         s.blocked_sig.lock().await.insert(pane.to_string(), q);
                         s.remember(chat, Some(mid), pane).await;
+                        // The old card must not keep offering superseded
+                        // buttons next to the fresh one — strip it.
+                        s.tg.strip_buttons(chat, msg_id).await;
                     }
                 }
                 TapResult::Resumed => {
                     let no_kb = Some(Value::Array(Vec::new()));
-                    s.tg.edit_msg(
-                        chat,
-                        msg_id,
-                        &format!("✅ {} answered — agent resumed [{pane}]", send.label),
-                        no_kb,
-                    )
-                    .await;
-                    let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
+                    let done =
+                        format!("✅ {} answered — agent resumed [{pane}]", send.label);
+                    // Fallible edit with a converging fallback: a failed
+                    // edit must not strand live buttons (sig is cleared
+                    // below, so nothing else repairs this card).
+                    if s.tg
+                        .try_edit_msg(chat, msg_id, &done, no_kb)
+                        .await
+                        .is_ok()
+                    {
+                        let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
+                        s.remember(chat, Some(msg_id), pane).await;
+                    } else {
+                        let mid = s.tg.send_msg(chat, thread, &done, None).await;
+                        s.remember(chat, mid, pane).await;
+                        s.tg.strip_buttons(chat, msg_id).await;
+                    }
                     // The status layer can lag up to a cycle behind: clear
                     // the dialog signature now or the next same-`blocked`
                     // observation reposts a ghost card for a live agent.
+                    // (Routing memory is set per-branch above: the live
+                    // card on edit, the fresh message on fallback.)
                     s.blocked_sig.lock().await.remove(pane);
-                    s.remember(chat, Some(msg_id), pane).await;
                     delayed_refresh(s, pane).await;
                 }
                 TapResult::Unchanged => {
@@ -184,6 +213,9 @@ pub async fn answer_tap(
                     };
                     let mid = s.tg.send_msg(chat, thread, &text, None).await;
                     s.remember(chat, mid, pane).await;
+                    // Dead-end card keeps no live buttons: the explainer
+                    // above carries the way out, heal re-renders below.
+                    s.tg.strip_buttons(chat, msg_id).await;
                     delayed_refresh(s, pane).await;
                 }
             }
