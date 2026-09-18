@@ -41,7 +41,8 @@ fn test_dm_help_lists_every_dm_command() {
     let help = help_text();
     for cmd in [
         "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell", "/pane",
-        "/read", "/output", "/card", "/esc", "/status", "/reset", "/cancel", "/keys",
+        "/split", "/read", "/output", "/card", "/esc", "/status", "/reset", "/cancel",
+        "/keys",
     ] {
         assert!(help.contains(cmd), "DM help missing {cmd}");
     }

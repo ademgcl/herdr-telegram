@@ -119,6 +119,11 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/split" {
+        super::dm_lifecycle::handle_split(&s, chat, &rows, arg, &reply_pane).await;
+        return;
+    }
+
     if cmd == "/space" {
         super::dm_lifecycle::handle_space(&s, chat, arg).await;
         return;

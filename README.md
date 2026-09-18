@@ -40,7 +40,7 @@ launchctl bootout gui/$(id -u)/dev.herdr.telegram; rm ~/Library/LaunchAgents/dev
 - Agent topic: plain text = prompt. `/read` `/output` `/model` `/quit` `/kill` `/keys` `/status` `/shell` `/pane [space]` `/space` `/split` `/card` `/esc` `/cancel` `/reset` (this topic) `/help`
 - Shell topic: plain text = shell input; `/esc` sends a raw Esc. No agent here, so `/card`, `/model` and `/quit` refuse. No `/shell` — use `/pane`; everything else matches the agent list (see `/help`).
 - `/space [name]` creates a space and opens its shell topic — works in any topic.
-- `/spawn opencode` in General opens its topic. DMs work too (reply picks the agent).
+- `/spawn opencode` in General opens its topic. DMs take the full set (reply picks the agent).
 - No buttons and stuck? `/card` re-posts the card; `/esc` dismisses blocked dialogs.
 - Topics carry a live kind icon (customs kept) and an identity card; titles sync either way, status never pins.
 

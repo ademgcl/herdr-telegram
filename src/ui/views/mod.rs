@@ -207,6 +207,7 @@ pub fn help_text() -> &'static str {
      /kill     close the pane completely (confirms first)\n\
      /shell    open a fresh shell pane\n\
      /pane     shell tab in this space, stays here\n\
+     /split    sibling shell pane (longer side; or right|down)\n\
      /read     recent output of focused agent (/output too)\n\
      /card     re-post the question + buttons (never stuck)\n\
      /esc      guarded Esc: dismiss, blocked-only\n\

@@ -118,8 +118,8 @@ impl TelegramClient {
         self.call(
             "setMyCommands",
             json!({"commands": [
-                // Topic-scoped commands (/split, ...) stay out of the
-                // global menu: they only work inside a pane topic.
+                // Menu is global: entries that fail in General carry a
+                // (topic/DM) scope tag instead of staying hidden.
                 {"command": "start", "description": "how to drive agents from here"},
                 {"command": "agents", "description": "open control panel (spaces + agents)"},
                 {"command": "spawn", "description": "spawn a new agent: /spawn <kind> [space]"},
@@ -129,6 +129,7 @@ impl TelegramClient {
                 {"command": "kill", "description": "close the pane completely (topic/DM)"},
                 {"command": "shell", "description": "open a fresh shell pane"},
                 {"command": "pane", "description": "shell tab in this space, stays here"},
+                {"command": "split", "description": "sibling shell pane (topic/DM)"},
                 {"command": "read", "description": "recent output of focused agent (topic/DM)"},
                 {"command": "output", "description": "alias of /read with line count (topic/DM)"},
                 {"command": "status", "description": "agent card for focused agent (topic/DM)"},

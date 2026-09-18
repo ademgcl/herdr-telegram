@@ -64,6 +64,33 @@ pub(crate) async fn handle_pane(s: &AppState, chat: i64, arg: &str) {
     super::shell::open_pane_general(s, chat, None, arg).await;
 }
 
+pub(crate) async fn handle_split(
+    s: &AppState,
+    chat: i64,
+    rows: &[AgentRow],
+    arg: &str,
+    reply_pane: &Option<String>,
+) {
+    // Direction words are never pane ids: `right|down` (or bare) splits
+    // the reply/focus pane, anything else must resolve to a pane —
+    // fail-closed via the same "who?" as /quit + /kill.
+    let (pane_arg, dir) = match arg {
+        "right" | "down" => ("", arg),
+        _ => (arg, ""),
+    };
+    let Some(pane) = super::target::dm_pane(s, rows, pane_arg, reply_pane).await else {
+        s.tg.send_msg(
+            chat,
+            None,
+            "who? `/split <pane>` or tap an agent in /agents",
+            None,
+        )
+        .await;
+        return;
+    };
+    super::shell::open_split(s, chat, None, &pane, dir).await;
+}
+
 pub(crate) async fn handle_space(s: &AppState, chat: i64, arg: &str) {
     let label = if super::space::check_label(arg) {
         arg.to_string()
