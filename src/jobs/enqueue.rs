@@ -185,6 +185,16 @@ pub async fn enqueue_prompt(
     };
     if rearm {
         let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+        // Ownership re-check: a /cancel (or quiet retire) landing during
+        // the submit RPC / baseline read cleared the durable slot — minting
+        // a watcher now would resurrect cancelled work with in-memory
+        // cover but no (or a foreign) intent. Cancel won: drop instead.
+        if !s
+            .pending_matches(&pane, req.chat_id, req.message_thread_id, &req.text)
+            .await
+        {
+            return;
+        }
         // Re-check under a fresh lock: a concurrent enqueue may have won
         // while the baseline read yielded (same pattern as the spawn
         // above) — a mapped live job is always a successor, leave it.

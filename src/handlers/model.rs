@@ -79,10 +79,14 @@ pub fn model_kb(pane: &str) -> Value {
 
 /// Show the model card for `pane` (current + free-Zen buttons).
 pub async fn show_model(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    let kind = get_agent(&s.cfg.socket, pane)
-        .await
-        .map(|a| a.kind)
-        .unwrap_or_else(|_| "?".into());
+    // Fail-closed like the M:list tap arm: an unreadable herdr refuses
+    // instead of rendering a "?" card + moving focus/routing memory.
+    let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
+        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+            .await;
+        return;
+    };
+    let kind = agent.kind;
     let cur = current_model(s, pane).await;
     let text = model_card_text(cur.as_deref(), pane, &kind);
     let kb = if kind == "opencode" {
@@ -92,7 +96,11 @@ pub async fn show_model(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
     };
     let mid = s.tg.send_msg(chat, thread, &text, kb).await;
     s.remember(chat, mid, pane).await;
-    s.set_focus(pane).await;
+    // DM-only focus: a read-only view in a forum topic must not reroute
+    // global DM traffic (bare text / /read / /status follow focus).
+    if thread.is_none() {
+        s.set_focus(pane).await;
+    }
 }
 
 /// Switch `pane` to `filter`/`marker`, narrating progress into the chat.

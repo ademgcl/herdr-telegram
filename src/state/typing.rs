@@ -20,14 +20,16 @@ impl State {
         let s = self.clone();
         let pane_str = pane.to_string();
         let handle = tokio::spawn(async move {
-            let forum = s.cfg.forum;
+            let Some(chat_id) = s.cfg.forum else {
+                return;
+            };
             // 1:1 working↔typing: fire-and-forget per tick — an awaited
             // sendChatAction under a slow Telegram stretches the cycle
             // past the ~5s expiry and the indicator flickers. Overlaps
             // are idempotent refreshes. Pause while unmapped (mid-job
             // delete healing): a topic indicator typed into General
             // shows nowhere useful and misleads.
-            while let Some(chat_id) = forum {
+            loop {
                 if let Some(th) = s.topics.all_mappings().get(&pane_str).copied() {
                     let tg = s.tg.clone();
                     tokio::spawn(async move {

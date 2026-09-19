@@ -7,6 +7,7 @@ pub mod limits;
 pub mod reconcile;
 pub mod reconcile_close;
 pub mod reconcile_tail;
+pub mod reconcile_vanished;
 pub mod spontaneous;
 pub mod status;
 

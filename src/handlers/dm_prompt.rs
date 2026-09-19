@@ -103,18 +103,10 @@ pub(crate) async fn handle_bare_prompt(
             ""
         };
         if !shell_head.is_empty() && !rest.trim().is_empty() {
-            match crate::herdr::client::list_panes(&s.cfg.socket).await {
-                Ok(l) if l.contains(&shell_head.to_string()) => {
-                    super::shell::run_shell_fallback(s, chat, shell_head.to_string(), rest).await;
-                    return;
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
-                        .await;
-                    return;
-                }
+            if super::shell::probe_shell_live(s, chat, None, shell_head).await {
+                super::shell::run_shell_fallback(s, chat, shell_head.to_string(), rest).await;
             }
+            return;
         }
         s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
@@ -162,19 +154,9 @@ pub(crate) async fn handle_bare_prompt(
         // an unreadable pane list refuses with HERDR_UNREACHABLE (tap
         // parity) — rowless LIVE shells still serve via the fallback.
         // (`via_reply==None` here already implies unmatched, so no
-        // extra dead-check — just the liveness probe.)
-        match crate::herdr::client::list_panes(&s.cfg.socket).await {
-            Ok(l) if l.contains(&rp) => {}
-            Ok(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-                    .await;
-                return;
-            }
-            Err(_) => {
-                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
-                    .await;
-                return;
-            }
+        // extra dead-check — just the shared liveness probe.)
+        if !super::shell::probe_shell_live(s, chat, None, &rp).await {
+            return;
         }
         super::shell::run_shell_fallback(s, chat, rp, text).await;
         return;
@@ -188,18 +170,8 @@ pub(crate) async fn handle_bare_prompt(
         // refuses HERDR_UNREACHABLE (never masks outage as "gone").
         // Pass the snapshot (no re-read inside the fallback): a concurrent
         // set_focus between reads must not reroute shell text as a prompt.
-        match crate::herdr::client::list_panes(&s.cfg.socket).await {
-            Ok(l) if l.contains(&focus) => {}
-            Ok(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-                    .await;
-                return;
-            }
-            Err(_) => {
-                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
-                    .await;
-                return;
-            }
+        if !super::shell::probe_shell_live(s, chat, None, &focus).await {
+            return;
         }
         super::shell::run_shell_fallback(s, chat, focus, text).await;
         return;
@@ -213,7 +185,9 @@ pub(crate) async fn handle_bare_prompt(
         // Never re-read focus here (snapshot was None): a concurrent
         // set_focus between reads must not reroute shell text as a prompt.
         if let Some(rp) = reply_pane.clone() {
-            super::shell::run_shell_fallback(s, chat, rp, text).await;
+            if super::shell::probe_shell_live(s, chat, None, &rp).await {
+                super::shell::run_shell_fallback(s, chat, rp, text).await;
+            }
         } else {
             s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                 .await;

@@ -37,15 +37,25 @@ pub(crate) async fn handle_topic_agent_message(
         // One failed read must not reroute a live prompt as shell input:
         // confirm via pane+agent lists (recover's cascade). Only a
         // confirmed live agent retries visibly; everything else takes the
-        // shell side (which reports gone panes).
-        let live = list_panes(&s.cfg.socket)
-            .await
-            .map(|l| l.contains(&pane.to_string()))
-            .unwrap_or(true);
-        let agent = list_agents(&s.cfg.socket)
-            .await
-            .map(|a| a.iter().any(|r| r.pane == pane))
-            .unwrap_or(true);
+        // shell side (which reports gone panes). Fail-closed: an
+        // unreadable list is an outage, never a corpse — a mixed
+        // Ok(dead)+Err would else run the prompt as shell input.
+        let live = match list_panes(&s.cfg.socket).await {
+            Ok(l) => l.contains(&pane.to_string()),
+            Err(_) => {
+                s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return;
+            }
+        };
+        let agent = match list_agents(&s.cfg.socket).await {
+            Ok(a) => a.iter().any(|r| r.pane == pane),
+            Err(_) => {
+                s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return;
+            }
+        };
         if live && agent {
             s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
                 .await;
@@ -110,9 +120,7 @@ pub(crate) async fn handle_topic_agent_message(
     // An armed typed-answer waiter wins over every command except
     // the escapes checked above (/cancel, /card, /esc) — see
     // `forum_typewait` (split for the 300-line cap).
-    match super::forum_typewait::consume_typewait(&s, chat, thread_id, text, cmd.starts_with('/'))
-        .await
-    {
+    match super::forum_typewait::consume_typewait(&s, chat, thread_id, text).await {
         super::forum_typewait::WaitOut::Handled => return,
         super::forum_typewait::WaitOut::ResumedPrompt => {
             // Raced resume: answer text must never become control —

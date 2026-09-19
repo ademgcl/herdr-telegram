@@ -7,6 +7,15 @@ use crate::{
     ui::{chunks, emoji},
 };
 
+/// Per-owner completion for DM multi-owner pushes: complete when at
+/// least one owner received every part. All-or-nothing across ALL
+/// owners reposts to healthy owners up to 3× (15s apart) when one
+/// owner blocks the bot, plus cross-settle repeats (no `last_done`
+/// stamp) — one blocked owner must not spam the rest. Pure for tests.
+pub(crate) fn dm_complete(per_owner_landed: &[usize], parts: usize) -> bool {
+    parts > 0 && per_owner_landed.iter().any(|&n| n >= parts)
+}
+
 /// Answer push: the body alone (never a status-word lead), plus the reply
 /// affordance when input is needed. Blocked keeps its urgent prefix.
 /// True when a part landed: drops must neither stamp `last_done` (it
@@ -104,11 +113,12 @@ pub(crate) async fn post_spontaneous_card(
         {
             return false;
         }
-        for id in &s.cfg.owners {
+        let mut per_owner = vec![0usize; s.cfg.owners.len()];
+        for (oi, id) in s.cfg.owners.iter().enumerate() {
             for part in &parts {
                 let mid = s.tg.send_msg(*id, None, part, None).await;
                 if let Some(m) = mid {
-                    landed += 1;
+                    per_owner[oi] += 1;
                     if settled == "done" {
                         let _ = s.tg.set_reaction(*id, m, Some("✅")).await;
                     }
@@ -116,7 +126,16 @@ pub(crate) async fn post_spontaneous_card(
                 s.remember(*id, mid, pane).await;
             }
         }
-        expected = parts.len() * s.cfg.owners.len();
+        // Per-owner (not product): one blocked owner must not hold the
+        // healthy ones hostage for 3 retries + every future settle.
+        let complete = dm_complete(&per_owner, parts.len());
+        if complete {
+            s.last_done
+                .lock()
+                .await
+                .insert(pane.to_string(), std::time::Instant::now());
+        }
+        return complete;
     }
     // All-or-nothing: a partial multi-part push must not stamp
     // last_done (it would suppress the next settle) — the retry
@@ -130,4 +149,24 @@ pub(crate) async fn post_spontaneous_card(
             .insert(pane.to_string(), std::time::Instant::now());
     }
     complete
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dm_complete_per_owner() {
+        // One healthy owner completes despite a blocked one — no
+        // retry-spam to the healthy, no cross-settle repeats.
+        assert!(dm_complete(&[2, 0], 2));
+        assert!(dm_complete(&[1], 1));
+        assert!(dm_complete(&[2, 2], 2));
+        // Nobody whole: partials must not stamp (retry reposts full).
+        assert!(!dm_complete(&[1, 1], 2));
+        assert!(!dm_complete(&[1, 0], 2));
+        assert!(!dm_complete(&[], 1));
+        assert!(!dm_complete(&[0], 0));
+        assert!(!dm_complete(&[], 0));
+    }
 }

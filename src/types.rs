@@ -166,6 +166,36 @@ pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Re
     }
 }
 
+/// Best-effort 0600 on an existing file (unix): `fs::copy` backups
+/// inherit the umask (≈0644) while the live files are 0600 — a corrupt
+/// backup carrying chat IDs + prompt excerpts must not stay readable.
+pub(crate) fn chmod_private(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perm = meta.permissions();
+            perm.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, perm);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// Pane-id shape for `focus.state` (fail-closed load: garbage, torn
+/// writes, and hand-edits must never become the DM routing focus).
+/// Herdr pane ids are `ws:pane` (`w8:p1`) — the colon is the shape.
+/// Pure so it is unit-tested.
+pub fn valid_focus(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.contains(':')
+        && !s.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,6 +237,19 @@ mod tests {
         assert_eq!(mask_home_with("/Users/x/a", ""), "/Users/x/a");
         assert_eq!(mask_home_with("/etc/hosts", "/"), "/etc/hosts");
         assert_eq!(mask_home_with("no paths here", "/Users/x"), "no paths here");
+    }
+
+    #[test]
+    fn test_valid_focus_shape() {
+        assert!(valid_focus("w8:p1"));
+        assert!(valid_focus("t:p1"));
+        // Garbage / torn writes / hand-edits never become DM focus.
+        assert!(!valid_focus(""));
+        assert!(!valid_focus("???"));
+        assert!(!valid_focus("bogus"));
+        assert!(!valid_focus("w8:p1\nw8:p2"));
+        assert!(!valid_focus("w8 p1:x"));
+        assert!(!valid_focus(&"w".repeat(300)));
     }
 
     #[test]

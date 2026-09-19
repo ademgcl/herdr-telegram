@@ -5,8 +5,7 @@
 use crate::{
     handlers::reset::is_resetting,
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
-    herdr::client::{get_agent, list_agents, read_shell_output},
-    jobs::finalize::report,
+    herdr::client::{get_agent, list_agents},
     notifier::hygiene::{panes_once, reap_orphans},
     notifier::limits::scan_limits,
     notifier::status::observe_status,
@@ -168,105 +167,10 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                     s.cancel_job_only_for(&pane).await;
                                 }
                                 ShellReuse::RetireVanished => {
-                                    // Race verdict BEFORE retiring: quiet clears
-                                    // the slot, so a post-quiet check would
-                                    // always read false and drop the notice.
-                                    // A racer-retired intent has its own ack.
-                                    // (Micro-race: submit between check and
-                                    // retire — microseconds, no RPC between.)
-                                    let mine = match &owed {
-                                        Some(pp) => {
-                                            s.pending_matches(&pane, pp.chat, pp.thread, &pp.prompt)
-                                                .await
-                                        }
-                                        // Job-only flip: no competing intent.
-                                        None => true,
-                                    };
-                                    // Claim the report slot first: a concurrent
-                                    // tick (watchdog + event reconnect) must
-                                    // not double-report the same quit — the
-                                    // loser sees shell and stands down.
-                                    let prev_status = {
-                                        s.status
-                                            .lock()
-                                            .await
-                                            .insert(pane.clone(), "shell".to_string())
-                                    };
-                                    if prev_status.as_deref() == Some("shell") {
-                                        continue;
-                                    }
-                                    // Turned-over intent (submit raced the
-                                    // flip): retire the dead watcher only,
-                                    // preserving the new pending — quiet
-                                    // would wipe it with no restore.
-                                    if !mine {
-                                        s.cancel_job_only_for(&pane).await;
-                                        continue;
-                                    }
-                                    s.cancel_jobs_for_quiet(&pane).await;
-                                    if let Some(pp) = owed {
-                                        let tail = read_shell_output(&s.cfg.socket, &pane, 60)
-                                            .await
-                                            .map(|t| t.trim().to_string())
-                                            .unwrap_or_default();
-                                        // Always notify (even with an empty
-                                        // tail): the owed prompt retires
-                                        // here, silently dropping it would
-                                        // miss the reply with no retry.
-                                        let msg = if tail.is_empty() {
-                                            "agent quit to shell.".to_string()
-                                        } else {
-                                            format!("agent quit to shell — last output:\n{tail}")
-                                        };
-                                        if report(s, pp.chat, pp.thread, &pane, &msg).await {
-                                            // CAS: an observation landing during
-                                            // the RPCs wins — never clobber it.
-                                            let mut st = s.status.lock().await;
-                                            if st.get(&pane).map(|v| v == "shell").unwrap_or(false)
-                                            {
-                                                st.insert(pane.clone(), "shell".to_string());
-                                            }
-                                        } else {
-                                            // Intent was already cancelled above:
-                                            // keep it so boot-recover retries
-                                            // the notice instead of losing it.
-                                            // CAS restore so the next tick
-                                            // retries instead of going quiet.
-                                            {
-                                                let mut st = s.status.lock().await;
-                                                if st
-                                                    .get(&pane)
-                                                    .map(|v| v == "shell")
-                                                    .unwrap_or(false)
-                                                {
-                                                    match prev_status {
-                                                        Some(p) => {
-                                                            st.insert(pane.clone(), p);
-                                                        }
-                                                        None => {
-                                                            st.remove(&pane);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            // Guarded like the dead-close restore:
-                                            // a submit racing the RPCs wins
-                                            // (atomic check-and-set: a
-                                            // check-then-remember across
-                                            // awaits would overwrite it).
-                                            s.remember_pending_cas(
-                                                &pane,
-                                                (pp.chat, pp.thread, &pp.prompt),
-                                                (pp.chat, pp.thread, &pp.prompt),
-                                            )
-                                            .await;
-                                        }
-                                    } else {
-                                        s.status
-                                            .lock()
-                                            .await
-                                            .insert(pane.clone(), "shell".to_string());
-                                    }
+                                    // Split to `reconcile_vanished`
+                                    // (300-line file limit).
+                                    super::reconcile_vanished::retire_vanished(s, &pane, owed)
+                                        .await;
                                 }
                             }
                         // Dead-pane close is silent (no card), so it never waits

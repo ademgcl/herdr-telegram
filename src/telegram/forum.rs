@@ -190,12 +190,8 @@ impl TelegramClient {
         // A `creator` bot omits the can_* flags (implicit full rights):
         // defaulting absent flags to false would false-WARN and wrongly
         // refuse gates keyed on them. Absent reads as admin iff admin.
-        let can_manage_topics = member["can_manage_topics"]
-            .as_bool()
-            .unwrap_or(is_admin);
-        let can_delete_messages = member["can_delete_messages"]
-            .as_bool()
-            .unwrap_or(is_admin);
+        let can_manage_topics = member["can_manage_topics"].as_bool().unwrap_or(is_admin);
+        let can_delete_messages = member["can_delete_messages"].as_bool().unwrap_or(is_admin);
         Ok(BotPermissions {
             is_admin,
             can_manage_topics,

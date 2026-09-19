@@ -15,7 +15,7 @@ pub struct Status {
 }
 
 fn snapshot(port: u16) -> Status {
-    let socket = proc::shellexpand_socket();
+    let socket = proc::herdr_socket();
     // State files live in HERDR_STATE_DIR (or repo cwd), like the daemon
     // sees them — never bare `./` when redirected.
     let dir = crate::state::state_dir();
@@ -69,7 +69,7 @@ pub(crate) fn print_status(port: u16) {
             },
             // Display the expanded path actually probed above — raw
             // `~/…` would show a path the daemon never dials.
-            proc::shellexpand_socket()
+            proc::herdr_socket()
         ),
     );
     if let Some(off) = st.offset {

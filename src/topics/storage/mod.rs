@@ -20,6 +20,7 @@ impl TopicStorage {
         let home = crate::types::home_dir();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/topics.json"));
         if !path.exists() && legacy.exists() && std::fs::copy(&legacy, &path).is_ok() {
+            crate::types::chmod_private(&path);
             println!(
                 "[topics] migrated {} → topics.state",
                 crate::types::collapse_home(&legacy.display().to_string(), &home)
@@ -33,6 +34,25 @@ impl TopicStorage {
         Self {
             file_path,
             store: Mutex::new(store),
+        }
+    }
+
+    /// One-time heal for DM-era orphans: `last_msgs` without a mapping
+    /// is write-only (only topic resets read it). Called at boot in
+    /// DM mode only — forum mode keeps unmapped entries until remap.
+    pub fn prune_orphan_msgs(&self) {
+        let mut s = self.lock();
+        let orphans: Vec<String> = s
+            .last_msgs
+            .keys()
+            .filter(|p| !s.topics.contains_key(*p))
+            .cloned()
+            .collect();
+        if !orphans.is_empty() {
+            for p in orphans {
+                s.last_msgs.remove(&p);
+            }
+            self.save(&s);
         }
     }
 

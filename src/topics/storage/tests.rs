@@ -196,3 +196,28 @@ fn test_recent_msgs_roundtrip_and_bounding() {
     assert_eq!(re.get_recent_msgs("w1:p1"), Vec::<i64>::new());
     let _ = std::fs::remove_file(&st.file_path);
 }
+
+#[test]
+fn test_empty_main_falls_back_to_prev() {
+    // A zeroed main (failed copy, truncate, disk-full artifact) must
+    // restore `.prev` like corrupt does — never wipe every mapping
+    // (mass duplicate re-mints) while last-good sits next to it.
+    let path =
+        std::env::temp_dir().join(format!("herdr-tg-test-empty-{}.json", std::process::id()));
+    let prev = std::path::PathBuf::from(format!("{}.prev", path.display()));
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&prev);
+    let st = TopicStorage::at(path.clone());
+    st.insert("w1:p1".into(), 42);
+    assert!(prev.exists());
+    std::fs::write(&path, "").unwrap();
+    let re = TopicStorage::at(path.clone());
+    assert_eq!(re.get_thread("w1:p1"), Some(42));
+    // Empty main with no usable prev → default, no crash.
+    std::fs::write(&prev, "{corrupt").unwrap();
+    std::fs::write(&path, "   \n").unwrap();
+    let empty = TopicStorage::at(path.clone());
+    assert_eq!(empty.get_thread("w1:p1"), None);
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&prev);
+}

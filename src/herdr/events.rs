@@ -56,15 +56,25 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
             Err(_) => return Err("event stream connect timed out".into()),
         };
     let (reader, mut writer) = conn.into_split();
-    writer
-        .write_all(
-            json!({"id": "sub", "method": "events.subscribe", "params": {"subscriptions": subs}})
-                .to_string()
-                .as_bytes(),
-        )
-        .await?;
-    writer.write_all(b"\n").await?;
-    writer.flush().await?;
+    // Bounded like connect/ack: a wedged herdr (accept but never drain)
+    // must return to the backoff loop, never wedge the task forever.
+    match tokio::time::timeout(Duration::from_secs(30), async {
+        writer
+            .write_all(
+                json!({"id": "sub", "method": "events.subscribe", "params": {"subscriptions": subs}})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .await?;
+        writer.write_all(b"\n").await?;
+        writer.flush().await
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => return Err("event subscribe write timed out".into()),
+    }
 
     let mut reader = BufReader::new(reader);
     let mut ack = String::new();
@@ -114,6 +124,35 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
             return Ok("connection closed");
         }
         if line.len() >= 262_144 {
+            // `take` stopped mid-line: the remainder would else parse
+            // as the next event (spurious status). Drain to the newline
+            // first (bounded: a newline-free flood resubscribes fresh).
+            use tokio::io::AsyncBufReadExt;
+            let mut drained = 0usize;
+            let flooded = loop {
+                let mut tail = Vec::new();
+                match tokio::time::timeout(Duration::from_secs(30), async {
+                    use tokio::io::AsyncReadExt;
+                    (&mut reader)
+                        .take(262_144)
+                        .read_until(b'\n', &mut tail)
+                        .await
+                })
+                .await
+                {
+                    Ok(Ok(0)) => break false,
+                    Ok(Ok(_)) => {
+                        drained += tail.len();
+                        if tail.ends_with(b"\n") || drained > 4_194_304 {
+                            break drained > 4_194_304;
+                        }
+                    }
+                    _ => break true,
+                }
+            };
+            if flooded {
+                return Ok("oversize event flood");
+            }
             continue;
         }
         let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else {

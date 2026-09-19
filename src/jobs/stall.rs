@@ -92,6 +92,19 @@ pub(crate) async fn watch_stall(
         return screen;
     }
     let (chat, th) = *job.dest.lock().await;
+    // Remap-safe: a paced reset migrates the topic mid-run — buzzing
+    // the corpse thread fails or lands in the deleted topic. Forum
+    // dests follow the live mapping (the watchdog path already does);
+    // DM dests never gain a thread. Unmapped falls back to the old
+    // thread (the send-cooldown path below absorbs the failure).
+    let th = if s.cfg.forum == Some(chat) {
+        match s.topics.storage.get_thread(pane) {
+            Some(cur) => Some(cur),
+            None => th,
+        }
+    } else {
+        th
+    };
     let text = limit_card_text(pane, hit);
     let mid =
         s.tg.send_msg_with_effect(chat, th, &text, None, Some(crate::telegram::EFFECT_FIRE))

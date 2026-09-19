@@ -121,7 +121,8 @@ pub async fn install(home: &str) -> Res<()> {
         // The previous job was bootouted above: a failed restore leaves
         // prod DOWN while the error says only "guard busy". Report the
         // restore outcome loudly instead of swallowing it.
-        let (ok, err) = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
+        let (ok, err) =
+            launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
         if !ok {
             return Err(format!(
                 "guard busy — dev stop/cleanup first, then dev install (previous job restore FAILED: {err})"

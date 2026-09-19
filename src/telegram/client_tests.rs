@@ -23,7 +23,9 @@ fn test_redact_leaves_clean_input_unchanged() {
 fn test_is_unauthorized_matches_token_death_only() {
     // Real revoked-token shape: Telegram's Unauthorized description.
     assert!(TelegramClient::is_unauthorized("Unauthorized"));
-    assert!(TelegramClient::is_unauthorized("Unauthorized: bot was kicked"));
+    assert!(TelegramClient::is_unauthorized(
+        "Unauthorized: bot was kicked"
+    ));
     // A bare "401" substring is NOT enough: retry intervals, message
     // text, and chat ids all contain it — must not FATAL-exit.
     assert!(!TelegramClient::is_unauthorized("retry after 401s"));
@@ -46,7 +48,9 @@ fn test_is_transient_msg_matches_server_strings() {
         assert!(TelegramClient::is_transient_msg(s), "missed: {s}");
     }
     assert!(!TelegramClient::is_transient_msg("Unauthorized"));
-    assert!(!TelegramClient::is_transient_msg("message to edit not found"));
+    assert!(!TelegramClient::is_transient_msg(
+        "message to edit not found"
+    ));
     assert!(!TelegramClient::is_transient_msg("connection refused"));
 }
 

@@ -1,6 +1,15 @@
 use crate::{herdr::client::get_agent, state::AppState};
 use serde_json::Value;
 
+/// Single source for the stale-picker repost (both arms rebuild the
+/// same fresh picker — dup'd literals re-drift).
+pub(crate) fn stale_picker_text(cur: Option<&str>, pane: &str, kind: &str) -> String {
+    format!(
+        "⚠️ that button was stale — fresh list, tap again:\n\n{}",
+        super::model::model_card_text(cur, pane, kind)
+    )
+}
+
 /// Model-card taps: `M:list:<pane>` re-renders the card in place,
 /// `M:<idx>:<pane>` switches to that free-Zen model with progress edits.
 pub(crate) async fn handle_model_tap(
@@ -22,8 +31,7 @@ pub(crate) async fn handle_model_tap(
         // focus, remembers routing, or renders a "?" card (ambiguous
         // read → no write, visible retry).
         let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
-            s.tg
-                .edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
         };
@@ -47,16 +55,16 @@ pub(crate) async fn handle_model_tap(
     };
     let Some((filter, marker)) = super::model_parse::free_tap(i) else {
         // Out-of-range index (stale shortlist button): fresh picker beats
-        // a dead end — the next tap can't miss.
-        let kind = get_agent(&s.cfg.socket, pane)
-            .await
-            .map(|a| a.kind)
-            .unwrap_or_else(|_| "?".into());
+        // a dead end — the next tap can't miss. Fail-closed like M:list:
+        // an unreadable herdr refuses instead of rendering a "?" card.
+        let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
+            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        };
+        let kind = agent.kind;
         let cur = super::model::current_model(s, pane).await;
-        let text = format!(
-            "⚠️ that button was stale — fresh list, tap again:\n\n{}",
-            super::model::model_card_text(cur.as_deref(), pane, &kind)
-        );
+        let text = stale_picker_text(cur.as_deref(), pane, &kind);
         let kb = if kind == "opencode" {
             Some(super::model::model_kb(pane))
         } else {
@@ -92,16 +100,15 @@ pub(crate) async fn handle_model_tap(
             if e.to_string().starts_with("no model matches") {
                 // Button predates the picker-grounded rename (e.g. the old
                 // "Contributor" filter): swap the dead card for a fresh one
-                // so the next tap can't miss.
-                let kind = get_agent(&s.cfg.socket, pane)
-                    .await
-                    .map(|a| a.kind)
-                    .unwrap_or_else(|_| "?".into());
+                // so the next tap can't miss. Fail-closed like M:list.
+                let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
+                    s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                };
+                let kind = agent.kind;
                 let cur = super::model::current_model(s, pane).await;
-                let text = format!(
-                    "⚠️ that button was stale — fresh list, tap again:\n\n{}",
-                    super::model::model_card_text(cur.as_deref(), pane, &kind)
-                );
+                let text = stale_picker_text(cur.as_deref(), pane, &kind);
                 let kb = if kind == "opencode" {
                     Some(super::model::model_kb(pane))
                 } else {

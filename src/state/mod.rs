@@ -10,7 +10,6 @@ use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 
@@ -18,6 +17,7 @@ pub(crate) mod cancel;
 pub(crate) mod guard;
 pub(crate) mod history;
 mod jobs;
+mod pending_cas;
 mod persist_paths;
 mod targets;
 mod typing;
@@ -176,11 +176,23 @@ impl State {
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/focus"));
         if !file.exists() && legacy.exists() {
             let _ = std::fs::copy(&legacy, &file);
+            crate::types::chmod_private(&file);
         }
-        let focus = std::fs::read_to_string(&file)
+        let focus = match std::fs::read_to_string(&file)
             .ok()
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+        {
+            Some(f) if crate::types::valid_focus(&f) => Some(f),
+            // Torn write / hand-edit garbage must never become the DM
+            // routing focus (bare messages would route into a dead pane).
+            // Back up like offset.state, then fall back to unfocused.
+            Some(_) => {
+                persist_paths::backup_corrupt(&file);
+                None
+            }
+            None => None,
+        };
         // Offset survives restarts (see save_offset) — boot resumes the
         // poll stream instead of replaying the last 10 minutes of prompts.
         // Corrupt values back up like jobs.state; unparseable → 0 (the
@@ -191,25 +203,13 @@ impl State {
             Ok(txt) => match txt.trim().parse::<u64>() {
                 Ok(n) => n,
                 Err(_) => {
-                    let secs = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    let bak = PathBuf::from(format!(
-                        "{}.corrupt-{}.bak",
-                        persist_paths::offset_file().display(),
-                        secs
-                    ));
-                    let _ = std::fs::copy(persist_paths::offset_file(), &bak);
-                    eprintln!(
-                        "[main] corrupt offset.state backed up to {}",
-                        crate::home_masked(&bak)
-                    );
+                    persist_paths::backup_corrupt(&persist_paths::offset_file());
                     0
                 }
             },
         };
-        Ok(Arc::new(Self {
+        let dm_only = cfg.forum.is_none();
+        let st = Arc::new(Self {
             cfg,
             tg,
             topics,
@@ -242,7 +242,13 @@ impl State {
             history: Mutex::new(HashMap::new()),
             shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
-        }))
+        });
+        // DM-mode heal: pre-gate `last_msgs` orphans (write-only disk
+        // growth, never pruned without mappings) drop once at boot.
+        if dm_only {
+            st.topics.storage.prune_orphan_msgs();
+        }
+        Ok(st)
     }
 
     /// Drop armed input waiters for a dead pane: a typewait surviving

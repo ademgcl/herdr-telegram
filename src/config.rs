@@ -182,11 +182,26 @@ pub fn cfg_from_env() -> Res<Cfg> {
     if raw_socket.trim() == "~" {
         return Err("HERDR_SOCKET must be a socket path, not ~".into());
     }
+    // `~/` alone expands to `$HOME/` (a directory, never a socket):
+    // boot would dial-fail later — reject fail-closed like `~`.
+    if let Some(rest) = raw_socket.trim().strip_prefix("~/")
+        && rest.is_empty()
+    {
+        return Err("HERDR_SOCKET must be a socket path, not a directory".into());
+    }
     let socket = {
         let v = raw_socket.trim();
         if v.is_empty() {
+            if home.is_empty() {
+                // No HOME to anchor the default: fail loudly instead of
+                // dialing `/.config/…` (root path, never the daemon's).
+                return Err(crate::types::HOME_NOT_SET.into());
+            }
             format!("{home}/.config/herdr/herdr.sock")
         } else if let Some(rest) = v.strip_prefix("~/") {
+            if home.is_empty() {
+                return Err(crate::types::HOME_NOT_SET.into());
+            }
             format!("{home}/{rest}")
         } else {
             v.to_string()

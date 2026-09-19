@@ -144,6 +144,11 @@ impl TopicManager {
         {
             for _ in 0..200 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // A reset starting mid-wait wipes the map: a pre-reset
+                // thread returned here posts into an orphan/deleted topic.
+                if crate::handlers::reset::is_resetting() {
+                    return (self.storage.get_thread(pane), false);
+                }
                 if let Some(t) = self.storage.get_thread(pane) {
                     return (Some(t), false);
                 }

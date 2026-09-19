@@ -8,7 +8,11 @@ use std::path::PathBuf;
 impl State {
     pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
         let Some(msg_id) = msg_id else { return };
-        self.topics.record_msg(pane, msg_id);
+        // Forum-only: `last_msgs` serves topic resets — in DM mode it is
+        // write-only disk growth (no mapping ever prunes it). Gate here.
+        if self.cfg.forum.is_some() {
+            self.topics.record_msg(pane, msg_id);
+        }
         // Lock order (never inverted anywhere): torder → targets.
         // LRU refresh on hit: hot cards survive the 512-cap, cold corpses evict first.
         let mut ord = self.torder.lock().await;

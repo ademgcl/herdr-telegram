@@ -95,11 +95,18 @@ pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
         return Some(b);
     }
 
+    // Spawn (never `timeout(output())`): dropping an `output()` future
+    // leaves the child running detached (`kill_on_drop(false)` default) —
+    // a wedged git leaks one process per card build under exactly the
+    // slowness that already hurts. `kill_on_drop(true)` reaps it.
+    let child = tokio::process::Command::new("git")
+        .args(["-C", path, "branch", "--show-current"])
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
     let output = tokio::time::timeout(
         std::time::Duration::from_millis(500),
-        tokio::process::Command::new("git")
-            .args(["-C", path, "branch", "--show-current"])
-            .output(),
+        child.wait_with_output(),
     )
     .await
     .ok()?

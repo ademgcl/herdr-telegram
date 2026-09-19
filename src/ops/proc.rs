@@ -13,12 +13,12 @@ use std::process::Stdio;
 pub fn guard_port() -> Res<u16> {
     match crate::config::env_or_file("HERDR_TG_PORT") {
         Some(v) => {
-            let port: u16 = v
-                .trim()
-                .parse()
-                .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
-                    "HERDR_TG_PORT invalid (must be a port number)".into()
-                })?;
+            let port: u16 =
+                v.trim()
+                    .parse()
+                    .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+                        "HERDR_TG_PORT invalid (must be a port number)".into()
+                    })?;
             // Port 0 binds an OS-assigned ephemeral port, which always
             // succeeds — the single-instance guard would never fire and
             // two daemons would run side by side. Reject fail-closed.
@@ -31,15 +31,28 @@ pub fn guard_port() -> Res<u16> {
     }
 }
 
-/// Herdr socket for the status row (same default as the daemon).
+/// Herdr socket for the status row (same default + `~/` expansion as the daemon).
+/// Single source: callers use this directly (no wrapper).
 pub fn herdr_socket() -> String {
     let raw = crate::config::env_or_file("HERDR_SOCKET").unwrap_or_default();
     let v = raw.trim();
+    let home = crate::types::home_dir();
+    // No HOME to expand against: return raw, never `/.config/…` (a root
+    // path the daemon never dials — the status row would probe wrong).
+    if home.is_empty() {
+        return v.to_string();
+    }
     if v.is_empty() {
-        let home = crate::types::home_dir();
         return format!("{home}/.config/herdr/herdr.sock");
     }
-    v.to_string()
+    match v.strip_prefix("~/") {
+        // Bare `~/` would expand to `$HOME/` (a directory the daemon
+        // rejects fail-closed): show the raw value, never a silently
+        // expanded dir the status row would probe wrong.
+        Some("") => v.to_string(),
+        Some(rest) => format!("{home}/{rest}"),
+        None => v.to_string(),
+    }
 }
 
 /// Port busy probe: bind it ourselves — exact, no lsof. TOCTOU
@@ -228,25 +241,26 @@ pub async fn stop_all(port: u16) -> Vec<u32> {
     stopped
 }
 
-pub(crate) fn shellexpand_socket() -> String {
-    let raw = herdr_socket();
-    let home = crate::types::home_dir();
-    if !home.is_empty()
-        && let Some(rest) = raw.strip_prefix("~/")
-    {
-        return format!("{home}/{rest}");
-    }
-    raw
-}
-
 /// Run `cargo <args>`, returning masked tail lines + success.
 pub async fn cargo(args: &[&str], home: &str) -> (Vec<String>, bool) {
-    let out = tokio::process::Command::new("cargo")
+    // Spawn (never `timeout(output())`): dropping an `output()` future
+    // leaves the child running detached — a wedged cargo would leak.
+    let Ok(child) = tokio::process::Command::new("cargo")
         .args(args)
-        .output()
-        .await;
-    let Ok(out) = out else {
+        .kill_on_drop(true)
+        .spawn()
+    else {
         return (vec!["cargo not found".to_string()], false);
+    };
+    // Bounded: a hung build fails visibly, never wedges `dev` forever.
+    let out = match tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(out)) => out,
+        _ => return (vec!["cargo timed out".to_string()], false),
     };
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -265,33 +279,5 @@ pub fn log_path() -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_looks_like_bot_exact() {
-        // Bare daemons match; every subcommand form refuses.
-        assert!(looks_like_bot("/Users/x/t/target/release/herdr-telegram"));
-        assert!(looks_like_bot("./target/debug/herdr-telegram"));
-        assert!(!looks_like_bot(
-            "/Users/x/t/target/debug/herdr-telegram ctl trigger w1:p1 blocked"
-        ));
-        assert!(!looks_like_bot(
-            "/Users/x/t/target/debug/herdr-telegram dev"
-        ));
-        assert!(!looks_like_bot(
-            "/Users/x/t/target/debug/herdr-telegram dev status"
-        ));
-        assert!(!looks_like_bot(
-            "/Users/x/t/target/debug/herdr-telegram ops cleanup"
-        ));
-        // Checkout path containing `ops` must not wedge cleanup.
-        assert!(looks_like_bot(
-            "/Users/x/ops/herdr-telegram/target/release/herdr-telegram"
-        ));
-        // Unrelated processes never match.
-        assert!(!looks_like_bot("pgrep -f target/release/herdr-telegram"));
-        assert!(!looks_like_bot("/usr/bin/some-daemon"));
-        assert!(!looks_like_bot(""));
-    }
-}
+#[path = "proc_tests.rs"]
+mod tests;

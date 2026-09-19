@@ -48,6 +48,27 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, pane: String, text: &st
     }
 }
 
+/// Liveness probe before serving a rowless shell pane (single source
+/// for the DM fallbacks: explicit, reply-corpse, rowless focus, zero
+/// rows). Corpse refuses UNKNOWN_TARGET, unreadable list refuses
+/// HERDR_UNREACHABLE — fail-closed, never write into the void. True
+/// when the shell is live (caller serves the fallback).
+pub async fn probe_shell_live(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) -> bool {
+    match crate::herdr::client::list_panes(&s.cfg.socket).await {
+        Ok(l) if l.iter().any(|p| p == pane) => true,
+        Ok(_) => {
+            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
+                .await;
+            false
+        }
+        Err(_) => {
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            false
+        }
+    }
+}
+
 /// Open a fresh shell pane: new tab in `ws` (or the tg space), topic
 /// badged shell, ready for commands. `ws` is a workspace id or label.
 /// A just-created `tg` space reuses its root pane (else p1 orphans);

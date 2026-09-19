@@ -156,10 +156,7 @@ fn test_agent_limit_is_rate_limit() {
         let hit = detect_limit(&screen).expect("agent limit banner must detect");
         assert_eq!(hit.kind, "rate-limit", "line: {line}");
         assert!(hit.strong, "line: {line}");
-        assert!(
-            super::super::types::needs_stuck_gate(&hit),
-            "line: {line}"
-        );
+        assert!(super::super::types::needs_stuck_gate(&hit), "line: {line}");
         assert!(screen_has_provider_failure(&screen), "line: {line}");
         assert!(is_provider_failure_line(line), "line: {line}");
     }
@@ -175,7 +172,8 @@ fn test_bare_retrying_in_countdown_stays_silent() {
     // A countdown next to error words is only a WEAK provider signal
     // (stuck-gated, never an immediate quota page): it must not match
     // STRONG `rate-limit` on the bare countdown anymore.
-    let hit = detect_limit(&v(&["ping failed — retrying in 10s"])).expect("weak provider may detect");
+    let hit =
+        detect_limit(&v(&["ping failed — retrying in 10s"])).expect("weak provider may detect");
     assert_eq!(hit.kind, "provider");
     assert!(!hit.strong);
     assert!(super::super::types::needs_stuck_gate(&hit));

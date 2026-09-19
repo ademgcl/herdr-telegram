@@ -18,7 +18,6 @@ pub(crate) async fn consume_typewait(
     chat: i64,
     thread_id: i64,
     text: &str,
-    is_cmd: bool,
 ) -> WaitOut {
     let Some((wpane, at)) = s
         .typewait
@@ -45,6 +44,39 @@ pub(crate) async fn consume_typewait(
             .await;
         return WaitOut::Handled;
     }
+    // Shell-flip parity with DM (`dm_typewait`): a waiter stranded
+    // across an agent→shell flip must not eat the next message as typed
+    // input — drop it with STALE_TYPEWAIT_SHELL instead of typing into
+    // a shell. Fail-closed: ambiguous reads keep the waiter + refuse,
+    // never consume on a blip.
+    match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
+        Ok(_) => {}
+        Err(e) => {
+            let not_found = crate::herdr::rpc::is_not_found(&e.to_string());
+            if !not_found {
+                s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return WaitOut::Handled;
+            }
+            match crate::herdr::client::list_panes(&s.cfg.socket).await {
+                Ok(l) if l.contains(&wpane) => {
+                    s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+                    s.tg.send_msg(chat, Some(thread_id), crate::ui::STALE_TYPEWAIT_SHELL, None)
+                        .await;
+                    return WaitOut::Handled;
+                }
+                Ok(_) => {
+                    s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+                    return WaitOut::Pass;
+                }
+                Err(_) => {
+                    s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return WaitOut::Handled;
+                }
+            }
+        }
+    }
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
             s.typewait.lock().await.remove(&(chat, Some(thread_id)));
@@ -54,11 +86,13 @@ pub(crate) async fn consume_typewait(
         }
         Err(super::tap::TypeError::Resumed) => {
             s.typewait.lock().await.remove(&(chat, Some(thread_id)));
-            if is_cmd {
-                WaitOut::ResumedPrompt
-            } else {
-                WaitOut::Pass
-            }
+            // Resumed between snapshot and send either way: the text
+            // becomes a regular prompt, never control and never a second
+            // type attempt — the caller enqueues it as a prompt. (Pass
+            // here fell through to the blocked fast-path below, which
+            // re-tested a stale snapshot and typed twice: a wasted RPC
+            // that error-cards on a blip instead of prompting.)
+            WaitOut::ResumedPrompt
         }
         Err(e) => {
             s.tg.send_msg(

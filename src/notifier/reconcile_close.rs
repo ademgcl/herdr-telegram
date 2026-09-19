@@ -50,12 +50,14 @@ pub(crate) async fn close_dead_pane(s: &AppState, pane: &str) -> bool {
     s.clear_pane(pane).await;
     // Restore only when nothing newer owns the slot: a submit racing the
     // close RPCs above must win over the corpse's text (overwrite = lost
-    // reply). Atomic check-and-set.
+    // reply). Atomic check-and-set, ORIGINAL timestamp (a fresh stamp per
+    // restore would defeat recover's 24h stale drop — vanished parity).
     if let Some(pp) = owed {
-        s.remember_pending_cas(
+        s.remember_pending_cas_with_time(
             pane,
             (pp.chat, pp.thread, &pp.prompt),
             (pp.chat, pp.thread, &pp.prompt),
+            Some(pp.started_unix),
         )
         .await;
     }

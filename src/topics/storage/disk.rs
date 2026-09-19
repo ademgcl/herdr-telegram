@@ -58,6 +58,16 @@ pub(crate) fn read_store(path: &Path) -> Store {
             return Store::default();
         }
     };
+    // Empty main (truncated/touched file) is corruption, not a wipe:
+    // consult `.prev` before returning empty (else every mapping
+    // re-mints as a duplicate while last-good sits next to it).
+    if txt.trim().is_empty() {
+        if let Some(s) = load_prev(path) {
+            eprintln!("[topics] main empty, restored previous-good backup");
+            return s;
+        }
+        return Store::default();
+    }
     // Legacy flat map first: else it parses as empty Store and wipes all.
     if let Ok(topics) = serde_json::from_str::<HashMap<String, i64>>(&txt) {
         return Store {
@@ -79,6 +89,7 @@ pub(crate) fn read_store(path: &Path) -> Store {
                     .unwrap_or(0);
                 let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
                 let _ = fs::copy(path, &bak);
+                crate::types::chmod_private(&bak);
             }
             Store::default()
         }

@@ -163,6 +163,21 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // shorts ("ok", "done") do. Empty stays silent but advances the
     // baseline so the stray doesn't haunt future settles.
     if body.chars().count() < 2 {
+        // Post-RPC re-check (window = get_agent/spaces/sync above): a
+        // prompt/final landing during those RPCs owns the pane now —
+        // anchoring would wipe its fresh delta into the baseline (lost
+        // reply). Consume the arm only, never the baseline.
+        let raced = s.jobs.lock().await.contains_key(&pane)
+            || s.last_done
+                .lock()
+                .await
+                .get(&pane)
+                .map(|t| *t > armed_at)
+                .unwrap_or(false);
+        if raced {
+            consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
+            return;
+        }
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         s.seen.lock().await.insert(pane.clone(), screen);
         return;

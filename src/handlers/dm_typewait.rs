@@ -50,7 +50,14 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
                     s.typewait.lock().await.remove(&(chat, None));
                     return false;
                 }
-                Err(_) => {}
+                // Double outage (agent read + pane list both unreadable):
+                // fail-closed — keep the waiter, refuse visibly. Falling
+                // through would attempt a write on an ambiguous read.
+                Err(_) => {
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return true;
+                }
             }
         }
     }

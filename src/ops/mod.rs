@@ -61,11 +61,20 @@ async fn ctl_capture(args: &[String], home: &str) -> (Vec<String>, bool) {
     cmd.arg("ctl").args(args);
     // Bounded: a wedged ctl server must fail the console visibly, never
     // hang the one-shot forever (server caps are 10s/line, client 30s).
-    let out = match tokio::time::timeout(std::time::Duration::from_secs(35), cmd.output()).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(_)) => return (vec!["ctl spawn failed".to_string()], false),
-        Err(_) => return (vec!["ctl timed out".to_string()], false),
+    // Spawn (never `timeout(output())`): dropping an `output()` future
+    // leaves the child running detached (`kill_on_drop(false)` default).
+    let child = match cmd.kill_on_drop(true).spawn() {
+        Ok(c) => c,
+        Err(_) => return (vec!["ctl spawn failed".to_string()], false),
     };
+    let out =
+        match tokio::time::timeout(std::time::Duration::from_secs(35), child.wait_with_output())
+            .await
+        {
+            Ok(Ok(out)) => out,
+            Ok(Err(_)) => return (vec!["ctl spawn failed".to_string()], false),
+            Err(_) => return (vec!["ctl timed out".to_string()], false),
+        };
     let mut lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|l| mask::mask_line(l, home))
