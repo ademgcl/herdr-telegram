@@ -68,7 +68,7 @@ pub fn write_control_token(token: &str) {
                 eprintln!("[ctl] warning: cannot persist control token");
             }
         }
-        Err(e) => eprintln!("[ctl] warning: cannot persist control token: {e}"),
+        Err(e) => eprintln!("[ctl] warning: cannot persist control token: {}", crate::types::mask_home(&e.to_string())),
     }
 }
 

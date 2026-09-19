@@ -31,7 +31,7 @@ pub(crate) async fn panes_once(
             Some(set)
         }
         Err(e) => {
-            eprintln!("[reconcile] pane list failed, keeping topics: {e}");
+            eprintln!("[reconcile] pane list failed, keeping topics: {}", crate::types::mask_home(&e.to_string()));
             None
         }
     }

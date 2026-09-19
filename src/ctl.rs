@@ -122,8 +122,11 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
 
     let (reader, _) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
+    // Masked at print time (console parity): server replies carry
+    // paths/titles that must not hit the terminal raw.
+    let home = std::env::var("HOME").unwrap_or_default();
     while let Ok(Some(line)) = lines.next_line().await {
-        println!("{line}");
+        println!("{}", crate::ops::mask_display_line(&line, &home));
     }
     Ok(())
 }

@@ -79,7 +79,13 @@ pub(crate) async fn spawn_with_arg(s: &AppState, chat: i64, thread: Option<i64>,
         Ok(row) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             let space = ws_label(&spaces, &row.ws);
-            if let Some(topic_th) = s.topics.sync_topic(&row.pane, &row.kind, space).await {
+            // Fresh pane: no dialog generation can exist, but a raced
+            // prune still retires (uniform with every sync site).
+            let (topic_th, pruned) = s.topics.sync_topic_prune(&row.pane, &row.kind, space).await;
+            if pruned {
+                crate::handlers::dialog::retire_dialog(s, &row.pane).await;
+            }
+            if let Some(topic_th) = topic_th {
                 // One-tap jump like the shell opener (deep link beats a
                 // bare thread number).
                 let kb = open_topic_kb(chat, topic_th);

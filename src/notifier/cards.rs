@@ -150,7 +150,11 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
-    s.topics.sync_topic(&pane, &kind, raw_space).await;
+    // Pruned (human-deleted) topics retire the dialog before the settle
+    // card posts into the recreated, card-less topic.
+    if s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
+        crate::handlers::dialog::retire_dialog(&s, &pane).await;
+    }
     // Single stray chars (picker echoes, vim residue) never page; real
     // shorts ("ok", "done") do. Empty stays silent but advances the
     // baseline so the stray doesn't haunt future settles.

@@ -53,7 +53,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
             Err(e) => {
                 // Fail-closed single source: herdr error text stays in the
                 // log (redacted), never in the chat (socket paths leak $HOME).
-                eprintln!("[dm] list_agents failed: {}", s.tg.redact(&e.to_string()));
+                eprintln!("[dm] list_agents failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
                 s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                     .await;
                 return;
@@ -82,7 +82,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     let rows = match list_agents(&s.cfg.socket).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[dm] list_agents failed: {}", s.tg.redact(&e.to_string()));
+            eprintln!("[dm] list_agents failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
             s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;

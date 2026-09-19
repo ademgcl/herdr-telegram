@@ -22,7 +22,7 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         // Chat stays static (herdr errors carry socket/cwd paths — no
         // username leak); detail goes to the redacted log only.
-        eprintln!("[shell] send to {pane} failed: {}", s.tg.redact(&e.to_string()));
+        eprintln!("[shell] send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
         s.tg.send_msg(
             chat,
             thread,
@@ -93,14 +93,17 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         Err(e) => {
             // Chat stays static (herdr errors carry socket/cwd paths);
             // detail goes to the redacted log only (run_shell_cmd parity).
-            eprintln!("[shell] tab.create failed: {}", s.tg.redact(&e.to_string()));
+            eprintln!("[shell] tab.create failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
             s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
             return;
         }
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let space = ws_label(&spaces, ws).to_string();
-    s.topics.sync_topic(&pane, "shell", &space).await;
+    // Fresh tab: retire only on a raced prune (uniform, see agents.rs).
+    if s.topics.sync_topic_prune(&pane, "shell", &space).await.1 {
+        crate::handlers::dialog::retire_dialog(s, &pane).await;
+    }
     s.status
         .lock()
         .await
@@ -119,7 +122,7 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
         // Fresh tab whose first send fails is an orphan: static text
         // (never raw herdr paths), no focus pin (run_shell_cmd parity).
-        eprintln!("[shell] first send to {pane} failed: {}", s.tg.redact(&e.to_string()));
+        eprintln!("[shell] first send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
         s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None).await;
         return;
     }

@@ -133,7 +133,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             last_open = Instant::now();
             match EvStream::open_bounded(&s.cfg.socket, &pane, 10).await {
                 Ok(stream) => ev = Some(stream),
-                Err(e) => eprintln!("[watcher] {pane} event stream open failed: {e}"),
+                Err(e) => eprintln!("[watcher] {pane} event stream open failed: {}", crate::types::mask_home(&e.to_string())),
             }
         }
 
@@ -189,7 +189,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 fails += 1;
                 if fails >= 12 {
                     println!(
-                        "[watcher] {pane} unreachable 12x in a row ({e}) — backing off 60s, intent kept"
+                        "[watcher] {pane} unreachable 12x in a row ({}) — backing off 60s, intent kept",
+                        crate::types::mask_home(&e.to_string())
                     );
                     // Cancellable backoff: /cancel must not wait behind it,
                     // and a supersede (epoch bump, never notifies) must not

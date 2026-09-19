@@ -156,7 +156,7 @@ pub async fn first_pane_in_ws(socket: &str, ws: &str) -> Option<String> {
     match pane_facts(socket).await {
         Ok(m) => pick_first_pane(&m, ws),
         Err(e) => {
-            eprintln!("[herdr] pane.list failed, skipping reuse: {e}");
+            eprintln!("[herdr] pane.list failed, skipping reuse: {}", crate::types::mask_home(&e.to_string()));
             None
         }
     }

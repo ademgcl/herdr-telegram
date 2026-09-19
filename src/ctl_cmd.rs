@@ -49,6 +49,10 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
                 "ERR: usage: trigger <pane> <status> (e.g. trigger w1:p2 blocked)\n".to_string()
             } else {
                 let (pane, status) = (parts[0], parts[1]);
+                // Fail-closed: junk statuses must not flow into observers.
+                if !matches!(status, "blocked" | "working" | "done" | "idle" | "shell") {
+                    return "ERR: usage: trigger <pane> <blocked|working|done|idle|shell>\n".to_string();
+                }
                 observe_status(s, pane, status, false, "ctl").await;
                 format!("OK: triggered '{status}' on pane '{pane}'\n")
             }
@@ -209,6 +213,11 @@ mod tests {
         assert_eq!(
             handle_cmd(&s, "trigger w1:p1").await,
             "ERR: usage: trigger <pane> <status> (e.g. trigger w1:p2 blocked)\n"
+        );
+        // Junk statuses refuse before any observer I/O (fail-closed).
+        assert_eq!(
+            handle_cmd(&s, "trigger w1:p1 frobnicate").await,
+            "ERR: usage: trigger <pane> <blocked|working|done|idle|shell>\n"
         );
         assert_eq!(
             handle_cmd(&s, "inspect").await,

@@ -113,7 +113,21 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // dedup (working flicker no longer clears — only
                             // shell/death/confirmed-clean reads do).
                             s.clear_limit_episode(&pane).await;
-                            s.topics.mark_shell(&pane).await;
+                            // Pruned (human-deleted) topics retire the dialog
+                            // before the shelled pane reposts anything.
+                            if s.topics.mark_shell(&pane).await {
+                                crate::handlers::dialog::retire_dialog(s, &pane).await;
+                            }
+                            // Flip owns no card work below (Ignore): retire
+                            // live blocked buttons/sig here (status.rs
+                            // parity) — else the old agent's buttons bait
+                            // taps in the shelled topic and a same-content
+                            // re-block goes silent on the stale sig.
+                            if s.block_held(&pane).await {
+                                s.blocked_sig.lock().await.remove(&pane);
+                            } else {
+                                crate::handlers::dialog::resolve_cards(s, &pane).await;
+                            }
                             // A prompt owed to the vanished agent (quit on
                             // the PC, no Telegram /quit) must not spin its
                             // watcher in get_agent backoff forever: retire

@@ -22,12 +22,14 @@ pub struct ResetNames<'a> {
 
 impl TopicManager {
     /// F1: Reopen a closed forum topic (e.g. when agent transitions to working).
-    pub async fn reopen_topic(&self, pane: &str) -> bool {
+    /// Returns the pane when the mapping was pruned (caller retires its
+    /// dialog generation); None otherwise (ok, noop, or failed-kept).
+    pub async fn reopen_topic(&self, pane: &str) -> Option<String> {
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
-            return true;
+            return None;
         };
         match self.tg.reopen_forum_topic(forum, thread).await {
-            Ok(()) => true,
+            Ok(()) => None,
             Err(e) => {
                 if crate::telegram::topic_missing(&e.to_string()) {
                     // Human-deleted topic: drop the corpse so the next
@@ -35,19 +37,22 @@ impl TopicManager {
                     // Compare-and-delete: never kill a fresh remint.
                     if self.remove_mapping_if_thread(pane, thread) {
                         println!("[topics] pruned deleted topic #{thread} ({pane}) on reopen");
+                        return Some(pane.to_string());
                     }
-                    return false;
+                    return None;
                 }
                 eprintln!("[topics] reopen topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
-                false
+                None
             }
         }
     }
 
     /// Badge a live-but-agentless pane as shell: no title touch (titles
-    /// sync 1:1 with herdr names), just ensures the topic.
-    pub async fn mark_shell(&self, pane: &str) {
-        self.sync_topic(pane, "shell", "?").await;
+    /// sync 1:1 with herdr names), just ensures the topic. Returns true
+    /// when the mapping was pruned this call (caller retires its dialog
+    /// generation — uniform with every other sync site).
+    pub async fn mark_shell(&self, pane: &str) -> bool {
+        self.sync_topic_prune(pane, "shell", "?").await.1
     }
 
     /// Race-free close: RPCs the SNAPSHOT thread id directly, never

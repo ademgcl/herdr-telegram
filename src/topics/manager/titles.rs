@@ -47,13 +47,16 @@ impl TopicManager {
     /// title drifted. Silent; stores only on success so failures retry
     /// on the next watchdog tick. No time debounce: `stored==desired`
     /// already suppresses echoes, and a time gate would defer a real
-    /// herdr rename behind a Telegram adopt (late reflection).
-    pub async fn sync_title(&self, pane: &str, desired: &str) {
+    /// herdr rename behind a Telegram adopt (late reflection). Returns
+    /// the pane when the mapping was pruned (caller retires its dialog
+    /// generation — a same-content blocked dialog must repost, not stay
+    /// silent on a stale sig).
+    pub async fn sync_title(&self, pane: &str, desired: &str) -> Option<String> {
         if self.storage.get_title(pane).as_deref() == Some(desired) {
-            return;
+            return None;
         }
         let (Some(forum), Some(thread)) = (self.forum_id, self.storage.get_thread(pane)) else {
-            return;
+            return None;
         };
         match self.tg.set_topic_title(forum, thread, desired).await {
             Ok(()) => {
@@ -62,6 +65,7 @@ impl TopicManager {
                 if self.storage.set_title_if_thread(pane, thread, desired) {
                     println!("[topics] renamed topic #{thread} ({pane}) to {desired:?}");
                 }
+                None
             }
             Err(e) => {
                 if crate::telegram::topic_missing(&e.to_string()) {
@@ -69,13 +73,17 @@ impl TopicManager {
                     // a fresh mapping minted after the snapshot.
                     if self.remove_mapping_if_thread(pane, thread) {
                         println!("[topics] pruned missing topic #{thread} ({pane})");
+                        return Some(pane.to_string());
                     }
+                    None
                 } else if crate::telegram::topic_not_modified(&e.to_string()) {
                     // Already showing it — converged, store and stay quiet
                     // instead of retry-spamming every watchdog tick.
                     let _ = self.storage.set_title_if_thread(pane, thread, desired);
+                    None
                 } else {
                     eprintln!("[topics] rename topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                    None
                 }
             }
         }
@@ -87,26 +95,30 @@ impl TopicManager {
     /// probe answers TOPIC_ID_INVALID → prune, and the next ensure
     /// recreates. One-per-tick healed N topics in N×60s; three keeps
     /// the drift small on busy hosts. Skipped while resetting (would
-    /// fight identity restore).
-    pub async fn probe_deleted(&self) {
+    /// fight identity restore). Returns pruned panes for dialog retire.
+    pub async fn probe_deleted(&self) -> Vec<String> {
         if crate::handlers::reset::is_resetting() {
-            return;
+            return Vec::new();
         }
         let Some(forum) = self.forum_id else {
-            return;
+            return Vec::new();
         };
+        let mut pruned = Vec::new();
         for _ in 0..3 {
-            self.probe_next(forum).await;
+            if let Some(p) = self.probe_next(forum).await {
+                pruned.push(p);
+            }
         }
+        pruned
     }
 
     /// Probe a single mapping (one RPC): the ring cursor advances per
     /// call so consecutive calls walk the map. Split for the 3-per-tick
-    /// loop above.
-    async fn probe_next(&self, forum: i64) {
+    /// loop above. Returns the pane when pruned.
+    async fn probe_next(&self, forum: i64) -> Option<String> {
         let mappings = self.storage.all_mappings();
         if mappings.is_empty() {
-            return;
+            return None;
         }
         let mut panes: Vec<String> = mappings.keys().cloned().collect();
         panes.sort();
@@ -120,30 +132,37 @@ impl TopicManager {
             *c = idx.wrapping_add(1);
             let thread = match mappings.get(&pane).copied() {
                 Some(t) => t,
-                None => return,
+                None => return None,
             };
             (pane, thread)
         };
         let Some(title) = self.storage.get_title(&pane) else {
             // Title-less (legacy flat migration): heal via reopen (no
-            // title needed) — missing prunes, live stays.
-            if !self.reopen_topic(&pane).await && self.storage.get_thread(&pane).is_none() {
+            // title needed) — missing prunes, live stays. A dropped
+            // mapping (here or concurrently) retires the dialog via the
+            // returned pane.
+            if self.reopen_topic(&pane).await.is_some()
+                || self.storage.get_thread(&pane).is_none()
+            {
                 println!("[topics] probe healed title-less corpse ({pane})");
-            } else {
-                eprintln!("[topics] probe: title-less mapping ({pane}) kept");
+                return Some(pane);
             }
-            return;
+            eprintln!("[topics] probe: title-less mapping ({pane}) kept");
+            return None;
         };
         match self.tg.set_topic_title(forum, thread, &title).await {
-            Ok(()) => {}
-            Err(e) if crate::telegram::topic_not_modified(&e.to_string()) => {}
+            Ok(()) => None,
+            Err(e) if crate::telegram::topic_not_modified(&e.to_string()) => None,
             Err(e) if crate::telegram::topic_missing(&e.to_string()) => {
                 if self.remove_mapping_if_thread(&pane, thread) {
                     println!("[topics] probe pruned deleted topic #{thread} ({pane})");
+                    return Some(pane);
                 }
+                None
             }
             Err(e) => {
                 eprintln!("[topics] probe topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                None
             }
         }
     }

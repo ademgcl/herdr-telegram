@@ -51,7 +51,13 @@ pub(crate) async fn post_spontaneous_card(
         {
             return false;
         }
-        if let Some(thread) = s.topics.sync_topic(pane, kind, space).await {
+        // Pruned (human-deleted) topics retire the dialog — including
+        // a delete raced create (thread None), where nothing posts yet.
+        let (thread_opt, pruned) = s.topics.sync_topic_prune(pane, kind, space).await;
+        if pruned {
+            crate::handlers::dialog::retire_dialog(s, pane).await;
+        }
+        if let Some(thread) = thread_opt {
             // Inside-post re-check: a job/final landing during the sync
             // above owns the reply now — send nothing (window is now the
             // send RPC only, no sync between check and send). A /cancel

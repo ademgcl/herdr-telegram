@@ -198,7 +198,9 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                     return;
                 }
                 s.topics.note_kind(&pane, &kind);
-                s.topics.sync_title(&pane, &formatted).await;
+                if let Some(p) = s.topics.sync_title(&pane, &formatted).await {
+                    crate::handlers::dialog::retire_dialog(&s, &p).await;
+                }
                 println!("[titles] rename #{th} → tab {tab_id} ({pane}) {core:?}");
             }
             Err(e) => {
@@ -220,7 +222,9 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                 return;
             }
             s.topics.note_kind(&pane, &kind);
-            s.topics.sync_title(&pane, &formatted).await;
+            if let Some(p) = s.topics.sync_title(&pane, &formatted).await {
+                crate::handlers::dialog::retire_dialog(&s, &p).await;
+            }
             println!("[titles] rename #{th} → pane {pane} label {core:?}");
         }
         Err(e) => {

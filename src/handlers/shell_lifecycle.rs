@@ -193,7 +193,11 @@ async fn do_quit(
         .lock()
         .await
         .insert(pane.to_string(), "shell".to_string());
-    s.topics.mark_shell(pane).await;
+    // Uniform prune-retire (clear_pane inlines the sig/card clears, so
+    // this only covers a post-clear raced prune — a no-op otherwise).
+    if s.topics.mark_shell(pane).await {
+        crate::handlers::dialog::retire_dialog(s, pane).await;
+    }
     // Record the flip NOW: the watchdog skips unknown-missing rows,
     // which froze agent icons on shell topics forever.
     s.topics.note_kind(pane, "shell");

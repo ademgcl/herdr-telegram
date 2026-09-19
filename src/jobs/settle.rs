@@ -123,7 +123,7 @@ pub async fn settle_step(
             return SettleStep::Continue;
         }
         Err(e) => {
-            eprintln!("[watcher] {pane} confirming read failed: {e}");
+            eprintln!("[watcher] {pane} confirming read failed: {}", crate::types::mask_home(&e.to_string()));
             *settled_since = None;
             return SettleStep::Continue;
         }

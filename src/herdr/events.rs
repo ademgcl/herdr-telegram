@@ -17,7 +17,7 @@ pub async fn event_task(s: AppState) {
         let start = tokio::time::Instant::now();
         match run_stream(&s).await {
             Ok(reason) => println!("[events] resubscribe ({reason})"),
-            Err(e) => eprintln!("[events] stream error: {e}"),
+            Err(e) => eprintln!("[events] stream error: {}", crate::types::mask_home(&e.to_string())),
         }
         if start.elapsed() < Duration::from_secs(10) {
             fails += 1;

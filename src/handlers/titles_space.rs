@@ -136,7 +136,9 @@ pub async fn try_adopt_space_rename(
     }
     s.topics.note_kind(pane, kind);
     let core = final_core.filter(|c| !c.trim().is_empty()).unwrap_or(tag);
-    s.topics.sync_title(pane, &names::format_title(&new_space, &core, kind)).await;
+    if let Some(p) = s.topics.sync_title(pane, &names::format_title(&new_space, &core, kind)).await {
+        crate::handlers::dialog::retire_dialog(s, &p).await;
+    }
     println!("[titles] rename #{th} → space {ws_id} ({pane}) {new_space:?}");
     true
 }

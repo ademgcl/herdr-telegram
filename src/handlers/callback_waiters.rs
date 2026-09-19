@@ -41,7 +41,8 @@ pub(crate) async fn handle_keys_arm(
         .lock()
         .await
         .insert((chat, thread), (pane.to_string(), Instant::now()));
-    s.set_focus(pane).await;
+    // No arm-time focus: focus follows successful SENDS only (an
+    // abandoned or expired waiter must not pin routing at arm time).
     s.tg.edit_msg(
         chat,
         msg_id,
@@ -159,5 +160,4 @@ pub(crate) async fn handle_agent_output(
     let kb = serde_json::json!([[crate::ui::btn("← back", &format!("a:{pane}"))]]);
     let mid = s.tg.send_msg(chat, thread, &body, Some(kb)).await;
     s.remember(chat, mid, pane).await;
-    s.set_focus(pane).await;
 }

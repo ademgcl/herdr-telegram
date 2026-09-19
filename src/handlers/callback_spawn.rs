@@ -106,7 +106,10 @@ pub(crate) async fn handle_spawn(
                 let space = ws_label(&spaces, &agent.ws);
                 // Ensure topic exists in forum group if enabled
                 if s.cfg.forum.is_some() {
-                    s.topics.sync_topic(&agent.pane, &agent.kind, space).await;
+                    // Fresh pane (see agents.rs): retire only on a raced prune.
+                    if s.topics.sync_topic_prune(&agent.pane, &agent.kind, space).await.1 {
+                        crate::handlers::dialog::retire_dialog(s, &agent.pane).await;
+                    }
                 }
                 s.tg.edit_msg(
                     chat,
@@ -121,7 +124,9 @@ pub(crate) async fn handle_spawn(
                 if s.cfg.forum.is_some() {
                     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
                     let sp = ws_label(&spaces, &row.ws);
-                    s.topics.sync_topic(&row.pane, &row.kind, sp).await;
+                    if s.topics.sync_topic_prune(&row.pane, &row.kind, sp).await.1 {
+                        crate::handlers::dialog::retire_dialog(s, &row.pane).await;
+                    }
                 }
                 s.tg.edit_msg(
                     chat,

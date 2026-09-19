@@ -97,7 +97,7 @@ pub async fn enqueue_prompt(
     .await;
     sustain.abort();
     if let Err(e) = submit_res {
-        println!("[jobs] submit error: {e}");
+        println!("[jobs] submit error: {}", crate::types::mask_home(&e.to_string()));
         // The submitter always hears the truth about their own submit,
         // even when older work stays covered by the running watcher.
         let msg = e.to_string();

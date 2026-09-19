@@ -47,7 +47,7 @@ pub async fn recover_pending(s: &AppState) {
             // declare the pane dead and wipe a live prompt's intent.
             match crate::herdr::client::list_panes(&s.cfg.socket).await {
                 Err(e) => {
-                    println!("[recover] pane list failed, re-arming {pane}: {e}");
+                    println!("[recover] pane list failed, re-arming {pane}: {}", crate::types::mask_home(&e.to_string()));
                     // Fall through to the re-arm below.
                 }
                 Ok(panes) => {
@@ -130,7 +130,7 @@ pub async fn recover_pending(s: &AppState) {
                             }
                             Err(e) => {
                                 // Shell read outage: keep the intent for next boot.
-                                println!("[recover] shell read failed, keeping {pane}: {e}");
+                                println!("[recover] shell read failed, keeping {pane}: {}", crate::types::mask_home(&e.to_string()));
                                 continue;
                             }
                         }

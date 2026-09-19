@@ -145,7 +145,7 @@ pub(crate) async fn handle_bare_prompt(
             .await;
         return;
     }
-    let explicit = if rest.is_empty() || rows.len() <= 1 {
+    let explicit = if rest.is_empty() {
         None
     } else {
         resolve_target(rows, Some(head)).map(|r| (r, rest.to_string()))
@@ -192,15 +192,26 @@ pub(crate) async fn handle_bare_prompt(
         return;
     } else if let Some(r) = via_focus {
         (r, text.to_string())
-    } else if s
+    } else if let Some(focus) = s
         .get_focus()
         .await
-        .is_some_and(|f| rows.iter().all(|r| r.pane != f))
+        .filter(|f| rows.iter().all(|r| r.pane != *f))
     {
         // Rowless focus (live shell or corpse) with no reply: the sole
         // agent below must not shadow it — shell text into the agent is
-        // a cross-session write. The fallback probes liveness itself
-        // (corpse reports gone, never writes wrong).
+        // a cross-session write. Liveness probe first (reply-corpse
+        // parity): a corpse refuses UNKNOWN_TARGET instead of attempting
+        // a doomed shell write; an unreadable list falls through to the
+        // fallback, which reports gone/unreachable instead of writing.
+        match crate::herdr::client::list_panes(&s.cfg.socket).await {
+            Ok(l) if l.contains(&focus) => {}
+            Ok(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
+                return;
+            }
+            Err(_) => {}
+        }
         super::shell::run_shell_fallback(s, chat, None, text).await;
         return;
     } else if let Some(r) = resolve_target(rows, Some("")) {

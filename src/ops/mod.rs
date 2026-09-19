@@ -12,6 +12,7 @@ mod mask;
 mod proc;
 
 pub(crate) use cmd::rotate_log_if_huge;
+pub(crate) use mask::mask_line as mask_display_line;
 
 use crate::types::Res;
 

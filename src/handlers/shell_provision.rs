@@ -216,7 +216,14 @@ async fn attach_shell_pane(
     follow_focus: bool,
 ) {
     // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
-    let topic = s.topics.sync_topic(pane, "shell", space).await;
+    // Fresh pane: retire only on a raced prune (uniform, see agents.rs).
+    let topic = match s.topics.sync_topic_prune(pane, "shell", space).await {
+        (t, true) => {
+            crate::handlers::dialog::retire_dialog(s, pane).await;
+            t
+        }
+        (t, false) => t,
+    };
     s.status
         .lock()
         .await

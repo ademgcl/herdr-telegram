@@ -66,6 +66,10 @@ pub struct PromptRequest {
 /// errors carry socket/cwd paths with the username). Boundary-aware:
 /// `/Users/x2` never matches `/Users/x`; only a trailing `/` or
 /// end-of-string counts. Pure so it is unit-tested.
+///
+/// Scope note: HOME-only by design (error strings keep their reasons).
+/// Full display masking (tokens, chat IDs) lives in
+/// `ops::mask::mask_line` for console output — don't merge the two.
 pub fn mask_home_with(s: &str, home: &str) -> String {
     let home = home
         .strip_suffix('/')

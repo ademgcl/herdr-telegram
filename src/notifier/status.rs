@@ -91,7 +91,11 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // (`herdr/agents` defaults absent fields to "?" — same guard as
     // `sync_inner`'s no-mint rule).
     if info.is_some() && kind != "?" && !crate::handlers::reset::is_resetting() {
-        s.topics.sync_topic(pane, &kind, raw_space).await;
+        // Pruned (human-deleted) topics retire the dialog: the mapping
+        // is gone and the next ensure recreates card-less.
+        if s.topics.sync_topic_prune(pane, &kind, raw_space).await.1 {
+            crate::handlers::dialog::retire_dialog(s, pane).await;
+        }
 
         if let Some(forum) = s.cfg.forum {
             let branch = info.as_ref().and_then(|a| a.branch.as_deref());
@@ -135,7 +139,11 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // typing on every idle sample between turns.
     if new_status == "working" {
         if !crate::handlers::reset::is_resetting() {
-            s.topics.reopen_topic(pane).await;
+            // Pruned (human-deleted) topics retire the dialog here too:
+            // the working pane's next blocked episode must post fresh.
+            if let Some(p) = s.topics.reopen_topic(pane).await {
+                crate::handlers::dialog::retire_dialog(s, &p).await;
+            }
             s.start_typing(pane).await;
         }
     } else {
