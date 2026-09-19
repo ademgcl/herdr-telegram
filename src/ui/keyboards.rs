@@ -10,6 +10,18 @@ pub fn btn(text: impl Into<String>, data: &str) -> Value {
     json!({"text": text.into(), "callback_data": data})
 }
 
+/// User-controlled label cap for BUTTON text: Telegram enforces ~64
+/// BYTES (not chars) — 28 emoji × 4B = 112B still fails sendMessage
+/// despite the char cap. Truncate to 28 chars, then pop whole chars
+/// until the byte length fits.
+pub(crate) fn btn_label(s: &str) -> String {
+    let mut out: String = s.chars().take(28).collect();
+    while out.len() > 64 {
+        out.pop();
+    }
+    out
+}
+
 /// URL button (opens a link instead of sending a callback query).
 /// Exactly one of `url` / `callback_data` per Bot API shape.
 pub fn url_btn(text: impl Into<String>, url: &str) -> Value {
@@ -76,7 +88,7 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
                     let emo = worst_status(mine);
                     // Space labels are user-controlled (/space): cap them
                     // like titles below or long names fail sendMessage.
-                    let label: String = s.label.chars().take(28).collect();
+                    let label = btn_label(&s.label);
                     btn(format!("{emo} {label}"), &format!("w:{}", s.id))
                 })
                 .collect(),
@@ -88,7 +100,7 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
     for a in agents {
         // Space names are user-controlled: cap like titles, or long names
         // fail sendMessage with BUTTON_TEXT_INVALID.
-        let ws: String = ws_label(spaces, &a.ws).chars().take(28).collect();
+        let ws = btn_label(ws_label(spaces, &a.ws));
         kb.push(vec![btn(
             format!("{} {} @ {}", emoji(&a.status), a.kind, ws),
             &format!("a:{}", a.pane),
@@ -101,7 +113,7 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
 pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
     let mut kb = Vec::new();
     for a in agents {
-        let title: String = a.title.chars().take(28).collect();
+        let title = btn_label(&a.title);
         let label = if title.is_empty() {
             format!("{} {}", emoji(&a.status), a.kind)
         } else {
@@ -120,7 +132,7 @@ pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
 pub fn agent_card_kb(pane: &str, ws_id: &str, ws_label: &str) -> Value {
     // Space labels are user-controlled (/space): cap like the menu arms
     // or long names fail sendMessage with BUTTON_TEXT_INVALID.
-    let ws_label: String = ws_label.chars().take(28).collect();
+    let ws_label = btn_label(ws_label);
     json!([
         [
             btn("📄 output", &format!("o:{pane}")),
@@ -148,6 +160,17 @@ mod tests {
         let kb = agent_card_kb("w1:p1", "w1", &long);
         let text = kb[2][0]["text"].as_str().unwrap();
         assert!(text.chars().count() <= 30, "uncapped label: {text:?}");
+    }
+
+    #[test]
+    fn test_btn_label_caps_bytes_not_just_chars() {
+        // 28 emoji = 112B > 64B Telegram cap — must shrink by bytes.
+        let emoji = "🔥".repeat(28);
+        let out = super::btn_label(&emoji);
+        assert!(out.len() <= 64, "byte overflow: {}B", out.len());
+        assert!(out.chars().count() <= 28);
+        // ASCII still caps at 28 chars.
+        assert_eq!(super::btn_label(&"x".repeat(100)).chars().count(), 28);
     }
 
     #[test]

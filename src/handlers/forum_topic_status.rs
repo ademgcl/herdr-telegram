@@ -1,6 +1,22 @@
 //! Topic status/model arms: split from `forum_topic` (300-line file limit).
 use crate::{state::AppState, types::AgentDetail};
 
+/// Shared forum-topic guard (pure, tested): DM mode (no forum),
+/// foreign-chat ids (thread ids collide across chats), and stale
+/// replays (thread ≠ live mapping) all drop silently. Single source
+/// for the status + model arms so they can never drift.
+pub(crate) fn topic_guard_allows(
+    forum: Option<i64>,
+    chat: i64,
+    mapped: Option<i64>,
+    thread_id: i64,
+) -> bool {
+    match forum {
+        Some(f) if f == chat => mapped == Some(thread_id),
+        _ => false,
+    }
+}
+
 /// `/status` in-topic: re-render this pane's identity card in place.
 /// Parity with `notifier/status.rs:98-122` (same builder, same pin slot,
 /// same overwrite-only rule): a divergent format here flaps against the
@@ -16,12 +32,17 @@ pub(crate) async fn handle_status_topic(
     // Forum-only pin slot (router guarantees this, defense-in-depth:
     // thread ids collide across chats — a foreign-chat mid must never
     // poison the global pin).
+    if !topic_guard_allows(
+        s.cfg.forum,
+        chat,
+        s.topics.all_mappings().get(pane).copied(),
+        thread_id,
+    ) {
+        return;
+    }
     let Some(forum) = s.cfg.forum else {
         return;
     };
-    if chat != forum {
-        return;
-    }
     if crate::handlers::reset::is_resetting() {
         return;
     }
@@ -88,10 +109,41 @@ pub(crate) async fn handle_model_topic(
     pane: &str,
     arg: &str,
 ) {
+    // Shared guard with the status arm above (forum mode, live chat,
+    // live mapping thread) — the two arms can never drift.
+    if !topic_guard_allows(
+        s.cfg.forum,
+        chat,
+        s.topics.all_mappings().get(pane).copied(),
+        thread_id,
+    ) {
+        return;
+    }
+    if crate::handlers::reset::is_resetting() {
+        return;
+    }
     if arg.is_empty() {
         super::model::show_model(s, chat, Some(thread_id), pane).await;
     } else {
         let filter = super::model::search_filter(arg);
         super::model::switch_by_filter(s, chat, Some(thread_id), pane, &filter, arg).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_topic_guard_allows_live_only() {
+        // Live mapping thread in the forum: allowed.
+        assert!(topic_guard_allows(Some(1), 1, Some(7), 7));
+        // DM mode (no forum): never.
+        assert!(!topic_guard_allows(None, 1, Some(7), 7));
+        // Foreign chat (thread ids collide across chats): never.
+        assert!(!topic_guard_allows(Some(1), 2, Some(7), 7));
+        // Stale replay (reminted thread) and unmapped pane: never.
+        assert!(!topic_guard_allows(Some(1), 1, Some(8), 7));
+        assert!(!topic_guard_allows(Some(1), 1, None, 7));
     }
 }

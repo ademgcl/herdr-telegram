@@ -95,17 +95,21 @@ fn short_label(opt: &str, idx: usize) -> String {
 /// must keep the pane whole — `B:allow:wG:p1`, never `B:wG:p1:allow`.
 /// Option taps encode their index: `B:opt2:wG:p1`.
 pub(crate) fn blocked_kb(pane: &str, options: &[String]) -> Value {
+    let mut rows = Vec::new();
     let mut opt_row = Vec::new();
-    for (i, opt) in options.iter().take(4).enumerate() {
+    for (i, opt) in options.iter().take(8).enumerate() {
         opt_row.push(json!({
             "text": short_label(opt, i),
             "callback_data": format!("B:opt{i}:{pane}"),
         }));
+        if opt_row.len() == 4 {
+            rows.push(Value::Array(std::mem::take(&mut opt_row)));
+        }
     }
-    let mut rows = Vec::new();
     if !opt_row.is_empty() {
         rows.push(Value::Array(opt_row));
-    } else {
+    }
+    if rows.is_empty() {
         rows.push(json!([
             {"text": "✅ Confirm ⏎", "callback_data": format!("B:allow:{pane}")},
         ]));

@@ -91,6 +91,11 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
         // the new dialog exactly once via claim + sig re-check; an
         // anchor here would blind them (stamp-only-on-delivery rule).
     }
+    // Landed: settle the answered cards now (buttons off) while still
+    // holding the guard — a refresh racing a post-drop strip would claim,
+    // post, then lose its buttons to our trailing strip.
+    crate::handlers::dialog::strip_tracked(s, pane).await;
+    s.push_history(pane, text).await;
     drop(_op);
     let s2 = s.clone();
     let pane2 = pane.to_string();
@@ -98,13 +103,6 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
         tokio::time::sleep(Duration::from_secs(5)).await;
         refresh_blocked_card(&s2, &pane2).await;
     });
-    // Landed: settle the answered cards now (buttons off) — the heal
-    // above reconciles after. Tracking + signature stay: a turnover
-    // reposts, a resume resolves.
-    crate::handlers::dialog::strip_tracked(s, pane).await;
-    // Landed: remember what the owner sent (typed answers are history
-    // too — Resumed callers route through enqueue instead, no double).
-    s.push_history(pane, text).await;
     Ok(())
 }
 

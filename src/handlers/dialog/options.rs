@@ -157,6 +157,8 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
         return run;
     }
     // Numbered option runs ("1. Discard", "2. Keep", "3. Test"):
+    // capped at 8 (card + tap bound above) so a long numbered list in
+    // scrollback never mints unreachable buttons.
     let mut num_run: Vec<String> = Vec::new();
     let mut expected_num = 1;
     for line in lines {
@@ -169,6 +171,9 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
         {
             num_run.push(label);
             expected_num += 1;
+            if num_run.len() >= 8 {
+                return num_run;
+            }
             continue;
         }
         if num_run.len() >= 2 {

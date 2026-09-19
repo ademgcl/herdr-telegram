@@ -100,3 +100,13 @@ fn test_reap_keeps_live_fresh_drops_stale_dead() {
     assert!(!map.contains_key("dead-fresh"));
     assert!(!map.contains_key("dead-stale"));
 }
+
+#[test]
+fn test_spawn_dedup_outlives_stale_card_gate() {
+    // A shorter dedup re-arms a still-tappable card in the 300–600s
+    // window (double-mint of a billable space + agent): the dedup
+    // window must outlive the stale-card gate (STALE_SECS 600s).
+    const {
+        assert!(SPAWNDEDUP_SECS > crate::types::STALE_SECS);
+    }
+}

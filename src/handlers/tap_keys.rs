@@ -16,6 +16,24 @@ pub(crate) enum TapCall {
     Landed(TapSend, Vec<String>, Vec<String>, bool),
 }
 
+/// Numbered-dialog key for option tap index `i`: cards emit at most 8
+/// options (dialog takes 8) — wider indices are crafted callbacks,
+/// never real buttons. Pure single source for the `i < 8` gate below
+/// and its regression test.
+pub(crate) fn opt_tap_num(i: usize) -> Option<&'static str> {
+    match i {
+        0 => Some("1"),
+        1 => Some("2"),
+        2 => Some("3"),
+        3 => Some("4"),
+        4 => Some("5"),
+        5 => Some("6"),
+        6 => Some("7"),
+        7 => Some("8"),
+        _ => None,
+    }
+}
+
 /// Send the tap's keys and re-read. Returns what to classify — never
 /// touches Telegram itself (the caller owns the card).
 pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
@@ -47,9 +65,12 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                 // opt_keys is the single source of truth; Enter goes separately
                 // so the TUI gets a render beat after navigating (else Enter
                 // confirms the stale first highlight — the old Tab bug).
-                // Cards emit at most 4 options (dialog takes 4): wider
+                // Cards emit at most 8 options (dialog takes 8): wider
                 // indices are crafted callbacks, never real buttons.
-                Ok(i) if i < 4 => {
+                Ok(i) => {
+                    let Some(num) = opt_tap_num(i) else {
+                        return TapCall::Unknown;
+                    };
                     if !before.is_empty() {
                         let live = crate::handlers::dialog::parse_options(probe);
                         if !live.is_empty() && i >= live.len() {
@@ -57,12 +78,6 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                         }
                     }
                     let (full, confirm) = if crate::handlers::dialog::has_numbered_options(probe) {
-                        let num = match i {
-                            0 => "1",
-                            1 => "2",
-                            2 => "3",
-                            _ => "4",
-                        };
                         (vec![num], vec!["enter"])
                     } else {
                         let mut full = opt_keys(i);
@@ -122,4 +137,30 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
         after,
         still_blocked,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opt_tap_num_covers_8_and_rejects_wider() {
+        // Cards emit at most 8 options: 0–7 map to TUI keys 1–8,
+        // anything wider is a crafted callback, never a real button.
+        assert_eq!(
+            (0..8).map(opt_tap_num).collect::<Vec<_>>(),
+            vec![
+                Some("1"),
+                Some("2"),
+                Some("3"),
+                Some("4"),
+                Some("5"),
+                Some("6"),
+                Some("7"),
+                Some("8")
+            ]
+        );
+        assert_eq!(opt_tap_num(8), None);
+        assert_eq!(opt_tap_num(99), None);
+    }
 }

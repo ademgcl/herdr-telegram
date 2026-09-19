@@ -66,8 +66,45 @@ fn test_retry_after_parsing() {
         TelegramClient::retry_after("retry after 0"),
         Some(Duration::from_secs(1))
     );
+    // Colon/prefix shapes: the numeric run follows non-digit separators.
+    assert_eq!(
+        TelegramClient::retry_after("Too Many Requests: retry after: 30"),
+        Some(Duration::from_secs(31))
+    );
+    assert_eq!(
+        TelegramClient::retry_after("retry after in 30s"),
+        Some(Duration::from_secs(31))
+    );
     assert_eq!(TelegramClient::retry_after("connection reset"), None);
     assert_eq!(TelegramClient::retry_after("retry after many"), None);
+}
+
+#[test]
+fn test_retry_after_caps_huge_waits_and_overflow() {
+    use std::time::Duration;
+    // Uncapped, `retry after 1000000` would stall the caller for ~11
+    // days — the cap bounds every retry loop (≤3 waits × cap).
+    assert_eq!(
+        TelegramClient::retry_after("Too Many Requests: retry after 1000000"),
+        Some(Duration::from_secs(TelegramClient::MAX_FLOOD_WAIT_SECS))
+    );
+    // u64::MAX parses but must not overflow the +1 bias.
+    assert_eq!(
+        TelegramClient::retry_after(&format!("retry after {}", u64::MAX)),
+        Some(Duration::from_secs(TelegramClient::MAX_FLOOD_WAIT_SECS))
+    );
+    // Small waits keep the +1s bias under the cap.
+    assert_eq!(
+        TelegramClient::retry_after("retry after 30"),
+        Some(Duration::from_secs(31))
+    );
+}
+
+#[test]
+fn test_redact_empty_token_leaves_input_unchanged() {
+    let c = TelegramClient::new(String::new()).expect("client build");
+    assert_eq!(c.redact("connection reset"), "connection reset");
+    assert_eq!(c.redact(""), "");
 }
 
 #[test]

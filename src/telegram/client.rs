@@ -17,6 +17,9 @@ impl TelegramClient {
     }
 
     pub fn redact(&self, s: &str) -> String {
+        if self.token.is_empty() {
+            return s.to_string();
+        }
         s.replace(&self.token, "<redacted>")
     }
 
@@ -48,14 +51,20 @@ impl TelegramClient {
     }
 
     /// Telegram flood-wait: "Too Many Requests: retry after N" — honor it
-    /// instead of silently dropping the message.
+    /// instead of silently dropping the message. Capped at
+    /// [`MAX_FLOOD_WAIT_SECS`]: an uncapped `retry after 1000000` would
+    /// stall the caller (settle tick, boot menu sync) for days; beyond
+    /// the cap the caller fails fast and the next tick retries.
+    /// Single source: `call_retrying` + every loud send/edit path share
+    /// it, so the cap bounds retry churn everywhere (≤3 waits × cap).
+    pub(crate) const MAX_FLOOD_WAIT_SECS: u64 = 60;
+
     pub(crate) fn retry_after(e: &str) -> Option<Duration> {
         let tail = e.rsplit("retry after").next()?.trim();
         tail.split(|c: char| !c.is_ascii_digit())
-            .next()?
-            .parse::<u64>()
-            .ok()
-            .map(|s| Duration::from_secs(s + 1))
+            .filter(|p| !p.is_empty())
+            .find_map(|p| p.parse::<u64>().ok())
+            .map(|s| Duration::from_secs(s.saturating_add(1).min(Self::MAX_FLOOD_WAIT_SECS)))
     }
 
     /// True when a Telegram error string is a transient server/net

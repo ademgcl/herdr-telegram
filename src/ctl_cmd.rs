@@ -28,6 +28,24 @@ pub(crate) const USAGE_TRIGGER_STATUS: &str =
     "ERR: usage: trigger <pane> <blocked|working|done|idle|shell>\n";
 pub(crate) const USAGE_INSPECT: &str = "ERR: usage: inspect <pane>\n";
 
+/// Single source for the degraded-read banner (impl + test).
+pub(crate) const DEGRADED_BANNER: &str = "⚠️ herdr read degraded — states may be stale\n";
+
+/// Pure degraded verdict over the four herdr reads (pure, tested):
+/// any Err means the table below may be stale.
+pub(crate) fn degraded_banner(
+    live_err: bool,
+    spaces_err: bool,
+    facts_err: bool,
+    tabs_err: bool,
+) -> Option<&'static str> {
+    if live_err || spaces_err || facts_err || tabs_err {
+        Some(DEGRADED_BANNER)
+    } else {
+        None
+    }
+}
+
 pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
     // Trim first: TCP clients (netcat, scripts) often send leading or
     // trailing whitespace, which must not turn `reset` into "unknown".
@@ -83,13 +101,27 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
 
 async fn report_topics(s: &AppState) -> String {
     let mappings = s.topics.all_mappings();
-    let live_panes = list_panes(&s.cfg.socket).await.unwrap_or_default();
+    let (live_panes, live_err) = match list_panes(&s.cfg.socket).await {
+        Ok(l) => (l, false),
+        Err(_) => (Vec::new(), true),
+    };
     let live_set: HashSet<String> = live_panes.iter().cloned().collect();
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
-    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
-
+    let (spaces, spaces_err) = match list_workspaces(&s.cfg.socket).await {
+        Ok(l) => (l, false),
+        Err(_) => (Vec::new(), true),
+    };
+    let (facts, facts_err) = match pane_facts(&s.cfg.socket).await {
+        Ok(m) => (m, false),
+        Err(_) => (std::collections::HashMap::new(), true),
+    };
+    let (tabs, tabs_err) = match tab_labels(&s.cfg.socket).await {
+        Ok(m) => (m, false),
+        Err(_) => (std::collections::HashMap::new(), true),
+    };
     let mut out = String::new();
+    if let Some(banner) = degraded_banner(live_err, spaces_err, facts_err, tabs_err) {
+        out.push_str(banner);
+    }
     out.push_str(&format!(
         "{:<10} {:<10} {:<10} {:<16} {:<32}\n",
         "PANE", "THREAD", "STATE", "TAB", "TITLE"
@@ -227,5 +259,31 @@ mod tests {
         let st = handle_cmd(&s, "status").await;
         assert!(st.starts_with("OK: herdr-telegram running, "));
         assert!(st.ends_with(" topic(s) mapped\n"));
+    }
+
+    #[test]
+    fn test_degraded_banner_any_err_stales() {
+        // Any single failed herdr read stales the table; all-ok is quiet.
+        assert_eq!(degraded_banner(false, false, false, false), None);
+        assert_eq!(
+            degraded_banner(true, false, false, false),
+            Some(DEGRADED_BANNER)
+        );
+        assert_eq!(
+            degraded_banner(false, true, false, false),
+            Some(DEGRADED_BANNER)
+        );
+        assert_eq!(
+            degraded_banner(false, false, true, false),
+            Some(DEGRADED_BANNER)
+        );
+        assert_eq!(
+            degraded_banner(false, false, false, true),
+            Some(DEGRADED_BANNER)
+        );
+        assert_eq!(
+            degraded_banner(true, true, true, true),
+            Some(DEGRADED_BANNER)
+        );
     }
 }

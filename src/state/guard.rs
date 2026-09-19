@@ -58,7 +58,9 @@ pub(crate) const SPAWNOP_STALE_SECS: u64 = 300;
 /// space + agent). A completed tap stamps its key here; retaps within
 /// the window stand down. Same age-only expiry + prune as `spawnop`.
 /// Retry-after-failure uses a fresh card (fresh msg id → fresh key).
-pub(crate) const SPAWNDEDUP_SECS: u64 = 300;
+/// Must outlive the stale-card gate (`STALE_SECS` 600s): a shorter dedup
+/// re-arms a still-tappable card in the 300–600s window (double-mint).
+pub(crate) const SPAWNDEDUP_SECS: u64 = 660;
 
 /// Bounded drop-spin budget (holders release immediately, never across
 /// awaits — contention is microsecond-scale; this is fail-safe, not

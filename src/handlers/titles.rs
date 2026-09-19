@@ -26,6 +26,15 @@ use crate::{
 };
 use std::collections::HashMap;
 
+/// Partial-read guard (pure, tested): tab_id present but missing from
+/// a non-empty tab map is a degraded `tab.list` (not a deleted tab) —
+/// the caller skips the pane instead of mass-reverting to the tag
+/// default. Empty map is the hollow-list case handled above, never
+/// partial.
+pub(crate) fn tab_read_partial(tab_id: &str, tabs: &HashMap<String, String>) -> bool {
+    !tab_id.is_empty() && !tabs.is_empty() && !tabs.contains_key(tab_id)
+}
+
 /// Watchdog half: every mapped live pane's topic shows its herdr TAB
 /// name (or the tag default when the tab has none). Panes gone from
 /// herdr are skipped — the close flow owns them. Reuses the reconcile
@@ -62,6 +71,9 @@ pub async fn sync_titles_with(
     let census = tab_census(facts);
     for pane in s.topics.all_mappings().keys() {
         let Some(f) = facts.get(pane) else { continue };
+        if tab_read_partial(&f.tab_id, tabs) {
+            continue;
+        }
         // Degraded `list_workspaces`: an unmapped id would render as the
         // raw id (`[w8] …`) — skip the pane, never corrupt the title.
         if !spaces.iter().any(|w| w.id == f.ws) {
@@ -111,5 +123,24 @@ pub async fn sync_titles_with(
     // dialog generation (same stale-sig silence as a reset remint).
     for p in s.topics.probe_deleted().await {
         crate::handlers::dialog::retire_dialog(s, &p).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_tab_read_partial_skips_degraded_only() {
+        // Tab id missing from a NON-empty map: degraded tab.list read —
+        // skip the pane instead of reverting to the tag default.
+        let tabs = HashMap::from([("t1".to_string(), "Tab".to_string())]);
+        assert!(tab_read_partial("t9", &tabs));
+        // Present id, empty id, and hollow (empty) map: never partial.
+        assert!(!tab_read_partial("t1", &tabs));
+        assert!(!tab_read_partial("", &tabs));
+        assert!(!tab_read_partial("t9", &HashMap::new()));
+        assert!(!tab_read_partial("", &HashMap::new()));
     }
 }

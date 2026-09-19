@@ -16,6 +16,27 @@ pub(crate) fn dm_complete(per_owner_landed: &[usize], parts: usize) -> bool {
     parts > 0 && per_owner_landed.iter().any(|&n| n >= parts)
 }
 
+/// Liveness verdict before any topic sync/post: a dead pane must never
+/// re-mint its topic (resurrection) nor buzz post-cancel. Fail-closed:
+/// an ambiguous read (Err/empty) mints/posts nothing — the next tick
+/// retries. Single source for `post_spontaneous_card` + `settle_check`.
+/// Pure for tests. `live`: `None` = RPC Err, `Some(vec)` = Ok list.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Liveness {
+    Allow,
+    Dead,
+    Ambiguous,
+}
+
+pub(crate) fn liveness(live: Option<&Vec<String>>, pane: &str) -> Liveness {
+    match live {
+        None => Liveness::Ambiguous,
+        Some(l) if l.is_empty() => Liveness::Ambiguous,
+        Some(l) if l.iter().any(|p| p == pane) => Liveness::Allow,
+        Some(_) => Liveness::Dead,
+    }
+}
+
 /// Answer push: the body alone (never a status-word lead), plus the reply
 /// affordance when input is needed. Blocked keeps its urgent prefix.
 /// True when a part landed: drops must neither stamp `last_done` (it
@@ -52,12 +73,9 @@ pub(crate) async fn post_spontaneous_card(
     let mut landed = 0usize;
     let mut expected = 0usize;
     if let Some(forum) = s.cfg.forum {
-        // Liveness before sync: never re-mint a dead pane's topic.
-        // Fail-open on Err/empty (a herdr blip must not eat replies).
-        if let Ok(live) = list_panes(&s.cfg.socket).await
-            && !live.is_empty()
-            && !live.iter().any(|p| p == pane)
-        {
+        // Liveness before sync (fail-closed verdict above): never
+        // re-mint a dead pane's topic; ambiguous reads post nothing.
+        if liveness(list_panes(&s.cfg.socket).await.ok().as_ref(), pane) != Liveness::Allow {
             return false;
         }
         // Pruned (human-deleted) topics retire the dialog — including
@@ -168,5 +186,19 @@ mod tests {
         assert!(!dm_complete(&[], 1));
         assert!(!dm_complete(&[0], 0));
         assert!(!dm_complete(&[], 0));
+    }
+
+    #[test]
+    fn test_liveness_fail_closed() {
+        // Live pane posts; dead pane never re-mints (resurrection);
+        // Err/empty reads post nothing (next tick retries).
+        let live = vec!["w1:p1".to_string(), "w1:p2".to_string()];
+        assert_eq!(liveness(Some(&live), "w1:p1"), Liveness::Allow);
+        assert_eq!(liveness(Some(&live), "w9:p9"), Liveness::Dead);
+        assert_eq!(liveness(None, "w1:p1"), Liveness::Ambiguous);
+        assert_eq!(
+            liveness(Some(&Vec::new()), "w1:p1"),
+            Liveness::Ambiguous
+        );
     }
 }
