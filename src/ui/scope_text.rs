@@ -36,10 +36,6 @@ pub const USAGE_RESET_TOPIC: &str =
 /// (`USAGE_KEYS_TOPIC`) covers pane-shaped first tokens.
 pub const USAGE_KEYS_BARE: &str = "usage: `/keys y enter`";
 
-/// Herdr unreadable mid-command: refuse with retry (never fall through
-/// to a send on an unverified target).
-pub const HERDR_RETRY: &str = "⚠️ herdr status unreadable — try again";
-
 /// Strict line-count parse: bare → default, single integer → clamped,
 /// anything else → None (caller posts usage). i64-wide like DM so
 /// huge/negative clamp instead of erroring; extra tokens never silently
@@ -52,9 +48,7 @@ pub fn parse_count(arg: &str, default: u32, cap: u32) -> Option<u32> {
     if t.split_whitespace().count() != 1 {
         return None;
     }
-    t.parse::<i64>()
-        .ok()
-        .map(|n| n.clamp(1, cap as i64) as u32)
+    t.parse::<i64>().ok().map(|n| n.clamp(1, cap as i64) as u32)
 }
 
 /// True when a topic `/keys` first token names a foreign target and must
@@ -65,9 +59,7 @@ pub fn parse_count(arg: &str, default: u32, cap: u32) -> Option<u32> {
 /// refuse-retry when it fails. Ordinary first words (`y`, `enter`)
 /// return false — own-pane keys still send.
 pub fn keys_first_blocked(first: &str, panes: &[String], kinds: &[String]) -> bool {
-    panes.iter().any(|p| p == first)
-        || kinds.iter().any(|k| k == first)
-        || first.contains(':')
+    panes.iter().any(|p| p == first) || kinds.iter().any(|k| k == first) || first.contains(':')
 }
 
 #[cfg(test)]

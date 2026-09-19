@@ -7,7 +7,11 @@ fn test_topic_core_strips_chrome() {
     // Screenshot case: pasted rendered title → bare pane core.
     // (Legacy full-name era input still maps back the same way.)
     assert_eq!(
-        topic_core("[herdr-telegram] main · opencode", "herdr-telegram", "opencode"),
+        topic_core(
+            "[herdr-telegram] main · opencode",
+            "herdr-telegram",
+            "opencode"
+        ),
         "main"
     );
     assert_eq!(
@@ -28,7 +32,10 @@ fn test_topic_core_strips_chrome() {
     assert_eq!(topic_core("  api  ", "tg", "opencode"), "api");
     // Custom [bracket] text survives as core, but pasted `· code`
     // chrome still sheds (it gains the wrap forward — 1:1).
-    assert_eq!(topic_core("[urgent] fix", "shop", "opencode"), "[urgent] fix");
+    assert_eq!(
+        topic_core("[urgent] fix", "shop", "opencode"),
+        "[urgent] fix"
+    );
     assert_eq!(
         topic_core("[urgent] fix · opencode", "shop", "opencode"),
         "[urgent] fix"
@@ -96,6 +103,10 @@ fn test_topic_core_roundtrip() {
         ("ip", "sh1", "shell"),
     ] {
         let title = format_title(space, label, kind);
-        assert_eq!(topic_core(&title, space, kind), label, "no roundtrip: {title}");
+        assert_eq!(
+            topic_core(&title, space, kind),
+            label,
+            "no roundtrip: {title}"
+        );
     }
 }

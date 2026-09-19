@@ -38,6 +38,14 @@ pub(crate) fn pane_shaped(head: &str) -> bool {
     !rest.is_empty() && rest.chars().all(|d| d.is_ascii_digit())
 }
 
+/// Trailing punctuation (`w8:p1, fix`) must not turn an address into
+/// prompt text for the wrong session. Pure for tests. Never returns ""
+/// (bare `...`/`!!!` stays prompt text, never the sole-agent address).
+pub(crate) fn strip_addr_punct(head: &str) -> &str {
+    let h = head.trim_end_matches([',', '.', ';', '!', '?', ':']);
+    if h.is_empty() { head } else { h }
+}
+
 /// Bare text prompt routing: explicit `<pane> <prompt>`, else reply,
 /// else focus, else sole agent; shell-pane fallback when the target is
 /// rowless. Blocked panes get typed input, others enqueue a prompt job.
@@ -49,12 +57,27 @@ pub(crate) async fn handle_bare_prompt(
     reply_pane: Option<String>,
 ) {
     let (head, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+    // Stripped form keeps punctuated pane ids refusing instead of misrouting.
+    let head_addr = strip_addr_punct(head);
     // A bare pane id (or kind) with no prompt is an incomplete address,
     // never prompt text: enqueuing the literal id into focus/sole-agent
     // sends "w8:p1" to the wrong session as a prompt. Refuse with usage.
-    if rest.trim().is_empty() && resolve_target(rows, Some(head)).is_some() {
-        s.tg.send_msg(chat, None, "usage: `<pane> <prompt>` — name a pane and a prompt", None)
-            .await;
+    // Stripped branch is pane-shaped only: `!`/`?`/`,` are normal prompt
+    // punctuation, so bare `opencode!` stays a prompt — only a punctuated
+    // pane id (`w8:p1,`) is unambiguously an address, never text.
+    if rest.trim().is_empty()
+        && (resolve_target(rows, Some(head)).is_some()
+            || (head_addr != head
+                && pane_shaped(head_addr)
+                && resolve_target(rows, Some(head_addr)).is_some()))
+    {
+        s.tg.send_msg(
+            chat,
+            None,
+            "usage: `<pane> <prompt>` — name a pane and a prompt",
+            None,
+        )
+        .await;
         return;
     }
     // Dead/ambiguous address is never prompt text: a dead pane id
@@ -65,19 +88,30 @@ pub(crate) async fn handle_bare_prompt(
     // Explicit rowless shells (`w8:p7 ls`) serve via the shell fallback
     // (/keys parity): liveness probe first, corpse refuses, outage retries.
     if resolve_target(rows, Some(head)).is_none()
-        && (pane_shaped(head) || rows.iter().any(|r| r.kind == head))
+        && resolve_target(rows, Some(head_addr)).is_none()
+        && (pane_shaped(head)
+            || pane_shaped(head_addr)
+            || rows.iter().any(|r| r.kind == head || r.kind == head_addr))
     {
         // Kinds never contain ':' so pane_shaped implies not-a-kind —
         // no extra kind conjunct (zero-dead-code).
-        if pane_shaped(head) && !rest.trim().is_empty() {
+        let shell_head = if pane_shaped(head) {
+            head
+        } else if pane_shaped(head_addr) {
+            head_addr
+        } else {
+            ""
+        };
+        if !shell_head.is_empty() && !rest.trim().is_empty() {
             match crate::herdr::client::list_panes(&s.cfg.socket).await {
-                Ok(l) if l.contains(&head.to_string()) => {
-                    super::shell::run_shell_fallback(s, chat, Some(head.to_string()), rest).await;
+                Ok(l) if l.contains(&shell_head.to_string()) => {
+                    super::shell::run_shell_fallback(s, chat, shell_head.to_string(), rest).await;
                     return;
                 }
                 Ok(_) => {}
                 Err(_) => {
-                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None).await;
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
                     return;
                 }
             }
@@ -89,7 +123,18 @@ pub(crate) async fn handle_bare_prompt(
     let explicit = if rest.is_empty() {
         None
     } else {
-        resolve_target(rows, Some(head)).map(|r| (r, rest.to_string()))
+        // Stripped fallback is pane-shaped only: punctuated kinds
+        // (`opencode, fix`) stay prompt text via reply/focus/sole-agent
+        // instead of misrouting into the wrong session (fail-closed).
+        resolve_target(rows, Some(head))
+            .or_else(|| {
+                if head_addr != head && pane_shaped(head_addr) {
+                    resolve_target(rows, Some(head_addr))
+                } else {
+                    None
+                }
+            })
+            .map(|r| (r, rest.to_string()))
     };
     let via_reply = reply_pane
         .as_deref()
@@ -107,31 +152,31 @@ pub(crate) async fn handle_bare_prompt(
         pair
     } else if let Some(r) = via_reply {
         (r, text.to_string())
-    } else if reply_pane.is_some() {
+    } else if let Some(rp) = reply_pane.clone() {
         // The reply names a rowless (shell) pane: run it as a command
         // instead of falling through to the focused agent (which would
-        // send shell text to the wrong agent as a prompt). Fail-closed
+        // send shell text to the wrong agent as a prompt). Live arm, not
+        // dead code: shells never appear in rows, so via_reply is always
+        // None for them and only this branch can serve them. Fail-closed
         // first: a corpse reply (dead pane) refuses with UNKNOWN_TARGET,
         // an unreadable pane list refuses with HERDR_UNREACHABLE (tap
         // parity) — rowless LIVE shells still serve via the fallback.
         // (`via_reply==None` here already implies unmatched, so no
         // extra dead-check — just the liveness probe.)
-        if let Some(rp) = &reply_pane {
-            match crate::herdr::client::list_panes(&s.cfg.socket).await {
-                Ok(l) if l.contains(rp) => {}
-                Ok(_) => {
-                    s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-                        .await;
-                    return;
-                }
-                Err(_) => {
-                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
-                        .await;
-                    return;
-                }
+        match crate::herdr::client::list_panes(&s.cfg.socket).await {
+            Ok(l) if l.contains(&rp) => {}
+            Ok(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
+                return;
+            }
+            Err(_) => {
+                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return;
             }
         }
-        super::shell::run_shell_fallback(s, chat, reply_pane.clone(), text).await;
+        super::shell::run_shell_fallback(s, chat, rp, text).await;
         return;
     } else if let Some(r) = via_focus {
         (r, text.to_string())
@@ -156,7 +201,7 @@ pub(crate) async fn handle_bare_prompt(
                 return;
             }
         }
-        super::shell::run_shell_fallback(s, chat, Some(focus), text).await;
+        super::shell::run_shell_fallback(s, chat, focus, text).await;
         return;
     } else if let Some(r) = resolve_target(rows, Some("")) {
         // Sole agent: explicit already consumed any `<pane> <prompt>`
@@ -168,9 +213,10 @@ pub(crate) async fn handle_bare_prompt(
         // Never re-read focus here (snapshot was None): a concurrent
         // set_focus between reads must not reroute shell text as a prompt.
         if let Some(rp) = reply_pane.clone() {
-            super::shell::run_shell_fallback(s, chat, Some(rp), text).await;
+            super::shell::run_shell_fallback(s, chat, rp, text).await;
         } else {
-            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                .await;
         }
         return;
     };
@@ -200,11 +246,22 @@ pub(crate) async fn handle_bare_prompt(
                 // Same why-plus-card rule as topics: the reason always
                 // shows, then fresh buttons (or text fallback).
                 if s.block_held(&row.pane).await {
-                    s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None).await;
+                    s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None)
+                        .await;
                 } else {
-                    s.tg.send_msg(chat, None, &format!("⚠️ type failed: {}", crate::types::mask_home(&e.to_string())), None).await;
+                    s.tg.send_msg(
+                        chat,
+                        None,
+                        &format!(
+                            "⚠️ type failed: {}",
+                            crate::types::mask_home(&e.to_string())
+                        ),
+                        None,
+                    )
+                    .await;
                     if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
-                        s.tg.send_msg(chat, None, crate::ui::CARD_FAILED_PC, None).await;
+                        s.tg.send_msg(chat, None, crate::ui::CARD_FAILED_PC, None)
+                            .await;
                     }
                 }
             }
@@ -223,23 +280,5 @@ pub(crate) async fn handle_bare_prompt(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pane_shaped_dead_vs_ordinary() {
-        assert!(pane_shaped("w1:p1"));
-        assert!(pane_shaped("w8:p3"));
-        assert!(pane_shaped("w9:p7"));
-        assert!(pane_shaped("w10:p12"));
-        assert!(!pane_shaped("w1:p1extra"));
-        assert!(!pane_shaped("w1x:p1"));
-        assert!(!pane_shaped("note:"));
-        assert!(!pane_shaped("note:p1"));
-        assert!(!pane_shaped("dead:p9"));
-        assert!(!pane_shaped("well:done"));
-        assert!(!pane_shaped("https://foo"));
-        assert!(!pane_shaped("hello"));
-        assert!(!pane_shaped("opencode"));
-    }
-}
+#[path = "dm_prompt_tests.rs"]
+mod tests;

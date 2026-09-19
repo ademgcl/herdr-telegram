@@ -6,7 +6,7 @@
 use crate::{
     herdr::client::{list_agents, send_agent_keys},
     state::AppState,
-    ui::scope_text::{HERDR_RETRY, USAGE_KEYS_BARE, USAGE_KEYS_TOPIC, keys_first_blocked},
+    ui::scope_text::{USAGE_KEYS_BARE, USAGE_KEYS_TOPIC, keys_first_blocked},
 };
 
 /// Refuse pane-shaped first tokens (fail-closed): `Some(text)` means
@@ -28,7 +28,7 @@ pub(crate) async fn guard_keys_first_token(s: &AppState, arg: &str) -> Option<St
                 None
             }
         }
-        Err(_) => Some(HERDR_RETRY.to_string()),
+        Err(_) => Some(crate::ui::HERDR_UNREACHABLE.to_string()),
     }
 }
 
@@ -43,7 +43,8 @@ pub(crate) async fn handle_topic_keys_agent(
     arg: &str,
 ) {
     if arg.is_empty() {
-        s.tg.send_msg(chat, Some(thread_id), USAGE_KEYS_BARE, None).await;
+        s.tg.send_msg(chat, Some(thread_id), USAGE_KEYS_BARE, None)
+            .await;
         return;
     }
     if let Some(usage) = guard_keys_first_token(s, arg).await {
@@ -60,26 +61,23 @@ pub(crate) async fn handle_topic_keys_agent(
     // (blockop) or model switch (modelop) in flight owns the pane's
     // input until it lands. Self-healing peeks: stale evicts.
     if s.block_held(pane).await || s.model_held(pane).await {
-        s.tg
-            .send_msg(
-                chat,
-                Some(thread_id),
-                crate::ui::TAP_MODEL_IN_FLIGHT,
-                None,
-            )
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::TAP_MODEL_IN_FLIGHT, None)
             .await;
         return;
     }
     match send_agent_keys(&s.cfg.socket, pane, &keys).await {
         Ok(_) => {
-            s.tg
-                .send_msg(chat, Some(thread_id), crate::ui::KEYS_SENT, None)
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::KEYS_SENT, None)
                 .await;
         }
         Err(e) => {
-            s.tg
-                .send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
-                .await;
+            s.tg.send_msg(
+                chat,
+                Some(thread_id),
+                &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
+                None,
+            )
+            .await;
         }
     }
 }

@@ -1,7 +1,7 @@
 //! Telegram send-message params + silent/buzz sends.
 use super::client::TelegramClient;
 use crate::{
-    types::{Res, LIVE_RPC_TIMEOUT_SECS},
+    types::{LIVE_RPC_TIMEOUT_SECS, Res},
     ui::fit_msg,
 };
 use serde_json::{Value, json};
@@ -73,7 +73,12 @@ impl TelegramClient {
     /// still reads as a miss and retries fresh (Telegram has no
     /// idempotency key) — rare against a 4s local send, and confined to
     /// sends; edits always retry in place and never duplicate.
-    pub async fn send_silent(&self, chat_id: i64, thread_id: Option<i64>, text: &str) -> Option<i64> {
+    pub async fn send_silent(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        text: &str,
+    ) -> Option<i64> {
         let params = build_send_msg_params(chat_id, thread_id, text, None, None, true);
         match self
             .call(
@@ -101,7 +106,8 @@ impl TelegramClient {
         keyboard: Option<Value>,
         effect_id: Option<&str>,
     ) -> Option<i64> {
-        let mut params = build_send_msg_params(chat_id, thread_id, text, keyboard, effect_id, false);
+        let mut params =
+            build_send_msg_params(chat_id, thread_id, text, keyboard, effect_id, false);
         let mut sends = 0;
         let mut waits = 0;
         loop {
@@ -274,23 +280,5 @@ impl TelegramClient {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_send_msg_params_effect() {
-        let p1 = build_send_msg_params(123, Some(456), "hello", None, Some(EFFECT_FIRE), false);
-        assert_eq!(p1["chat_id"], 123);
-        assert_eq!(p1["message_thread_id"], 456);
-        assert_eq!(p1["message_effect_id"], EFFECT_FIRE);
-        assert!(p1.get("disable_notification").is_none());
-
-        let p2 = build_send_msg_params(123, None, "hello", None, None, false);
-        assert_eq!(p2["chat_id"], 123);
-        assert!(p2.get("message_thread_id").is_none());
-        assert!(p2.get("message_effect_id").is_none());
-
-        let p3 = build_send_msg_params(123, None, "hello", None, None, true);
-        assert_eq!(p3["disable_notification"], true);
-    }
-}
+#[path = "messages_tests.rs"]
+mod tests;

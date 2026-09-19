@@ -62,7 +62,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // output/events go dark in DM mode without it (no typing task
     // there), and a slow get_agent would otherwise stretch the
     // piggyback period past expiry. Spawned, never awaited inline.
-    let mut typing_tick = tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
+    let mut typing_tick =
+        tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
     // Skip, never Burst: after slow RPC rounds a Burst catch-up would
     // fire ticks back-to-back, spinning tight poll cycles against an
     // already-sick herdr. Skipped ticks simply resume the 2s cadence.
@@ -133,7 +134,10 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             last_open = Instant::now();
             match EvStream::open_bounded(&s.cfg.socket, &pane, 10).await {
                 Ok(stream) => ev = Some(stream),
-                Err(e) => eprintln!("[watcher] {pane} event stream open failed: {}", crate::types::mask_home(&e.to_string())),
+                Err(e) => eprintln!(
+                    "[watcher] {pane} event stream open failed: {}",
+                    crate::types::mask_home(&e.to_string())
+                ),
             }
         }
 
@@ -256,14 +260,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Stream whatever is new into the live message (see live.rs
         // for the cooldown/baseline/delta details).
-        super::live::stream_live(
-            &s,
-            &job,
-            screen,
-            &mut acc,
-            &mut live,
-        )
-        .await;
+        super::live::stream_live(&s, &job, screen, &mut acc, &mut live).await;
     }
 
     // Every `break` above converges here: single abort site for the

@@ -82,7 +82,10 @@ impl TopicManager {
                     let _ = self.storage.set_title_if_thread(pane, thread, desired);
                     None
                 } else {
-                    eprintln!("[topics] rename topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                    eprintln!(
+                        "[topics] rename topic #{thread} ({pane}) failed: {}",
+                        self.tg.redact(&e.to_string())
+                    );
                     None
                 }
             }
@@ -144,8 +147,7 @@ impl TopicManager {
             // title needed) — missing prunes, live stays. A dropped
             // mapping (here or concurrently) retires the dialog via the
             // returned pane.
-            if self.reopen_topic(&pane).await.is_some()
-                || self.storage.get_thread(&pane).is_none()
+            if self.reopen_topic(&pane).await.is_some() || self.storage.get_thread(&pane).is_none()
             {
                 println!("[topics] probe healed title-less corpse ({pane})");
                 return Some(pane);
@@ -164,7 +166,10 @@ impl TopicManager {
                 None
             }
             Err(e) => {
-                eprintln!("[topics] probe topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                eprintln!(
+                    "[topics] probe topic #{thread} ({pane}) failed: {}",
+                    self.tg.redact(&e.to_string())
+                );
                 None
             }
         }

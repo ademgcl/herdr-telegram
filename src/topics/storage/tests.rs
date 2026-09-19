@@ -125,9 +125,10 @@ fn test_set_pin_if_thread_guards_remint() {
 
 #[test]
 fn test_insert_with_title_clears_pin_on_remint() {
-    let st = TopicStorage::at(
-        std::env::temp_dir().join(format!("herdr-tg-test-pinremint-{}.json", std::process::id())),
-    );
+    let st = TopicStorage::at(std::env::temp_dir().join(format!(
+        "herdr-tg-test-pinremint-{}.json",
+        std::process::id()
+    )));
     st.insert_with_title("w1:p1".into(), 42, "a");
     st.set_pin("w1:p1", 111);
     // Same thread re-insert keeps the pin (no spurious repost).

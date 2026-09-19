@@ -16,8 +16,8 @@
 //! must hold for [`KIND_SWITCH_STABLE`] consecutive ticks before it
 //! counts as a new episode, so scroll-order oscillation between
 //! co-present banners never spams.
-use super::notices::{LimitHit, needs_stuck_gate};
 use super::notices::types::ERROR_KIND;
+use super::notices::{LimitHit, needs_stuck_gate};
 use std::time::{Duration, Instant};
 
 /// Ticks with a gated (`error`/`provider`/`rate-limit`/WEAK-`auth`)
@@ -85,9 +85,9 @@ impl BuzzEpisode {
     /// time-travel without sleeping the gate out.
     pub fn error_stuck(&self, now: std::time::Instant) -> bool {
         self.kind.as_deref() == Some(ERROR_KIND)
-            && self
-                .since
-                .is_some_and(|t| now.duration_since(t) >= std::time::Duration::from_secs(STUCK_SECS))
+            && self.since.is_some_and(|t| {
+                now.duration_since(t) >= std::time::Duration::from_secs(STUCK_SECS)
+            })
     }
 
     /// Current detection (or None for a clean non-empty read) → the hit

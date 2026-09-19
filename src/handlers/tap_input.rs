@@ -43,9 +43,7 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
     // Single-flight like button taps: concurrent types interleave.
     // RAII: cancellation mid-type must not wedge the pane.
     let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
-        return Err(TypeError::Failed(
-            crate::ui::ANSWER_IN_FLIGHT.into(),
-        ));
+        return Err(TypeError::Failed(crate::ui::ANSWER_IN_FLIGHT.into()));
     };
     // The agent may have resumed between the snapshot and now: typing
     // into live work injects the answer as stray input. Bail so the
@@ -120,9 +118,7 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
     // screen arms anyway — outage must not brick typing; the
     // send-path gate backstops stale arms.
     let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
-    if !screen.is_empty()
-        && !parse_options(&winner_lines(&screen)).is_empty()
-    {
+    if !screen.is_empty() && !parse_options(&winner_lines(&screen)).is_empty() {
         s.tg.send_msg(
             chat,
             thread,
@@ -137,7 +133,12 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
     // sibling waiters is live work — dropping it for a refused arm
     // loses the command and misroutes the next message as a prompt.
     // Same-pane re-arms refresh the instant and proceed.
-    let occupant = s.typewait.lock().await.get(&(chat, thread)).map(|(p, _)| p.clone());
+    let occupant = s
+        .typewait
+        .lock()
+        .await
+        .get(&(chat, thread))
+        .map(|(p, _)| p.clone());
     if let Some(other) = occupant
         && other != pane
     {
@@ -160,9 +161,8 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
         (chat, thread),
         (pane.to_string(), std::time::Instant::now()),
     );
-    let mid = s
-        .tg
-        .send_msg(
+    let mid =
+        s.tg.send_msg(
             chat,
             thread,
             "⌨️ type your answer as the next message (⏎ sends it)",
@@ -185,7 +185,8 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
             std::time::Instant::now(),
             crate::state::guard::RUNWAIT_STALE_SECS,
         ) {
-            s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None).await;
+            s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None)
+                .await;
             return true;
         }
         super::shell::handle_run_command(s, chat, thread, &ws, text).await;
@@ -200,7 +201,8 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
             crate::state::guard::KEYWAIT_STALE_SECS,
         ) {
             s.keywait.lock().await.remove(&(chat, thread));
-            s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None).await;
+            s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None)
+                .await;
             return true;
         }
         // Never interleave with an owned key sequence (mirrors /keys):
@@ -235,11 +237,13 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                 match crate::herdr::client::list_panes(&s.cfg.socket).await {
                     Ok(l) if l.contains(&pane.to_string()) => true,
                     Ok(_) => {
-                        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
+                        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
+                            .await;
                         return true;
                     }
                     Err(_) => {
-                        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+                        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                            .await;
                         return true;
                     }
                 }
@@ -258,11 +262,21 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                 }
                 // Focus follows success (never armed — see handle_keys_arm).
                 s.set_focus(&pane).await;
-                s.tg.send_msg(chat, thread, crate::ui::KEYS_SENT, None).await;
+                s.tg.send_msg(chat, thread, crate::ui::KEYS_SENT, None)
+                    .await;
             }
             Err(e) => {
-                s.tg.send_msg(chat, thread, &format!("keys failed: {}", crate::types::mask_home(&e.to_string())), None)
-                    .await;
+                s.tg.send_msg(
+                    chat,
+                    thread,
+                    &format!(
+                        "{}: {}",
+                        crate::ui::KEYS_FAILED_PC,
+                        crate::types::mask_home(&e.to_string())
+                    ),
+                    None,
+                )
+                .await;
             }
         }
         return true;

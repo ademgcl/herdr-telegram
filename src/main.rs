@@ -1,3 +1,5 @@
+//! herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer
+//! over local Unix socket RPC. Init + poll/watchdog loop live here.
 mod config;
 mod ctl;
 mod ctl_auth;
@@ -22,17 +24,14 @@ use crate::{
     shutdown::shutdown_signal,
     state::State,
     telegram::{get_updates, handle_update},
-    types::{HERDR_PROTOCOL, Res, SINGLE_INSTANCE_PORT, TG_POLL_SECS},
+    types::{HERDR_PROTOCOL, Res, TG_POLL_SECS},
 };
 use std::time::Duration;
 
 /// Render a path for logs with $HOME collapsed to `~` (no username leak).
 /// Crate-wide log helper (pure core: [`crate::types::collapse_home`]).
 fn home_masked(p: &std::path::Path) -> String {
-    crate::types::collapse_home(
-        &p.display().to_string(),
-        &std::env::var("HOME").unwrap_or_default(),
-    )
+    crate::types::collapse_home(&p.display().to_string(), &crate::types::home_dir())
 }
 
 #[tokio::main]
@@ -40,14 +39,9 @@ async fn main() -> Res<()> {
     let args: Vec<String> = std::env::args().collect();
     // .env first: dev.sh saw the file's port for the guard bind, so the
     // binary must too (otherwise a .env-only HERDR_TG_PORT is ignored).
-    config::load_env_file();
-    let port: u16 = match std::env::var("HERDR_TG_PORT") {
-        Ok(v) => v
-            .trim()
-            .parse()
-            .map_err(|_| "HERDR_TG_PORT invalid (must be a port number)".to_string())?,
-        Err(_) => SINGLE_INSTANCE_PORT,
-    };
+    // Single source: `ops::proc::guard_port` (invalid fails loudly here
+    // and in every ops call site — never a silent split-brain fallback).
+    let port: u16 = crate::ops::proc::guard_port()?;
 
     // CLI control client mode: bypass daemon bind and talk to running bot
     if args.len() > 1 && args[1] == "ctl" {
@@ -148,7 +142,10 @@ async fn main() -> Res<()> {
                     }
                 }
             }
-            Err(e) => eprintln!("[telegram] permission probe failed: {}", s.tg.redact(&e.to_string())),
+            Err(e) => eprintln!(
+                "[telegram] permission probe failed: {}",
+                s.tg.redact(&e.to_string())
+            ),
         }
 
         // F4: verify custom emoji topic icon stickers
@@ -161,12 +158,13 @@ async fn main() -> Res<()> {
                         stickers.len()
                     );
                 } else {
-                    eprintln!(
-                        "[telegram] WARNING: kind icon stickers missing in set: {missing:?}"
-                    );
+                    eprintln!("[telegram] WARNING: kind icon stickers missing in set: {missing:?}");
                 }
             }
-            Err(e) => eprintln!("[telegram] forum icon stickers probe failed: {}", s.tg.redact(&e.to_string())),
+            Err(e) => eprintln!(
+                "[telegram] forum icon stickers probe failed: {}",
+                s.tg.redact(&e.to_string())
+            ),
         }
     }
     recover_pending(&s).await;
@@ -202,7 +200,15 @@ async fn main() -> Res<()> {
             }
             _ = watchdog_tick.tick() => {
                 crate::ops::rotate_log_if_huge();
-                reconcile(&s, false, "watchdog").await;
+                // Tick bound: a sick-herdr/large-fleet scan must not stretch
+                // the ≤60s herdr→tg guarantee into minutes — partial tick +
+                // retry next cycle (reconcile is per-pane idempotent; Skip
+                // alone prevents overlap, never lateness).
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(50),
+                    reconcile(&s, false, "watchdog"),
+                )
+                .await;
             }
             updates = async {
                 let off = *s.offset.lock().await;

@@ -16,26 +16,9 @@ pub fn mask_line(s: &str, home: &str) -> String {
 
 /// `$HOME` anywhere in the line, boundary-checked (the rest must start
 /// with `/` or end the line — avoids the `/Users/x2` false positive).
+/// Single source: [`crate::types::mask_home_with`] (dup'd literals re-drift).
 fn collapse_home_line(s: &str, home: &str) -> String {
-    let home = home.strip_suffix('/').filter(|h| !h.is_empty()).unwrap_or(home);
-    if home.is_empty() || home == "/" {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find(home) {
-        let after = &rest[i + home.len()..];
-        if after.is_empty() || after.starts_with('/') {
-            out.push_str(&rest[..i]);
-            out.push('~');
-            rest = after;
-        } else {
-            out.push_str(&rest[..i + home.len()]);
-            rest = after;
-        }
-    }
-    out.push_str(rest);
-    out
+    crate::types::mask_home_with(s, home)
 }
 
 /// `/Users/<seg>` + `/home/<seg>` → `/Users/***` (other users' names).
@@ -209,6 +192,9 @@ mod tests {
             "bot started (PID: 1)"
         );
         // Short values are not tokens; bare prefixes untouched.
-        assert_eq!(mask_line("a 12:34 b -100 c TELEGRAM_X", home), "a 12:34 b -100 c TELEGRAM_X");
+        assert_eq!(
+            mask_line("a 12:34 b -100 c TELEGRAM_X", home),
+            "a 12:34 b -100 c TELEGRAM_X"
+        );
     }
 }

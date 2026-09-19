@@ -33,7 +33,7 @@ static RESET_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 /// reuse) until it ends, or in-flight mappings are wiped into orphans +
 /// later doubles. Set before any snapshot; auto-cleared.
 /// Watchdog/notifier also consult it: reconcile, spontaneous cards and
-/// event-driven topic writes pause while it holds (no 429 storm), while
+/// event-driven observations pause while it holds (no 429 storm), while
 /// read-only memory updates continue.
 pub fn is_resetting() -> bool {
     RESET_IN_PROGRESS.load(Ordering::SeqCst)
@@ -62,13 +62,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     let forum = match s.cfg.forum {
         Some(f) => f,
         None => {
-            s.tg.send_msg(
-                chat,
-                thread_id,
-                "⚠️ Reset is only available in forum supergroup mode",
-                None,
-            )
-            .await;
+            s.tg.send_msg(chat, thread_id, crate::ui::RESET_FORUM_ONLY, None)
+                .await;
             return;
         }
     };
@@ -76,18 +71,16 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     // F9: permission guard — ensure bot can manage topics before reset deletes/recreates
     match s.tg.check_forum_permissions(forum).await {
         Ok(perms) if !perms.can_manage_topics => {
-            s.tg.send_msg(
-                chat,
-                thread_id,
-                "⚠️ reset aborted: bot lacks 'can_manage_topics' admin permission",
-                None,
-            )
-            .await;
+            s.tg.send_msg(chat, thread_id, crate::ui::RESET_NO_PERM, None)
+                .await;
             return;
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!("[reset] permission check warning (proceeding): {}", s.tg.redact(&e.to_string()));
+            eprintln!(
+                "[reset] permission check warning (proceeding): {}",
+                s.tg.redact(&e.to_string())
+            );
         }
     }
 
@@ -113,7 +106,10 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             s.tg.send_msg(
                 chat,
                 thread_id,
-                "⚠️ reset aborted: herdr unreachable, mappings untouched",
+                &format!(
+                    "{} — reset aborted, mappings untouched",
+                    crate::ui::HERDR_UNREACHABLE
+                ),
                 None,
             )
             .await;

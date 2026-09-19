@@ -4,7 +4,12 @@ use crate::jobs::job::Job;
 use crate::jobs::persist::PendingPrompt;
 
 fn prompt(chat: i64) -> PendingPrompt {
-    PendingPrompt { chat, thread: None, prompt: "hi".into(), started_unix: 0 } // fmt:keep 1-line (300-line file limit)
+    PendingPrompt {
+        chat,
+        thread: None,
+        prompt: "hi".into(),
+        started_unix: 0,
+    } // fmt:keep 1-line (300-line file limit)
 }
 
 #[tokio::test]

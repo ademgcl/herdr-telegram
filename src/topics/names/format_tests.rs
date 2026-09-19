@@ -9,7 +9,7 @@ fn test_title_format() {
     assert_eq!(format_title("tg", "main", "shell"), "[tg] main");
     assert_eq!(format_title("tg", "main", "opencode"), "[tg] main");
     assert_eq!(format_title("tg", "main", "agy"), "[tg] main");
-    assert_eq!(format_title("ajnow", "c1", "claude"), "[ajnow] c1");
+    assert_eq!(format_title("demo", "c1", "claude"), "[demo] c1");
     assert_eq!(
         format_title("a-very-long-workspace-label-here", "o1", "opencode"),
         "[a-very-long-workspac] o1"
@@ -23,10 +23,7 @@ fn test_title_format() {
         format_title("shop", "[shop] shop-backend · claude", "claude"),
         "[shop] shop-backend"
     );
-    assert_eq!(
-        format_title("tg", "o2 · tg", "opencode"),
-        "[tg] o2"
-    );
+    assert_eq!(format_title("tg", "o2 · tg", "opencode"), "[tg] o2");
     assert_eq!(format_title("space-1", "sh1", "shell"), "[space-1] sh1");
     assert_eq!(format_title("infra", "s1", "shell"), "[infra] s1");
     // Unknown kinds render bare too.
@@ -46,14 +43,8 @@ fn test_title_format() {
         "[tg] opencode"
     );
     // ...legacy suffixed labels shed and re-sync bare...
-    assert_eq!(
-        format_title("tg", "o2 · o", "opencode"),
-        "[tg] o2"
-    );
-    assert_eq!(
-        format_title("tg", "o2 · opencode", "opencode"),
-        "[tg] o2"
-    );
+    assert_eq!(format_title("tg", "o2 · o", "opencode"), "[tg] o2");
+    assert_eq!(format_title("tg", "o2 · opencode", "opencode"), "[tg] o2");
     assert_eq!(format_title("ip", "sh1 · shell", "shell"), "[ip] sh1");
     assert_eq!(format_title("ip", "foo · SHELL", "shell"), "[ip] foo");
     assert_eq!(format_title("ip", "sh1 · $", "shell"), "[ip] sh1");
@@ -69,10 +60,7 @@ fn test_title_format() {
     // ...short-code bodies render plain, never stuttering...
     assert_eq!(format_title("tg", "o", "opencode"), "[tg] o");
     assert_eq!(format_title("ip", "sh", "shell"), "[ip] sh");
-    assert_eq!(
-        format_title("tg", "opencode", "opencode"),
-        "[tg] opencode"
-    );
+    assert_eq!(format_title("tg", "opencode", "opencode"), "[tg] opencode");
     // ...degenerate kind-word bodies stay (documented)...
     assert_eq!(format_title("ip", "shell", "shell"), "[ip] shell");
     // ...exact-space bodies stay (stable, unambiguous)...

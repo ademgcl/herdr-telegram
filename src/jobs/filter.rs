@@ -212,5 +212,3 @@ pub fn dialog_chrome_filtered(lines: &[String]) -> Vec<String> {
 #[cfg(test)]
 #[path = "filter_tests.rs"]
 mod tests;
-
-

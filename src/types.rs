@@ -95,9 +95,19 @@ pub fn mask_home_with(s: &str, home: &str) -> String {
     out
 }
 
+/// Process $HOME (empty when unset). Single source for every
+/// `env::var("HOME")` read — dup'd literals re-drift (one site once
+/// read `HOM` and every path silently fell back to CWD-relative).
+pub fn home_dir() -> String {
+    std::env::var("HOME").unwrap_or_default()
+}
+
+/// Single source for the unset-HOME refusal (launchd install paths).
+pub const HOME_NOT_SET: &str = "HOME not set";
+
 /// [`mask_home_with`] with the process HOME (chat/log call sites).
 pub fn mask_home(s: &str) -> String {
-    mask_home_with(s, &std::env::var("HOME").unwrap_or_default())
+    mask_home_with(s, &home_dir())
 }
 
 /// Collapse $HOME to `~` in a display path (log hygiene: no username
@@ -162,12 +172,18 @@ mod tests {
 
     #[test]
     fn test_collapse_home() {
-        assert_eq!(collapse_home("/Users/x/.config/a", "/Users/x"), "~/.config/a");
+        assert_eq!(
+            collapse_home("/Users/x/.config/a", "/Users/x"),
+            "~/.config/a"
+        );
         assert_eq!(collapse_home("/other/path", "/Users/x"), "/other/path");
         assert_eq!(collapse_home("/Users/x/a", ""), "/Users/x/a");
         // Anchored: mid-path occurrences stay untouched (HOME=/ still
         // collapses sanely instead of corrupting the leading slash).
-        assert_eq!(collapse_home("/tmp/Users/x/a", "/Users/x"), "/tmp/Users/x/a");
+        assert_eq!(
+            collapse_home("/tmp/Users/x/a", "/Users/x"),
+            "/tmp/Users/x/a"
+        );
         assert_eq!(collapse_home("/Users/x2/a", "/Users/x"), "/Users/x2/a");
         assert_eq!(collapse_home("/etc/hosts", "/"), "~/etc/hosts");
         assert_eq!(collapse_home("/Users/x", "/Users/x/"), "~");

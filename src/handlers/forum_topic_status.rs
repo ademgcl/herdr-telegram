@@ -62,9 +62,7 @@ pub(crate) async fn handle_status_topic(
     if let Some(mid) = mid_opt {
         match s.tg.try_edit_msg(forum, mid, &text, None).await {
             Ok(()) => {}
-            Err(e)
-                if crate::telegram::messages::edit_gone(&e.to_string()) =>
-            {
+            Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
                 mid_opt = None;
             }
             Err(_) => {}

@@ -30,18 +30,20 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
         Ok(_) => {}
         Err(e) => {
-            let msg = e.to_string().to_lowercase();
-            let not_found = msg.contains("not found")
-                || msg.contains("no such")
-                || msg.contains("unknown pane");
+            // Herdr not-found is `agent_not_found` (underscore) — the
+            // space form never matches it (waiter bricks to hygiene).
+            // Single source: `herdr::rpc::is_not_found` (blips keep + retry).
+            let not_found = crate::herdr::rpc::is_not_found(&e.to_string());
             if !not_found {
-                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None).await;
+                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
                 return true;
             }
             match crate::herdr::client::list_panes(&s.cfg.socket).await {
                 Ok(l) if l.contains(&wpane) => {
                     s.typewait.lock().await.remove(&(chat, None));
-                    s.tg.send_msg(chat, None, crate::ui::STALE_TYPEWAIT_SHELL, None).await;
+                    s.tg.send_msg(chat, None, crate::ui::STALE_TYPEWAIT_SHELL, None)
+                        .await;
                     return true;
                 }
                 Ok(_) => {
@@ -88,7 +90,10 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
                     // on ambiguous read, never re-stamp now — a fresh
                     // stamp would immortalize the waiter across a
                     // prolonged outage) so the retry re-routes.
-                    s.typewait.lock().await.insert((chat, None), (wpane, armed_at));
+                    s.typewait
+                        .lock()
+                        .await
+                        .insert((chat, None), (wpane, armed_at));
                     s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                 }
@@ -99,7 +104,10 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
             s.tg.send_msg(
                 chat,
                 None,
-                &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
+                &format!(
+                    "⚠️ type failed: {} — retry, or /cancel to abort",
+                    crate::types::mask_home(&e.to_string())
+                ),
                 None,
             )
             .await;

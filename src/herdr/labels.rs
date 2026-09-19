@@ -26,9 +26,9 @@ pub fn facts_contradict(
     shells: &[String],
     facts: &HashMap<String, PaneFacts>,
 ) -> bool {
-    facts.keys().any(|p| {
-        !agents.iter().any(|a| &a.pane == p) && !shells.contains(p)
-    })
+    facts
+        .keys()
+        .any(|p| !agents.iter().any(|a| &a.pane == p) && !shells.contains(p))
 }
 
 /// One `pane.list` per call — the reconcile watchdog's 60s tick is the

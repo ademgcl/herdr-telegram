@@ -17,7 +17,10 @@ pub async fn event_task(s: AppState) {
         let start = tokio::time::Instant::now();
         match run_stream(&s).await {
             Ok(reason) => println!("[events] resubscribe ({reason})"),
-            Err(e) => eprintln!("[events] stream error: {}", crate::types::mask_home(&e.to_string())),
+            Err(e) => eprintln!(
+                "[events] stream error: {}",
+                crate::types::mask_home(&e.to_string())
+            ),
         }
         if start.elapsed() < Duration::from_secs(10) {
             fails += 1;
@@ -73,7 +76,8 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
         let mut limited = (&mut reader).take(65_536);
         limited.read_line(&mut ack).await
     })
-    .await {
+    .await
+    {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => return Err(e.into()),
         Err(_) => return Err("event subscribe ack timed out".into()),
@@ -120,6 +124,12 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
         if ev["event"].as_str() == Some("pane.agent_status_changed")
             && let Some((pane, status)) = parse_status_event(&ev)
         {
+            // Paced reset owns topic lifecycle: card/debounce arms must
+            // not fire into topics being deleted (429 storm + orphans).
+            // Watchdog reconcile already degrades to reap-only during reset.
+            if crate::handlers::reset::is_resetting() {
+                continue;
+            }
             println!("[events] {pane} → {status}");
             observe_status(s, pane, status, false, "event").await;
         }

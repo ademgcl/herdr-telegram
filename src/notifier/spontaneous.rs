@@ -66,7 +66,12 @@ pub(crate) async fn post_spontaneous_card(
                 return false;
             }
             if let Some(at) = armed_at
-                && s.debounce.lock().await.get(pane).map(|(st, a)| st != settled || a != &at).unwrap_or(true)
+                && s.debounce
+                    .lock()
+                    .await
+                    .get(pane)
+                    .map(|(st, a)| st != settled || a != &at)
+                    .unwrap_or(true)
             {
                 return false;
             }

@@ -93,10 +93,9 @@ pub(crate) async fn watch_stall(
     }
     let (chat, th) = *job.dest.lock().await;
     let text = limit_card_text(pane, hit);
-    let mid = s
-        .tg
-        .send_msg_with_effect(chat, th, &text, None, Some(crate::telegram::EFFECT_FIRE))
-        .await;
+    let mid =
+        s.tg.send_msg_with_effect(chat, th, &text, None, Some(crate::telegram::EFFECT_FIRE))
+            .await;
     if let Some(m) = mid {
         let _ = s.tg.set_reaction(chat, m, Some("❗")).await;
         s.limit_send_cool.lock().await.remove(pane);
@@ -106,9 +105,15 @@ pub(crate) async fn watch_stall(
         // Delivery failed: release the claim, cool down, and unfire so
         // the next tick retries with the stuck timer kept.
         release_claim(s, pane, hit.kind, now).await;
-        s.limit_send_cool.lock().await.insert(pane.to_string(), Instant::now());
+        s.limit_send_cool
+            .lock()
+            .await
+            .insert(pane.to_string(), Instant::now());
         episode.unfire();
-        eprintln!("[prompt] limit alert {pane}: {} send FAILED — cooling down", hit.kind);
+        eprintln!(
+            "[prompt] limit alert {pane}: {} send FAILED — cooling down",
+            hit.kind
+        );
     }
     screen
 }

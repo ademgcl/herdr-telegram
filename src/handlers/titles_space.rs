@@ -6,7 +6,9 @@
 //! remainder actually changed, and re-asserts `[new-space] core`
 //! immediately so the topic stays 1:1 with space + pane names.
 use crate::{
-    handlers::title_rules::{space_label_taken, space_rename_core, stored_covers_label, title_core_for},
+    handlers::title_rules::{
+        space_label_taken, space_rename_core, stored_covers_label, title_core_for,
+    },
     handlers::titles_adopt::STATE_READ_ERR,
     herdr::{
         client::rename_workspace,
@@ -94,7 +96,16 @@ pub async fn try_adopt_space_rename(
         return true;
     }
     if let Err(e) = rename_workspace(&s.cfg.socket, ws_id, &new_space).await {
-        s.tg.send_msg(chat, Some(th), &format!("⚠️ space rename failed: {}", crate::types::mask_home(&e.to_string())), None).await;
+        s.tg.send_msg(
+            chat,
+            Some(th),
+            &format!(
+                "⚠️ space rename failed: {}",
+                crate::types::mask_home(&e.to_string())
+            ),
+            None,
+        )
+        .await;
         return true;
     }
     // Remainder decides the pane half: blank keeps the herdr core,
@@ -123,7 +134,13 @@ pub async fn try_adopt_space_rename(
                 final_core = Some(wc);
             }
             Err(reason) => {
-                s.tg.send_msg(chat, Some(th), &format!("⚠️ space renamed, pane rename failed — retry: {reason}"), None).await;
+                s.tg.send_msg(
+                    chat,
+                    Some(th),
+                    &format!("⚠️ space renamed, pane rename failed — retry: {reason}"),
+                    None,
+                )
+                .await;
             }
         }
     }
@@ -136,7 +153,11 @@ pub async fn try_adopt_space_rename(
     }
     s.topics.note_kind(pane, kind);
     let core = final_core.filter(|c| !c.trim().is_empty()).unwrap_or(tag);
-    if let Some(p) = s.topics.sync_title(pane, &names::format_title(&new_space, &core, kind)).await {
+    if let Some(p) = s
+        .topics
+        .sync_title(pane, &names::format_title(&new_space, &core, kind))
+        .await
+    {
         crate::handlers::dialog::retire_dialog(s, &p).await;
     }
     println!("[titles] rename #{th} → space {ws_id} ({pane}) {new_space:?}");

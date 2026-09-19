@@ -16,7 +16,12 @@ use tokio::time::{Duration, sleep};
 /// confirm for the watchdog skip, so flips converge (icon included)
 /// instead of skipping forever.
 pub async fn confirmed_shell(s: &AppState, pane: &str) -> bool {
-    if s.status.lock().await.get(pane).is_some_and(|st| st == "shell") {
+    if s.status
+        .lock()
+        .await
+        .get(pane)
+        .is_some_and(|st| st == "shell")
+    {
         return true;
     }
     s.topics.is_shell_tagged(pane)
@@ -24,7 +29,9 @@ pub async fn confirmed_shell(s: &AppState, pane: &str) -> bool {
 
 /// Pure confirm copy so tests cover it without I/O.
 pub fn quit_confirm_text(pane: &str, status: &str) -> String {
-    format!("⚠️ quit {pane} while it is {status}?\nThis kills live work — the agent will not finish.")
+    format!(
+        "⚠️ quit {pane} while it is {status}?\nThis kills live work — the agent will not finish."
+    )
 }
 
 /// Drop the pane's agent to a shell. Idle/done quits directly; busy
@@ -40,7 +47,7 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
             // live agent.
             let rows = match list_agents(&s.cfg.socket).await {
                 Err(_) => {
-                    s.tg.send_msg(chat, thread, crate::ui::scope_text::HERDR_RETRY, None)
+                    s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                     return;
                 }
@@ -50,7 +57,7 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
                 match get_agent(&s.cfg.socket, pane).await {
                     Ok(a) => a,
                     Err(_) => {
-                        s.tg.send_msg(chat, thread, crate::ui::scope_text::HERDR_RETRY, None)
+                        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                             .await;
                         return;
                     }
@@ -59,13 +66,14 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
                 let dead = match list_panes(&s.cfg.socket).await {
                     Ok(l) => !l.contains(&pane.to_string()),
                     Err(_) => {
-                        s.tg.send_msg(chat, thread, crate::ui::scope_text::HERDR_RETRY, None)
+                        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                             .await;
                         return;
                     }
                 };
                 if dead {
-                    s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
+                    s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
+                        .await;
                     return;
                 }
                 let mid =
@@ -84,7 +92,14 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
             {"text": "Quit anyway", "callback_data": format!("X:quit:{pane}")},
             {"text": "Keep", "callback_data": format!("X:keep:{pane}")},
         ]]);
-        let mid = s.tg.send_msg(chat, thread, &quit_confirm_text(pane, &agent.status), Some(kb)).await;
+        let mid =
+            s.tg.send_msg(
+                chat,
+                thread,
+                &quit_confirm_text(pane, &agent.status),
+                Some(kb),
+            )
+            .await;
         s.remember(chat, mid, pane).await;
         return;
     }
@@ -144,7 +159,7 @@ async fn do_quit(
         .await
         .is_err()
     {
-        quit_say(s, chat, thread, edit_mid, "⚠️ quit keys failed — quit on the PC").await;
+        quit_say(s, chat, thread, edit_mid, crate::ui::QUIT_KEYS_FAILED_PC).await;
         return;
     }
     // Confirm herdr sees a shell (agent_not_found) before claiming it.
@@ -163,7 +178,9 @@ async fn do_quit(
                 if confirmed
                     && keys < 3
                     && matches!(a.status.as_str(), "idle" | "done")
-                    && send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"]).await.is_ok()
+                    && send_agent_keys(&s.cfg.socket, pane, &["ctrl+c"])
+                        .await
+                        .is_ok()
                 {
                     keys += 1;
                 }
@@ -203,7 +220,8 @@ async fn do_quit(
     // Immediate bot-owned re-icon (user customs kept); failures retry
     // next tick via the watchdog flip path above.
     if let (Some(forum), Some(topic)) = (s.cfg.forum, s.topics.all_mappings().get(pane).copied())
-        && let Some(want) = names::icon_needs_update(s.topics.storage.get_icon(pane).as_deref(), "shell")
+        && let Some(want) =
+            names::icon_needs_update(s.topics.storage.get_icon(pane).as_deref(), "shell")
         && s.tg.set_topic_icon(forum, topic, want).await.is_ok()
     {
         s.topics.storage.set_icon(pane, want);
@@ -214,7 +232,9 @@ async fn do_quit(
             s.remember(chat, Some(mid), pane).await;
         }
         None => {
-            let mid = s.tg.send_msg(chat, thread, &shell_card_text(pane), None).await;
+            let mid =
+                s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
+                    .await;
             s.remember(chat, mid, pane).await;
         }
     }
@@ -236,10 +256,7 @@ pub(crate) fn spawn_flip_watch(s: &AppState, pane: &str) {
             sleep(Duration::from_millis(1500)).await;
             match get_agent(&s.cfg.socket, &pane).await {
                 Ok(a) if a.kind != "?" && a.kind != "shell" => {
-                    s.status
-                        .lock()
-                        .await
-                        .insert(pane.clone(), a.status.clone());
+                    s.status.lock().await.insert(pane.clone(), a.status.clone());
                     s.topics.note_kind(&pane, &a.kind);
                     if let (Some(forum), Some(thread)) =
                         (s.cfg.forum, s.topics.all_mappings().get(&pane).copied())

@@ -112,4 +112,3 @@ pub async fn fold_live(
         live_dest.take();
     }
 }
-

@@ -2,11 +2,10 @@
 //! watcher. Split from `runner` (300-line file limit).
 use super::runner::watch_job;
 use crate::{
-    handlers::dialog::{dialog_sig, send_blocked_card},
-    herdr::client::{read_screen, read_screen_visible, rpc_t},
+    herdr::client::{read_screen, rpc_t},
     jobs::finalize::report,
     jobs::job::Job,
-    state::{AppState, OpGuard},
+    state::AppState,
     types::{AgentRow, PromptRequest},
 };
 use serde_json::json;
@@ -84,7 +83,10 @@ pub async fn enqueue_prompt(
     let (c, t) = (req.chat_id, req.message_thread_id);
     let sustain = tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(crate::state::TYPING_TICK_SECS)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(
+                crate::state::TYPING_TICK_SECS,
+            ))
+            .await;
             tg.typing(c, t).await;
         }
     });
@@ -97,43 +99,22 @@ pub async fn enqueue_prompt(
     .await;
     sustain.abort();
     if let Err(e) = submit_res {
-        println!("[jobs] submit error: {}", crate::types::mask_home(&e.to_string()));
+        println!(
+            "[jobs] submit error: {}",
+            crate::types::mask_home(&e.to_string())
+        );
         // The submitter always hears the truth about their own submit,
         // even when older work stays covered by the running watcher.
         let msg = e.to_string();
         if msg.contains("blocked") {
-            // Gated post (refresh/finalize parity): a tap/finalize in
-            // flight owns the card — contention reports plainly without
-            // buzz. A sig re-check after the claim stops a second ❗ when
-            // a racing post just stamped this exact dialog (both FIRE
-            // effects otherwise — the submit-failed-because-blocked
-            // interleaving is the common case, not a corner).
-            let screen = read_screen_visible(&s.cfg.socket, &pane, 60).await;
-            if screen.is_empty() {
-                report(
-                    &s,
-                    req.chat_id,
-                    req.message_thread_id,
-                    &pane,
-                    &format!("⚠️ error: {}", crate::types::mask_home(&e.to_string())),
-                )
-                .await;
-            } else {
-                let sig = dialog_sig(&screen);
-                let dup = s.blocked_sig.lock().await.get(&pane).map(|v| v == &sig).unwrap_or(false);
-                if dup || s.block_held(&pane).await {
-                    report(&s, req.chat_id, req.message_thread_id, &pane, crate::ui::BLOCKED_SEE_CARD).await;
-                } else if let Some(_op) = OpGuard::claim(&s.blockop, &pane).await {
-                    let dup2 = s.blocked_sig.lock().await.get(&pane).map(|v| v == &sig).unwrap_or(false);
-                    if dup2 {
-                        report(&s, req.chat_id, req.message_thread_id, &pane, crate::ui::BLOCKED_SEE_CARD).await;
-                    } else {
-                        send_blocked_card(&s, req.chat_id, req.message_thread_id, &pane).await;
-                    }
-                } else {
-                    report(&s, req.chat_id, req.message_thread_id, &pane, crate::ui::BLOCKED_SEE_CARD).await;
-                }
-            }
+            super::enqueue_blocked::report_blocked_submit(
+                &s,
+                req.chat_id,
+                req.message_thread_id,
+                &pane,
+                &e.to_string(),
+            )
+            .await;
         } else {
             report(
                 &s,

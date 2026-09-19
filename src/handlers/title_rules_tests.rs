@@ -19,7 +19,11 @@ fn facts(rows: &[(&str, &str, &str)]) -> HashMap<String, PaneFacts> {
 
 #[test]
 fn test_tab_census_counts_split_tabs() {
-    let f = facts(&[("w1:p1", "t1", "a"), ("w1:p2", "t1", "a"), ("w1:p3", "t2", "a")]);
+    let f = facts(&[
+        ("w1:p1", "t1", "a"),
+        ("w1:p2", "t1", "a"),
+        ("w1:p3", "t2", "a"),
+    ]);
     let c = tab_census(&f);
     assert_eq!(c.get("t1"), Some(&2));
     assert_eq!(c.get("t2"), Some(&1));
@@ -28,7 +32,11 @@ fn test_tab_census_counts_split_tabs() {
 
 #[test]
 fn test_tab_of_resolves_split_flag() {
-    let f = facts(&[("w1:p1", "t1", "a"), ("w1:p2", "t1", "a"), ("w1:p3", "", "a")]);
+    let f = facts(&[
+        ("w1:p1", "t1", "a"),
+        ("w1:p2", "t1", "a"),
+        ("w1:p3", "", "a"),
+    ]);
     let tabs = HashMap::from([("t1".to_string(), "console".to_string())]);
     let c = tab_census(&f);
     assert_eq!(tab_of(&f, &tabs, &c, "w1:p1"), (Some("console"), true));
@@ -111,13 +119,27 @@ fn test_reset_desired_title_verbatim_or_formatted() {
         "[tg] My Title"
     );
     assert_eq!(
-        reset_desired_title(Some("My Title"), "tg", "  My Title  ", "opencode", false, None),
+        reset_desired_title(
+            Some("My Title"),
+            "tg",
+            "  My Title  ",
+            "opencode",
+            false,
+            None
+        ),
         "[tg] My Title"
     );
     // Split tab cores format — a stored title covering the pane
     // label re-wraps it bare.
     assert_eq!(
-        reset_desired_title(Some("console o27"), "tg", "console o27", "opencode", true, None),
+        reset_desired_title(
+            Some("console o27"),
+            "tg",
+            "console o27",
+            "opencode",
+            true,
+            None
+        ),
         "[tg] console o27"
     );
     assert_eq!(
@@ -133,14 +155,7 @@ fn test_reset_desired_title_verbatim_or_formatted() {
     );
     // Formatted otherwise (new/changed cores, case-only changes).
     assert_eq!(
-        reset_desired_title(
-            Some("[tg] api"),
-            "tg",
-            "backend",
-            "opencode",
-            false,
-            None
-        ),
+        reset_desired_title(Some("[tg] api"), "tg", "backend", "opencode", false, None),
         "[tg] backend"
     );
     assert_eq!(
@@ -203,8 +218,16 @@ fn test_space_rename_core_sheds_both_spaces() {
 fn test_space_label_taken_guards_duplicates() {
     use crate::types::WorkspaceInfo;
     let spaces = vec![
-        WorkspaceInfo { id: "w1".into(), label: "tg".into(), number: 1 },
-        WorkspaceInfo { id: "w2".into(), label: "shop".into(), number: 2 },
+        WorkspaceInfo {
+            id: "w1".into(),
+            label: "tg".into(),
+            number: 1,
+        },
+        WorkspaceInfo {
+            id: "w2".into(),
+            label: "shop".into(),
+            number: 2,
+        },
     ];
     assert!(space_label_taken(&spaces, "w1", "shop"));
     assert!(space_label_taken(&spaces, "w1", "  SHOP  "));

@@ -1,6 +1,8 @@
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
-    herdr::client::{get_agent, list_panes, list_workspaces, read_agent_output, send_agent_keys, send_pane_keys},
+    herdr::client::{
+        get_agent, list_panes, list_workspaces, read_agent_output, send_agent_keys, send_pane_keys,
+    },
     state::AppState,
     types::AgentRow,
     ui::{
@@ -69,11 +71,13 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
         Err(_) => match list_panes(&s.cfg.socket).await {
             Ok(l) if l.contains(&pane.to_string()) => true,
             Ok(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
                 return;
             }
             Err(_) => {
-                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None).await;
+                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
                 return;
             }
         },
@@ -94,7 +98,13 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
         Err(e) => {
             // Masked (herdr errors carry socket/cwd paths — reason kept,
             // username dropped).
-            s.tg.send_msg(chat, None, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
+            s.tg.send_msg(
+                chat,
+                None,
+                &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
+                None,
+            )
+            .await;
         }
     }
 }
@@ -126,7 +136,10 @@ pub(crate) async fn handle_read(
             Ok(n) if resolve_target(rows, Some(arg)).is_none() => {
                 (None, n.clamp(1, READ_CAP as i64) as u32)
             }
-            _ => (if arg.is_empty() { None } else { Some(arg) }, TOPIC_READ_DEFAULT),
+            _ => (
+                if arg.is_empty() { None } else { Some(arg) },
+                TOPIC_READ_DEFAULT,
+            ),
         },
     };
     // Corpse reply with exactly one live agent: the sole-agent shortcut
@@ -157,7 +170,8 @@ pub(crate) async fn handle_read(
                 row = rows.iter().find(|r| r.pane == f).cloned();
             }
             Some(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
                 return;
             }
             None => {
@@ -182,7 +196,13 @@ pub(crate) async fn handle_read(
             s.set_focus(&row.pane).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, None, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
+            s.tg.send_msg(
+                chat,
+                None,
+                &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
+                None,
+            )
+            .await;
         }
     }
 }
@@ -219,7 +239,8 @@ pub(crate) async fn handle_status(
                 pane = Some(f);
             }
             Some(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
                 return;
             }
             None => {
@@ -251,7 +272,10 @@ pub(crate) async fn handle_status(
             s.tg.send_msg(
                 chat,
                 None,
-                &format!("⚠️ status failed: {} — try /agents", crate::types::mask_home(&e.to_string())),
+                &format!(
+                    "⚠️ status failed: {} — try /agents",
+                    crate::types::mask_home(&e.to_string())
+                ),
                 None,
             )
             .await;

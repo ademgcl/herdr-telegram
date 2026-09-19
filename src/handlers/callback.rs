@@ -1,5 +1,7 @@
 use super::callback_parse::{gone_card, live_target, pane_live, split_action, split_head};
-use super::callback_waiters::{handle_agent_output, handle_keys_arm, handle_pane_output, handle_run_arm};
+use super::callback_waiters::{
+    handle_agent_output, handle_keys_arm, handle_pane_output, handle_run_arm,
+};
 use crate::{
     herdr::client::{get_agent, list_agents, list_workspaces},
     state::{
@@ -11,8 +13,8 @@ use crate::{
         spawn_kb, workspace_kb, ws_label,
     },
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
     // Answer the spinner FIRST, even for rejected taps: a hanging spinner
@@ -96,16 +98,19 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             {
                 let done = s.spawndone.lock().await;
                 if let Some(at) = done.get(&key)
-                    && !crate::state::guard::claim_stale(*at, std::time::Instant::now(), SPAWNDEDUP_SECS)
+                    && !crate::state::guard::claim_stale(
+                        *at,
+                        std::time::Instant::now(),
+                        SPAWNDEDUP_SECS,
+                    )
                 {
                     return;
                 }
             }
-            let _guard =
-                match OpGuard::claim_limited(&s.spawnop, &key, SPAWNOP_STALE_SECS).await {
-                    Some(g) => g,
-                    None => return,
-                };
+            let _guard = match OpGuard::claim_limited(&s.spawnop, &key, SPAWNOP_STALE_SECS).await {
+                Some(g) => g,
+                None => return,
+            };
             if super::callback_spawn::handle_new_space(&s, chat, msg_id, thread).await {
                 super::callback_spawn::stamp_spawndone(&s, key).await;
             }
@@ -115,16 +120,19 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             {
                 let done = s.spawndone.lock().await;
                 if let Some(at) = done.get(&key)
-                    && !crate::state::guard::claim_stale(*at, std::time::Instant::now(), SPAWNDEDUP_SECS)
+                    && !crate::state::guard::claim_stale(
+                        *at,
+                        std::time::Instant::now(),
+                        SPAWNDEDUP_SECS,
+                    )
                 {
                     return;
                 }
             }
-            let _guard =
-                match OpGuard::claim_limited(&s.spawnop, &key, SPAWNOP_STALE_SECS).await {
-                    Some(g) => g,
-                    None => return,
-                };
+            let _guard = match OpGuard::claim_limited(&s.spawnop, &key, SPAWNOP_STALE_SECS).await {
+                Some(g) => g,
+                None => return,
+            };
             let minted = match r.split_once(':') {
                 Some((ws, kind)) => {
                     super::callback_spawn::handle_spawn(&s, chat, msg_id, kind, Some(ws)).await
@@ -216,7 +224,8 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             if let Some((action, pane)) = split_action(r) {
                 super::tap::answer_tap(&s, chat, msg_id, thread, pane, action).await;
             } else {
-                s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None).await;
+                s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+                    .await;
             }
         }
         // Model picker: M:<idx>:<pane> free-Zen taps, M:list:<pane> card.
@@ -239,11 +248,13 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                     super::kill::handle_kill_action(&s, chat, msg_id, action, pane).await;
                 }
             } else {
-                s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None).await;
+                s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+                    .await;
             }
         }
         _ => {
-            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None).await;
+            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
+                .await;
         }
     }
 }

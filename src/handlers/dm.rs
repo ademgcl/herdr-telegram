@@ -1,5 +1,5 @@
-use crate::{herdr::client::list_agents, state::AppState, ui::help_text};
 use super::target::resolve_target;
+use crate::{herdr::client::list_agents, state::AppState, ui::help_text};
 use serde_json::Value;
 
 pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
@@ -53,7 +53,10 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
             Err(e) => {
                 // Fail-closed single source: herdr error text stays in the
                 // log (redacted), never in the chat (socket paths leak $HOME).
-                eprintln!("[dm] list_agents failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
+                eprintln!(
+                    "[dm] list_agents failed: {}",
+                    s.tg.redact(&crate::types::mask_home(&e.to_string()))
+                );
                 s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                     .await;
                 return;
@@ -82,7 +85,10 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     let rows = match list_agents(&s.cfg.socket).await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[dm] list_agents failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
+            eprintln!(
+                "[dm] list_agents failed: {}",
+                s.tg.redact(&crate::types::mask_home(&e.to_string()))
+            );
             s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
@@ -165,20 +171,23 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
                 _ => (Some(arg), 5),
             },
             None => match arg.parse::<i64>() {
-                Ok(count) if resolve_target(&rows, Some(arg)).is_none() => {
-                    (None, count.clamp(1, crate::state::history::HISTORY_CAP as i64) as u32)
-                }
+                Ok(count) if resolve_target(&rows, Some(arg)).is_none() => (
+                    None,
+                    count.clamp(1, crate::state::history::HISTORY_CAP as i64) as u32,
+                ),
                 _ => (if arg.is_empty() { None } else { Some(arg) }, 5),
             },
         };
         if target_arg.is_none() && super::target::unmatched_reply(&rows, &reply_pane) {
-            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                .await;
             return;
         }
         let mut pane = match resolve_target(&rows, target_arg) {
             Some(r) => Some(r.pane),
             None if target_arg.is_some() => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
                 return;
             }
             None => reply_pane
@@ -191,7 +200,8 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
                     pane = Some(f);
                 }
                 Some(_) => {
-                    s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                    s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                        .await;
                     return;
                 }
                 None => {
@@ -225,7 +235,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd.starts_with('/') {
-        s.tg.send_msg(chat, None, "unknown command — /help", None)
+        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_COMMAND, None)
             .await;
         return;
     }

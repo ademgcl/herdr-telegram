@@ -136,10 +136,7 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
             }
             Err(e) => eprintln!(
                 "[topics] rename {} failed: {e}",
-                crate::types::collapse_home(
-                    &path.display().to_string(),
-                    &std::env::var("HOME").unwrap_or_default()
-                )
+                crate::types::collapse_home(&path.display().to_string(), &crate::types::home_dir())
             ),
         }
     }

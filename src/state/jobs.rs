@@ -179,9 +179,7 @@ impl State {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
-                Some(p)
-                    if p.chat == check.0 && p.thread == check.1 && p.prompt == check.2 =>
-                {
+                Some(p) if p.chat == check.0 && p.thread == check.1 && p.prompt == check.2 => {
                     p.started_unix
                 }
                 _ => return false,

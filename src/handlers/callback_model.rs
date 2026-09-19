@@ -84,7 +84,10 @@ pub(crate) async fn handle_model_tap(
                 s.tg.edit_msg(
                     chat,
                     msg_id,
-                    &format!("⚠️ switch failed: {}\nstill on: {cur_line}", crate::types::mask_home(&e.to_string())),
+                    &format!(
+                        "⚠️ switch failed: {}\nstill on: {cur_line}",
+                        crate::types::mask_home(&e.to_string())
+                    ),
                     Some(super::model::model_kb(pane)),
                 )
                 .await;

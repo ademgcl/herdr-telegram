@@ -40,14 +40,16 @@ fn test_dm_help_lists_every_dm_command() {
     // (/start + /help are escape hatches, listed nowhere by design.)
     let help = help_text();
     for cmd in [
-        "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell", "/pane",
-        "/split", "/read", "/output", "/card", "/esc", "/status", "/history",
-        "/reset", "/cancel", "/keys",
+        "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell", "/pane", "/split",
+        "/read", "/output", "/card", "/esc", "/status", "/history", "/reset", "/cancel", "/keys",
     ] {
         assert!(help.contains(cmd), "DM help missing {cmd}");
     }
     assert!(help.contains("[space]"), "DM help must use [space]");
-    assert!(!help.contains("[workspace]"), "DM help must not use [workspace]");
+    assert!(
+        !help.contains("[workspace]"),
+        "DM help must not use [workspace]"
+    );
 }
 
 /// Backtick-fenced `/commands` inside a help text — the documented set
@@ -68,14 +70,14 @@ fn fenced_cmds(help: &str) -> std::collections::HashSet<String> {
 
 /// Both directions with one explicit exemption: every router arm
 /// documented (no silent commands), nothing documented without an arm
-/// (no dead ends). Exemption: /space works via the forum.rs
-/// pre-dispatch intercept (no per-file arm). (/start+/help are escape
-/// hatches — skipped in arm lists where unlisted by design.)
+/// (no dead ends). `/space` is an explicit arm everywhere: a real arm in
+/// DM (`dm.rs`), a pre-dispatch intercept in forums (`forum.rs`) that
+/// each surface's arm list must name — no implicit inject, or a broken
+/// intercept would still pass. (/start+/help are escape hatches —
+/// skipped in arm lists where unlisted by design.)
 fn assert_parity(help: &str, arms: &[&str], surface: &str) {
     let documented = fenced_cmds(help);
-    let mut armed: std::collections::HashSet<String> =
-        arms.iter().map(|s| s.to_string()).collect();
-    armed.insert("/space".to_string());
+    let armed: std::collections::HashSet<String> = arms.iter().map(|s| s.to_string()).collect();
     for cmd in &armed {
         assert!(documented.contains(cmd), "{surface} help hides {cmd}");
     }
@@ -86,15 +88,15 @@ fn assert_parity(help: &str, arms: &[&str], surface: &str) {
 
 #[test]
 fn test_topic_help_matches_topic_router() {
-    // Arms in forum_topic.rs (+ /space intercept; /help never lists
-    // itself — AGENTS.md-exempt escape hatch).
+    // Arms in forum_topic.rs (+ /space forum.rs intercept, named
+    // explicitly; /help never lists itself — AGENTS.md-exempt).
     let help = topic_help_text("w1:p1", "opencode");
     assert_parity(
         &help,
         &[
-            "/start", "/agents", "/spawn", "/reset", "/cancel", "/card",
-            "/esc", "/quit", "/kill", "/split", "/pane", "/shell", "/read",
-            "/output", "/history", "/keys", "/status", "/model",
+            "/start", "/agents", "/spawn", "/space", "/reset", "/cancel", "/card", "/esc", "/quit",
+            "/kill", "/split", "/pane", "/shell", "/read", "/output", "/history", "/keys",
+            "/status", "/model",
         ],
         "topic",
     );
@@ -102,14 +104,14 @@ fn test_topic_help_matches_topic_router() {
 
 #[test]
 fn test_shell_help_matches_shell_router() {
-    // Arms in shell_topic.rs (+ /space intercept); refuses count as arms.
+    // Arms in shell_topic.rs (+ /space intercept, named; refuses count).
     let help = shell_help_text("w1:p1");
     assert_parity(
         &help,
         &[
-            "/start", "/agents", "/spawn", "/shell", "/reset", "/quit",
-            "/kill", "/split", "/pane", "/cancel", "/card", "/esc", "/read",
-            "/output", "/history", "/keys", "/status", "/model",
+            "/start", "/agents", "/spawn", "/space", "/shell", "/reset", "/quit", "/kill",
+            "/split", "/pane", "/cancel", "/card", "/esc", "/read", "/output", "/history", "/keys",
+            "/status", "/model",
         ],
         "shell",
     );
@@ -117,14 +119,14 @@ fn test_shell_help_matches_shell_router() {
 
 #[test]
 fn test_general_help_matches_general_router() {
-    // Arms in general.rs (+ /space intercept); redirect arms count.
+    // Arms in general.rs (+ /space intercept, named; redirect arms count).
     // (/start + /help unlisted by design — escape hatches.)
     assert_parity(
-        general_help_text(),
+        &general_help_text(),
         &[
-            "/agents", "/spawn", "/cancel", "/card", "/esc", "/model", "/history",
-            "/shell", "/pane", "/reset", "/quit", "/kill", "/split", "/read",
-            "/output", "/status", "/keys",
+            "/agents", "/spawn", "/space", "/cancel", "/card", "/esc", "/model", "/history",
+            "/shell", "/pane", "/reset", "/quit", "/kill", "/split", "/read", "/output", "/status",
+            "/keys",
         ],
         "general",
     );
@@ -136,9 +138,9 @@ fn test_dm_help_matches_dm_router() {
     assert_parity(
         help_text(),
         &[
-            "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell",
-            "/pane", "/split", "/read", "/output", "/card", "/esc", "/status",
-            "/history", "/reset", "/cancel", "/keys",
+            "/agents", "/spawn", "/space", "/model", "/quit", "/kill", "/shell", "/pane", "/split",
+            "/read", "/output", "/card", "/esc", "/status", "/history", "/reset", "/cancel",
+            "/keys",
         ],
         "dm",
     );

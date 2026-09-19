@@ -83,7 +83,7 @@ async fn uid() -> Res<String> {
 
 pub async fn install(home: &str) -> Res<()> {
     if home.is_empty() {
-        return Err("HOME not set".into());
+        return Err(crate::types::HOME_NOT_SET.into());
     }
     let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
     let exe = exe.to_string_lossy().into_owned();
@@ -100,30 +100,26 @@ pub async fn install(home: &str) -> Res<()> {
     // Fail-closed: a STILL-busy guard means a foreign owner (dev
     // console, manual run) — restore the previous job (old plist is
     // untouched) and refuse instead of orphaning prod.
-    let port = proc::guard_port();
+    let port = proc::guard_port()?;
     if proc::port_busy(port) || !proc::bot_pids().is_empty() {
-        let _ = launchctl(
-            &["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()],
-        )
-        .await;
+        let _ = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
         return Err("guard busy — dev stop/cleanup first, then dev install".into());
     }
-    std::fs::write(&path, render_plist(&exe, &dir))
-        .map_err(|e| format!("write plist: {e}"))?;
-    let (ok, err) = launchctl(
-        &["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()],
-    )
-    .await;
+    std::fs::write(&path, render_plist(&exe, &dir)).map_err(|e| format!("write plist: {e}"))?;
+    let (ok, err) = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
     if !ok {
         return Err(format!("bootstrap failed: {err}").into());
     }
-    say(home, &format!("installed {} (logs to bot.log)", path.display()));
+    say(
+        home,
+        &format!("installed {} (logs to bot.log)", path.display()),
+    );
     Ok(())
 }
 
 pub async fn uninstall(home: &str) -> Res<()> {
     if home.is_empty() {
-        return Err("HOME not set".into());
+        return Err(crate::types::HOME_NOT_SET.into());
     }
     let id = uid().await?;
     // Bootout + rm only — never stop_all: a supervised dev child is

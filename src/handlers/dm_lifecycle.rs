@@ -47,12 +47,10 @@ pub(crate) async fn handle_shell(s: &AppState, chat: i64, rows: &[AgentRow], arg
     let focus_ws = match s.get_focus().await {
         Some(p) => match rows.iter().find(|r| r.pane == p).map(|r| r.ws.clone()) {
             Some(ws) => Some(ws),
-            None => {
-                crate::herdr::labels::pane_facts(&s.cfg.socket)
-                    .await
-                    .ok()
-                    .and_then(|m| m.get(&p).map(|f| f.ws.clone()))
-            }
+            None => crate::herdr::labels::pane_facts(&s.cfg.socket)
+                .await
+                .ok()
+                .and_then(|m| m.get(&p).map(|f| f.ws.clone())),
         },
         None => None,
     };
@@ -77,10 +75,15 @@ pub(crate) async fn handle_split(
 ) {
     // Direction words are never pane ids: `right|down` (or bare) splits
     // the reply/focus pane, anything else must resolve to a pane —
-    // fail-closed via the same "who?" as /quit + /kill.
+    // fail-closed via the same "who?" as /quit + /kill. A trailing
+    // direction (`/split w1:p1 right`) splits that pane that way
+    // (mirrors the `/read` trailing-count parse).
     let (pane_arg, dir) = match arg {
         "right" | "down" => ("", arg),
-        _ => (arg, ""),
+        _ => match arg.rsplit_once(char::is_whitespace) {
+            Some((p, d)) if d == "right" || d == "down" => (p, d),
+            _ => (arg, ""),
+        },
     };
     let Some(pane) = super::target::dm_pane(s, rows, pane_arg, reply_pane).await else {
         s.tg.send_msg(

@@ -22,8 +22,7 @@ impl TelegramClient {
     /// Best-effort button strip: one attempt, never fails the caller.
     /// Pending claims and fail-closed converges share it.
     pub async fn strip_buttons(&self, chat_id: i64, message_id: i64) {
-        let params =
-            build_markup_params(chat_id, message_id, Some(Value::Array(Vec::new())));
+        let params = build_markup_params(chat_id, message_id, Some(Value::Array(Vec::new())));
         let _ = self
             .call("editMessageReplyMarkup", params, Duration::from_secs(10))
             .await;
@@ -39,7 +38,10 @@ mod tests {
         let p = build_markup_params(1, 2, Some(Value::Array(Vec::new())));
         assert_eq!(p["chat_id"], 1);
         assert_eq!(p["message_id"], 2);
-        assert_eq!(p["reply_markup"]["inline_keyboard"], Value::Array(Vec::new()));
+        assert_eq!(
+            p["reply_markup"]["inline_keyboard"],
+            Value::Array(Vec::new())
+        );
         let q = build_markup_params(1, 2, None);
         assert!(q.get("reply_markup").is_none());
     }

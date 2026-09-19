@@ -28,7 +28,10 @@ fn test_settle_poll_busy_never_vests() {
 #[test]
 fn test_settle_poll_unchanged_or_moved_banks_nothing() {
     // Screen identical to pre-send: input not yet rendered.
-    assert_eq!(settle_poll("same", "same", "same", 0, Some(true)), (0, false));
+    assert_eq!(
+        settle_poll("same", "same", "same", 0, Some(true)),
+        (0, false)
+    );
     // Screen still moving: output streaming in.
     assert_eq!(
         settle_poll("new", "before", "old", 1, Some(true)),

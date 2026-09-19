@@ -32,7 +32,14 @@ pub async fn recover_pending(s: &AppState) {
             println!("[recover] dropping stale {pane}");
             // Best-effort notice: otherwise the submitter is never told
             // their prompt died. Cleared regardless to keep the 24h bound.
-            report(s, pp.chat, pp.thread, &pane, "⚠️ dropped: this prompt went stale while the bot was down (>24h) — please resend").await;
+            report(
+                s,
+                pp.chat,
+                pp.thread,
+                &pane,
+                "⚠️ dropped: this prompt went stale while the bot was down (>24h) — please resend",
+            )
+            .await;
             s.clear_pending(&pane).await;
             continue;
         }
@@ -47,7 +54,10 @@ pub async fn recover_pending(s: &AppState) {
             // declare the pane dead and wipe a live prompt's intent.
             match crate::herdr::client::list_panes(&s.cfg.socket).await {
                 Err(e) => {
-                    println!("[recover] pane list failed, re-arming {pane}: {}", crate::types::mask_home(&e.to_string()));
+                    println!(
+                        "[recover] pane list failed, re-arming {pane}: {}",
+                        crate::types::mask_home(&e.to_string())
+                    );
                     // Fall through to the re-arm below.
                 }
                 Ok(panes) => {
@@ -81,7 +91,10 @@ pub async fn recover_pending(s: &AppState) {
                                     // live resubmit racing boot owns the slot
                                     // (its bump would be stolen by ours —
                                     // both settles retiring loses the reply).
-                                    if !s2.pending_matches(&pane2, pp2.chat, pp2.thread, &pp2.prompt).await {
+                                    if !s2
+                                        .pending_matches(&pane2, pp2.chat, pp2.thread, &pp2.prompt)
+                                        .await
+                                    {
                                         continue;
                                     }
                                     let Some(epoch) = s2.bump_shell_epoch_if_absent(&pane2).await
@@ -89,11 +102,10 @@ pub async fn recover_pending(s: &AppState) {
                                         continue;
                                     };
                                     tokio::spawn(async move {
-                                        let before =
-                                            crate::handlers::shell_common::shell_snapshot(
-                                                &s2, &pane2,
-                                            )
-                                            .await;
+                                        let before = crate::handlers::shell_common::shell_snapshot(
+                                            &s2, &pane2,
+                                        )
+                                        .await;
                                         crate::handlers::shell_common::settle_report_shell(
                                             &s2,
                                             crate::handlers::shell_common::ShellSettle {
@@ -130,7 +142,10 @@ pub async fn recover_pending(s: &AppState) {
                             }
                             Err(e) => {
                                 // Shell read outage: keep the intent for next boot.
-                                println!("[recover] shell read failed, keeping {pane}: {}", crate::types::mask_home(&e.to_string()));
+                                println!(
+                                    "[recover] shell read failed, keeping {pane}: {}",
+                                    crate::types::mask_home(&e.to_string())
+                                );
                                 continue;
                             }
                         }

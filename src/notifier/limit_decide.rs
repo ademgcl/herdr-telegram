@@ -51,12 +51,20 @@ pub(crate) fn send_cooled(last_fail: Option<Instant>, now: Instant) -> bool {
 /// clear its episode. Strong hits need no context either way. Mirrors
 /// `detect_limit` ranking (priority first, freshest line wins).
 pub(crate) fn detect_tail_with_context(tail: &[String], full: &[String]) -> Option<LimitHit> {
-    let lower_tail: Vec<String> = tail.iter().map(|l| normalize_line(&l.to_lowercase())).collect();
+    let lower_tail: Vec<String> = tail
+        .iter()
+        .map(|l| normalize_line(&l.to_lowercase()))
+        .collect();
     // Context lines get the same normalization: typo-only context
     // (`exceded`) must count exactly like the working path sees it.
-    let lower_full: Vec<String> = full.iter().map(|l| normalize_line(&l.to_lowercase())).collect();
+    let lower_full: Vec<String> = full
+        .iter()
+        .map(|l| normalize_line(&l.to_lowercase()))
+        .collect();
     let strong_hit = best_hit(&lower_tail, STRONG, true);
-    let context = lower_full.iter().any(|l| CONTEXT.iter().any(|c| l.contains(c)));
+    let context = lower_full
+        .iter()
+        .any(|l| CONTEXT.iter().any(|c| l.contains(c)));
     let weak_hit = if context {
         best_hit(&lower_tail, WEAK, false)
     } else {
@@ -106,8 +114,18 @@ mod tests {
     fn test_suppress_same_kind_only() {
         let t = Instant::now();
         let recent = t - Duration::from_secs(60);
-        assert!(alert_suppressed("rate-limit", Some(("rate-limit", recent)), t, 1800));
-        assert!(!alert_suppressed("rate-limit", Some(("provider", recent)), t, 1800));
+        assert!(alert_suppressed(
+            "rate-limit",
+            Some(("rate-limit", recent)),
+            t,
+            1800
+        ));
+        assert!(!alert_suppressed(
+            "rate-limit",
+            Some(("provider", recent)),
+            t,
+            1800
+        ));
         assert!(!alert_suppressed(
             "rate-limit",
             Some(("rate-limit", t - Duration::from_secs(1900))),
@@ -140,8 +158,10 @@ mod tests {
         // flashes stay silent.)
         let mut ep = BuzzEpisode::new();
         let t = Instant::now();
-        let hit = detect_limit(&v(&["Free usage exceeded, subscribe to Go [retrying in 42s]"]))
-            .expect("quota must detect");
+        let hit = detect_limit(&v(&[
+            "Free usage exceeded, subscribe to Go [retrying in 42s]",
+        ]))
+        .expect("quota must detect");
         assert!(ep.tick(Some(&hit), t).is_none());
         assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_some());
         assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_none());
@@ -156,8 +176,8 @@ mod tests {
         let mut ep = BuzzEpisode::new();
         assert!(ep.is_fresh());
         let t = Instant::now();
-        let hit = detect_limit(&v(&["Free usage exceeded, subscribe to Go"]))
-            .expect("quota must detect");
+        let hit =
+            detect_limit(&v(&["Free usage exceeded, subscribe to Go"])).expect("quota must detect");
         assert!(ep.tick(Some(&hit), t).is_none());
         assert!(!ep.is_fresh());
         assert!(ep.tick(Some(&hit), t + Duration::from_secs(91)).is_some());

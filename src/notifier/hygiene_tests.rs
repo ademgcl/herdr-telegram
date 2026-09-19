@@ -4,9 +4,7 @@ use crate::{
     jobs::job::Job,
     state::{
         cancel::isolated_state,
-        guard::{
-            BLOCKOP_STALE_SECS, KEYWAIT_STALE_SECS, MODELOP_STALE_SECS, TYPEWAIT_STALE_SECS,
-        },
+        guard::{BLOCKOP_STALE_SECS, KEYWAIT_STALE_SECS, MODELOP_STALE_SECS, TYPEWAIT_STALE_SECS},
     },
 };
 use std::time::{Duration, Instant};
@@ -70,7 +68,10 @@ async fn test_reap_clears_stale_guards_keeps_fresh() {
     s.modelop.lock().await.insert("live:p2".into(), now);
     s.blockop.lock().await.insert("dead:p9".into(), now);
     s.modelop.lock().await.insert("dead:p9".into(), now);
-    let mut cache = Some(HashSet::from(["live:p1".to_string(), "live:p2".to_string()]));
+    let mut cache = Some(HashSet::from([
+        "live:p1".to_string(),
+        "live:p2".to_string(),
+    ]));
     reap_orphans(&s, &mut cache).await;
     assert!(!s.blockop.lock().await.contains_key("live:p1"));
     assert!(s.blockop.lock().await.contains_key("live:p2"));
@@ -115,7 +116,10 @@ async fn test_reap_keeps_armed_runwait() {
     let (s, _dir) = isolated_state();
     let job = Job::new(vec![], 1, None);
     s.jobs.lock().await.insert("live:p1".into(), job);
-    s.runwait.lock().await.insert((1, None), ("w8".into(), Instant::now()));
+    s.runwait
+        .lock()
+        .await
+        .insert((1, None), ("w8".into(), Instant::now()));
     s.runwait.lock().await.insert(
         (2, None),
         ("w8".into(), Instant::now() - Duration::from_secs(3600)),
@@ -123,7 +127,11 @@ async fn test_reap_keeps_armed_runwait() {
     let mut cache = Some(HashSet::from(["live:p1".to_string()]));
     reap_orphans(&s, &mut cache).await;
     assert_eq!(
-        s.runwait.lock().await.get(&(1, None)).map(|(ws, _)| ws.as_str()),
+        s.runwait
+            .lock()
+            .await
+            .get(&(1, None))
+            .map(|(ws, _)| ws.as_str()),
         Some("w8")
     );
     assert!(!s.runwait.lock().await.contains_key(&(2, None)));
@@ -138,14 +146,26 @@ async fn test_reap_expires_stale_key_type_waiters() {
     let now = Instant::now();
     s.keywait.lock().await.insert(
         (1, None),
-        ("live:p1".into(), now - Duration::from_secs(KEYWAIT_STALE_SECS + 60)),
+        (
+            "live:p1".into(),
+            now - Duration::from_secs(KEYWAIT_STALE_SECS + 60),
+        ),
     );
-    s.keywait.lock().await.insert((2, None), ("live:p1".into(), now));
+    s.keywait
+        .lock()
+        .await
+        .insert((2, None), ("live:p1".into(), now));
     s.typewait.lock().await.insert(
         (3, None),
-        ("live:p1".into(), now - Duration::from_secs(TYPEWAIT_STALE_SECS + 60)),
+        (
+            "live:p1".into(),
+            now - Duration::from_secs(TYPEWAIT_STALE_SECS + 60),
+        ),
     );
-    s.typewait.lock().await.insert((4, None), ("live:p1".into(), now));
+    s.typewait
+        .lock()
+        .await
+        .insert((4, None), ("live:p1".into(), now));
     let mut cache = Some(HashSet::from(["live:p1".to_string()]));
     reap_orphans(&s, &mut cache).await;
     assert!(!s.keywait.lock().await.contains_key(&(1, None)));
@@ -160,9 +180,18 @@ async fn test_reap_prunes_live_maps_when_idle() {
     // live-only maps — otherwise dead panes leak their entries forever.
     use std::collections::VecDeque;
     let (s, _dir) = isolated_state();
-    s.seen.lock().await.insert("dead:p9".into(), vec!["x".into()]);
-    s.seen.lock().await.insert("live:p1".into(), vec!["x".into()]);
-    s.history.lock().await.insert("dead:p9".into(), VecDeque::from(["h".to_string()]));
+    s.seen
+        .lock()
+        .await
+        .insert("dead:p9".into(), vec!["x".into()]);
+    s.seen
+        .lock()
+        .await
+        .insert("live:p1".into(), vec!["x".into()]);
+    s.history
+        .lock()
+        .await
+        .insert("dead:p9".into(), VecDeque::from(["h".to_string()]));
     let mut cache = Some(HashSet::from(["live:p1".to_string()]));
     reap_orphans(&s, &mut cache).await;
     assert!(!s.seen.lock().await.contains_key("dead:p9"));
@@ -188,12 +217,24 @@ async fn test_reap_prunes_stale_intent_and_persists() {
         prompt: "hi".into(),
         started_unix,
     };
-    s.pending.lock().await.insert("dead:old".into(), pp(now - 90000));
-    s.pending.lock().await.insert("dead:future".into(), pp(now + 7200));
+    s.pending
+        .lock()
+        .await
+        .insert("dead:old".into(), pp(now - 90000));
+    s.pending
+        .lock()
+        .await
+        .insert("dead:future".into(), pp(now + 7200));
     s.pending.lock().await.insert("dead:fresh".into(), pp(now));
-    s.pending.lock().await.insert("live:old".into(), pp(now - 90000));
+    s.pending
+        .lock()
+        .await
+        .insert("live:old".into(), pp(now - 90000));
     s.pending.lock().await.insert("live:fresh".into(), pp(now));
-    let mut cache = Some(HashSet::from(["live:old".to_string(), "live:fresh".to_string()]));
+    let mut cache = Some(HashSet::from([
+        "live:old".to_string(),
+        "live:fresh".to_string(),
+    ]));
     reap_orphans(&s, &mut cache).await;
     let m = s.pending.lock().await;
     assert!(!m.contains_key("dead:old"));

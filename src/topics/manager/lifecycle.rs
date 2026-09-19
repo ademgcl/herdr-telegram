@@ -41,7 +41,10 @@ impl TopicManager {
                     }
                     return None;
                 }
-                eprintln!("[topics] reopen topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                eprintln!(
+                    "[topics] reopen topic #{thread} ({pane}) failed: {}",
+                    self.tg.redact(&e.to_string())
+                );
                 None
             }
         }
@@ -70,7 +73,10 @@ impl TopicManager {
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
-                eprintln!("[topics] close topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                eprintln!(
+                    "[topics] close topic #{thread} ({pane}) failed: {}",
+                    self.tg.redact(&e.to_string())
+                );
                 false
             }
         };
@@ -99,7 +105,10 @@ impl TopicManager {
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
-                eprintln!("[topics] delete topic #{thread} ({pane}) failed: {}", self.tg.redact(&e.to_string()));
+                eprintln!(
+                    "[topics] delete topic #{thread} ({pane}) failed: {}",
+                    self.tg.redact(&e.to_string())
+                );
                 false
             }
         }
@@ -127,9 +136,7 @@ impl TopicManager {
         // so only None (legacy) or non-bot (custom) icons count — a bot
         // fallback with an sh tag is an agent, not a shell.
         let tag_is_sh = self.storage.get_tag(pane).is_some_and(|t| {
-            t.starts_with("sh")
-                && !t[2..].is_empty()
-                && t[2..].chars().all(|c| c.is_ascii_digit())
+            t.starts_with("sh") && !t[2..].is_empty() && t[2..].chars().all(|c| c.is_ascii_digit())
         });
         if !tag_is_sh {
             return false;
@@ -196,7 +203,10 @@ impl TopicManager {
         let new_thread = match self.tg.create_forum_topic(forum, &name, Some(color)).await {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[reset] create topic failed for {pane}: {}", self.tg.redact(&e.to_string()));
+                eprintln!(
+                    "[reset] create topic failed for {pane}: {}",
+                    self.tg.redact(&e.to_string())
+                );
                 return None;
             }
         };
@@ -212,7 +222,12 @@ impl TopicManager {
             .storage
             .get_icon(pane)
             .unwrap_or_else(|| names::context_icon_emoji_id(kind).to_string());
-        if self.tg.set_topic_icon(forum, new_thread, &icon).await.is_ok() {
+        if self
+            .tg
+            .set_topic_icon(forum, new_thread, &icon)
+            .await
+            .is_ok()
+        {
             self.storage.set_icon(pane, &icon);
         }
 
@@ -224,7 +239,8 @@ impl TopicManager {
 
         // F2: fresh identity card, tracked by id for status edits —
         // never pinned.
-        let card = crate::ui::build_identity_card_text(kind, pane, space, status, names.card, branch);
+        let card =
+            crate::ui::build_identity_card_text(kind, pane, space, status, names.card, branch);
         if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await
             && !self.storage.set_pin_if_thread(pane, new_thread, mid)
         {
@@ -238,7 +254,10 @@ impl TopicManager {
         if let Some(old) = old_thread
             && let Err(e) = self.tg.delete_forum_topic(forum, old).await
         {
-            eprintln!("[reset] delete old topic #{old} failed (orphaned): {}", self.tg.redact(&e.to_string()));
+            eprintln!(
+                "[reset] delete old topic #{old} failed (orphaned): {}",
+                self.tg.redact(&e.to_string())
+            );
         }
 
         println!(

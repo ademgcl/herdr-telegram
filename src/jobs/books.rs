@@ -50,7 +50,14 @@ pub async fn settle_books(
     // retired Arc and the durable slot now belongs to the successor. An
     // identical re-prompt ("continue"×2) matches textually, so text
     // equality alone would wipe the live intent (silent reply loss).
-    if !s.jobs.lock().await.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
+    if !s
+        .jobs
+        .lock()
+        .await
+        .get(pane)
+        .map(|j| Arc::ptr_eq(j, job))
+        .unwrap_or(false)
+    {
         return;
     }
     // Final generation re-check at clear time (detached Relaxed loads

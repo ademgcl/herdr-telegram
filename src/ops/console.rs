@@ -104,7 +104,7 @@ impl Console {
         if self.last_start.elapsed() < std::time::Duration::from_secs(4) {
             self.crashes += 1;
             self.say("bot exited immediately — recent log:");
-            for l in proc::tail_log(8) {
+            for l in super::cmd::tail_log(8) {
                 self.say(&l);
             }
             if self.crashes >= 3 {
@@ -129,10 +129,7 @@ impl Console {
     /// Single-stdin prompt: the console owns the only stdin reader (its
     /// channel) — opening a second reader here would race it for input
     /// lines and appear hung. Empty/EOF cancels.
-    async fn ask(
-        rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
-        msg: &str,
-    ) -> String {
+    async fn ask(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>, msg: &str) -> String {
         use std::io::Write;
         print!("{msg}");
         let _ = std::io::stdout().flush();
@@ -179,10 +176,14 @@ impl Console {
                 }
             }
             "l" | "logs" | "log" => {
-                for l in proc::tail_log(25) {
+                for l in super::cmd::tail_log(25) {
                     self.say(&l);
                 }
-                if Self::ask(rx, "follow live? [y/N]: ").await.to_lowercase().starts_with('y') {
+                if Self::ask(rx, "follow live? [y/N]: ")
+                    .await
+                    .to_lowercase()
+                    .starts_with('y')
+                {
                     self.say("following — `q` + Enter exits follow");
                     super::cmd::follow_log(&self.home, rx).await;
                 }
@@ -223,8 +224,8 @@ impl Console {
 /// `dev` with no subcommand: foreground supervised console. Line-based
 /// REPL (letter + Enter): raw single-key mode needs a termios dep.
 pub async fn console() -> Res<()> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let port = proc::guard_port();
+    let home = crate::types::home_dir();
+    let port = proc::guard_port()?;
     println!("herdr-telegram dev console (letter + Enter; `h` for help)");
     let mut con = Console {
         home,

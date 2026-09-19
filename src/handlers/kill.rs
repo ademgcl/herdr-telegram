@@ -116,8 +116,16 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
                 s.tg.edit_msg(chat, msg_id, &format!("☠️ {pane} already closed."), None)
                     .await;
             } else {
-                s.tg.edit_msg(chat, msg_id, &format!("⚠️ kill failed: {}", crate::types::mask_home(&e.to_string())), None)
-                    .await;
+                s.tg.edit_msg(
+                    chat,
+                    msg_id,
+                    &format!(
+                        "⚠️ kill failed: {}",
+                        crate::types::mask_home(&e.to_string())
+                    ),
+                    None,
+                )
+                .await;
             }
         }
     }

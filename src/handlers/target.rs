@@ -153,13 +153,7 @@ mod tests {
             status: "idle".into(),
             ws: "w1".into(),
         }];
-        assert_eq!(
-            dm_pane(&s, &rows, "", &Some("dead:p9".into())).await,
-            None
-        );
-        assert_eq!(
-            dm_pane(&s, &rows, "", &None).await,
-            Some("w1:p1".into())
-        );
+        assert_eq!(dm_pane(&s, &rows, "", &Some("dead:p9".into())).await, None);
+        assert_eq!(dm_pane(&s, &rows, "", &None).await, Some("w1:p1".into()));
     }
 }

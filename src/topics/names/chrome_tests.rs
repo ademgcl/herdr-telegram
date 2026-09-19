@@ -33,7 +33,10 @@ fn test_space_rename_parts_detects_new_space() {
     assert_eq!(space_rename_parts("[tg] api", "tg"), None);
     assert_eq!(space_rename_parts("[TG]  api", "tg"), None);
     assert_eq!(
-        space_rename_parts("[a-very-long-workspac] o1", "a-very-long-workspace-label-here"),
+        space_rename_parts(
+            "[a-very-long-workspac] o1",
+            "a-very-long-workspace-label-here"
+        ),
         None
     );
     // No/empty brackets never rename the space.

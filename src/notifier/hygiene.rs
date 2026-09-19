@@ -31,7 +31,10 @@ pub(crate) async fn panes_once(
             Some(set)
         }
         Err(e) => {
-            eprintln!("[reconcile] pane list failed, keeping topics: {}", crate::types::mask_home(&e.to_string()));
+            eprintln!(
+                "[reconcile] pane list failed, keeping topics: {}",
+                crate::types::mask_home(&e.to_string())
+            );
             None
         }
     }
@@ -50,9 +53,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // intent, waiter or guard never entered `known`, so clear_pane never
     // ran and every bare DM prompt bricked on UNKNOWN_TARGET. Pin it.
     if let Some(f) = s.get_focus().await
-        && !known.contains(&f) {
-            known.push(f);
-        }
+        && !known.contains(&f)
+    {
+        known.push(f);
+    }
     // Armed input waiters also pin a pane: a keywait/typewait for an
     // externally-closed shell (no job, no intent, DM mode) must die
     // with it instead of eating the next message as dead input.
@@ -85,12 +89,14 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
         // bounds — but access-only pruning grows unbounded across chats
         // (new map needs expiry + prune). Same bounds here, never
         // pane-liveness: daily nag vs 10-min stale.
-        s.nagged.lock().await.retain(|_, at| {
-            !claim_stale(*at, now, crate::types::NAGGED_SECS)
-        });
-        s.stale_nagged.lock().await.retain(|_, at| {
-            !claim_stale(*at, now, crate::types::STALE_SECS)
-        });
+        s.nagged
+            .lock()
+            .await
+            .retain(|_, at| !claim_stale(*at, now, crate::types::NAGGED_SECS));
+        s.stale_nagged
+            .lock()
+            .await
+            .retain(|_, at| !claim_stale(*at, now, crate::types::STALE_SECS));
     }
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.

@@ -267,5 +267,3 @@ pub fn dialog_block(lines: &[String]) -> (Vec<String>, Vec<String>) {
 #[cfg(test)]
 #[path = "segment_tests.rs"]
 mod tests;
-
-

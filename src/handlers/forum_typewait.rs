@@ -41,16 +41,14 @@ pub(crate) async fn consume_typewait(
         return WaitOut::Pass;
     }
     if s.block_held(&wpane).await {
-        s.tg
-            .send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None)
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None)
             .await;
         return WaitOut::Handled;
     }
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
             s.typewait.lock().await.remove(&(chat, Some(thread_id)));
-            s.tg
-                .send_msg(chat, Some(thread_id), &crate::ui::typed_ack(&wpane), None)
+            s.tg.send_msg(chat, Some(thread_id), &crate::ui::typed_ack(&wpane), None)
                 .await;
             WaitOut::Handled
         }
@@ -63,14 +61,16 @@ pub(crate) async fn consume_typewait(
             }
         }
         Err(e) => {
-            s.tg
-                .send_msg(
-                    chat,
-                    Some(thread_id),
-                    &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
-                    None,
-                )
-                .await;
+            s.tg.send_msg(
+                chat,
+                Some(thread_id),
+                &format!(
+                    "⚠️ type failed: {} — retry, or /cancel to abort",
+                    crate::types::mask_home(&e.to_string())
+                ),
+                None,
+            )
+            .await;
             WaitOut::Handled
         }
     }

@@ -111,9 +111,9 @@ mod tests {
     fn agy_screen() -> Vec<String> {
         v(&[
             "Antigravity CLI 1.2.2",
-            "  ADC: firebase-adminsdk-fbsvc@ajgc-dig-pdi-dev-cdp",
+            "  ADC: firebase-adminsdk-fbsvc@test-proj-123",
             "  Gemini 3.8 Flash (High)",
-            "  ~/projects/ajnow",
+            "  ~/projects/demo",
             "────────────────────────────────────────────────",
             "> hi",
             "  Hello! How can I help you today?",

@@ -31,7 +31,10 @@ pub async fn try_finalize_blocked(
     }
     // Boot seed already carded this exact dialog: observe + books
     // only, or the same question buzzes twice with ❗.
-    if s.blocked_sig.lock().await.get(pane)
+    if s.blocked_sig
+        .lock()
+        .await
+        .get(pane)
         .map(|v| v == &dialog_sig(&snapshot))
         .unwrap_or(false)
     {
@@ -44,13 +47,7 @@ pub async fn try_finalize_blocked(
         // Any live slot duplicates the already-buzzed question card:
         // fold its streamed output, or the working card freezes next
         // to the question.
-        fold_live(
-            s,
-            live_dest,
-            live_mid,
-            crate::ui::BLOCKED_SEE_CARD,
-        )
-        .await;
+        fold_live(s, live_dest, live_mid, crate::ui::BLOCKED_SEE_CARD).await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }
@@ -67,8 +64,13 @@ pub async fn try_finalize_blocked(
     // than guessing the thread after a remap.
     if let Some(mid) = live_mid.take() {
         if let Some((lchat, _)) = live_dest.take() {
-            s.tg.edit_msg(lchat, mid, "⛔ blocked — needs input (see next message)", None)
-                .await;
+            s.tg.edit_msg(
+                lchat,
+                mid,
+                "⛔ blocked — needs input (see next message)",
+                None,
+            )
+            .await;
         }
     } else {
         live_dest.take();
@@ -90,7 +92,10 @@ pub async fn try_finalize_blocked(
     };
     // Re-check after the claim: the tap winner may have just stamped
     // this exact dialog — posting again would double-buzz ❗.
-    if s.blocked_sig.lock().await.get(pane)
+    if s.blocked_sig
+        .lock()
+        .await
+        .get(pane)
         .map(|v| v == &dialog_sig(&snapshot))
         .unwrap_or(false)
     {

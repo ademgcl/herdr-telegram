@@ -47,7 +47,12 @@ pub(crate) async fn stamp_spawndone(s: &AppState, key: String) {
 /// caller stamps the persistent spawn dedup so a sequential retap stands
 /// down. False (pre-mint failure) leaves the key unstamped — the same
 /// card stays retappable, and the error edit already explains why.
-pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, thread: Option<i64>) -> bool {
+pub(crate) async fn handle_new_space(
+    s: &AppState,
+    chat: i64,
+    msg_id: i64,
+    thread: Option<i64>,
+) -> bool {
     s.tg.edit_msg(chat, msg_id, "⏳ creating space…", None)
         .await;
     let label = super::space::next_label(s).await;
@@ -62,7 +67,10 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
             s.tg.edit_msg(
                 chat,
                 msg_id,
-                &format!("⚠️ failed to create space: {}", crate::types::mask_home(&e.to_string())),
+                &format!(
+                    "⚠️ failed to create space: {}",
+                    crate::types::mask_home(&e.to_string())
+                ),
                 None,
             )
             .await;
@@ -107,7 +115,11 @@ pub(crate) async fn handle_spawn(
                 // Ensure topic exists in forum group if enabled
                 if s.cfg.forum.is_some() {
                     // Fresh pane (see agents.rs): retire only on a raced prune.
-                    if s.topics.sync_topic_prune(&agent.pane, &agent.kind, space).await.1 {
+                    if s.topics
+                        .sync_topic_prune(&agent.pane, &agent.kind, space)
+                        .await
+                        .1
+                    {
                         crate::handlers::dialog::retire_dialog(s, &agent.pane).await;
                     }
                 }
@@ -131,7 +143,10 @@ pub(crate) async fn handle_spawn(
                 s.tg.edit_msg(
                     chat,
                     msg_id,
-                    &format!("✅ Started {} [{}] (status unreadable — try /status)", row.kind, row.pane),
+                    &format!(
+                        "✅ Started {} [{}] (status unreadable — try /status)",
+                        row.kind, row.pane
+                    ),
                     None,
                 )
                 .await;
@@ -140,7 +155,7 @@ pub(crate) async fn handle_spawn(
             true
         }
         Err(e) => {
-            s.tg.edit_msg(chat, msg_id, &format!("⚠️ spawn failed: {}", crate::types::mask_home(&e.to_string())), None)
+            s.tg.edit_msg(chat, msg_id, &crate::ui::spawn_failed(&e.to_string()), None)
                 .await;
             false
         }

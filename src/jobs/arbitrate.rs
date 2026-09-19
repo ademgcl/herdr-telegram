@@ -70,7 +70,7 @@ mod tests {
     /// wrapped line while the settled screen holds the whole answer.
     fn agy_screen() -> Vec<String> {
         v(&[
-            "  • ajnow-orbit-embedding-fast:",
+            "  • demo-orbit-embedding-fast:",
             "  Working tree is clean on branch",
             "  codex/embedding-fast. All 78",
             "  Jest unit and integration tests",

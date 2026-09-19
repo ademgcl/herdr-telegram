@@ -73,4 +73,3 @@ pub(crate) fn clip(line: &str) -> String {
 #[cfg(test)]
 #[path = "detect_tests.rs"]
 mod tests;
-

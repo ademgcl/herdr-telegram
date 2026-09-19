@@ -7,8 +7,8 @@ use crate::{
     state::AppState,
     ui::{
         scope_text::{
-            READ_CAP, SHELL_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC,
-            USAGE_RESET_TOPIC, parse_count,
+            READ_CAP, SHELL_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC,
+            parse_count,
         },
         shell_help_text,
     },
@@ -26,7 +26,12 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     // forever, so drop it on entry. Fail-closed: a dropped waiter means
     // the text was typed as a dialog answer across an agent→shell flip —
     // never run it as a shell command blind (no write on ambiguous).
-    let had_typewait = s.typewait.lock().await.remove(&(chat, Some(thread_id))).is_some();
+    let had_typewait = s
+        .typewait
+        .lock()
+        .await
+        .remove(&(chat, Some(thread_id)))
+        .is_some();
 
     if cmd == "/help" || cmd == "/start" {
         s.tg.send_msg(chat, Some(thread_id), &shell_help_text(pane), None)
@@ -45,24 +50,15 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
             return;
         }
         let n = s.cancel_jobs_for(pane).await;
-        let msg = if n {
-            format!("✋ cancelled {pane}")
-        } else {
-            format!("nothing running for {pane}")
-        };
+        let msg = crate::ui::cancel_ack(pane, n);
         s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
         return;
     }
     // Never-stuck escapes precede run/key waiters: an armed waiter must
     // never eat /card or /esc as keys or a command.
     if cmd == "/card" {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "this is a shell — nothing to answer.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::SHELL_NO_CARD, None)
+            .await;
         return;
     }
     if cmd == "/esc" {
@@ -70,13 +66,8 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if had_typewait {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            crate::ui::STALE_TYPEWAIT_SHELL,
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::STALE_TYPEWAIT_SHELL, None)
+            .await;
         return;
     }
     if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
@@ -85,24 +76,13 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     // Everything below follows the waiter (see forum_topic): an
     // armed run waiter owns the next message.
     if cmd == "/shell" {
-        s.tg
-            .send_msg(
-                chat,
-                Some(thread_id),
-                "already in a shell topic — `/pane` for a second shell here.",
-                None,
-            )
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::ALREADY_SHELL_TOPIC, None)
             .await;
         return;
     }
     if cmd == "/quit" {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "already in shell — type any command.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::ALREADY_SHELL, None)
+            .await;
         return;
     }
     if cmd == "/kill" {
@@ -113,7 +93,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         let dir = match arg {
             "" | "right" | "down" => arg,
             _ => {
-                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]` — bare picks the longer side", None)
+                s.tg.send_msg(chat, Some(thread_id), crate::ui::USAGE_SPLIT, None)
                     .await;
                 return;
             }
@@ -134,8 +114,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         // Own-pane-only like the agent flavor: an arg is refused, never
         // a cross-pane reset on a typo. Spawned: must not stall the pump.
         if !arg.is_empty() {
-            s.tg
-                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
+            s.tg.send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
                 .await;
             return;
         }
@@ -146,7 +125,8 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         // Own-pane-only with a count (see forum_topic): pane-shaped args
         // refuse instead of parsing as a count.
         let Some(lines) = parse_count(arg, SHELL_READ_DEFAULT, READ_CAP) else {
-            s.tg.send_msg(chat, Some(thread_id), USAGE_READ_TOPIC, None).await;
+            s.tg.send_msg(chat, Some(thread_id), USAGE_READ_TOPIC, None)
+                .await;
             return;
         };
         match read_shell_output(&s.cfg.socket, pane, lines).await {
@@ -159,8 +139,13 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
                 s.tg.send_msg(chat, Some(thread_id), &body, None).await;
             }
             Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
-                    .await;
+                s.tg.send_msg(
+                    chat,
+                    Some(thread_id),
+                    &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
+                    None,
+                )
+                .await;
             }
         }
         return;
@@ -174,15 +159,21 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
                     .await;
             }
             None => {
-                s.tg.send_msg(chat, Some(thread_id), USAGE_HISTORY_TOPIC, None).await;
+                s.tg.send_msg(chat, Some(thread_id), USAGE_HISTORY_TOPIC, None)
+                    .await;
             }
         }
         return;
     }
     if cmd == "/keys" {
         if arg.is_empty() {
-            s.tg.send_msg(chat, Some(thread_id), crate::ui::scope_text::USAGE_KEYS_BARE, None)
-                .await;
+            s.tg.send_msg(
+                chat,
+                Some(thread_id),
+                crate::ui::scope_text::USAGE_KEYS_BARE,
+                None,
+            )
+            .await;
             return;
         }
         // Pane-shaped first tokens refuse (see topic_keys): they were
@@ -205,8 +196,13 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
                     .await;
             }
             Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
-                    .await;
+                s.tg.send_msg(
+                    chat,
+                    Some(thread_id),
+                    &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
+                    None,
+                )
+                .await;
             }
         }
         return;
@@ -222,23 +218,13 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         return;
     }
     if cmd == "/model" {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "no agent here — run one (`opencode`, `claude`, …) to start it.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::NO_AGENT_RUN_ONE, None)
+            .await;
         return;
     }
     if cmd.starts_with('/') {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "unknown shell command — `/help` lists them.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::UNKNOWN_COMMAND, None)
+            .await;
         return;
     }
     // Bare message in a shell topic -> run it.

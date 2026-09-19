@@ -16,7 +16,9 @@ pub(crate) async fn flip_dm_shells(
     let missing: Vec<String> = {
         let st = s.status.lock().await;
         st.keys()
-            .filter(|p| !live_panes.contains(*p) && st.get(*p).map(|v| v != "shell").unwrap_or(false))
+            .filter(|p| {
+                !live_panes.contains(*p) && st.get(*p).map(|v| v != "shell").unwrap_or(false)
+            })
             .cloned()
             .collect()
     };
@@ -31,7 +33,10 @@ pub(crate) async fn flip_dm_shells(
     }
     for pane in missing {
         if panes.contains(&pane) {
-            s.status.lock().await.insert(pane.clone(), "shell".to_string());
+            s.status
+                .lock()
+                .await
+                .insert(pane.clone(), "shell".to_string());
             s.clear_limit_episode(&pane).await;
         }
     }

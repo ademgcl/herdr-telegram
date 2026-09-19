@@ -14,7 +14,8 @@ pub(crate) async fn handle_general_forum_message(
     let cmd = bare_cmd(raw_cmd);
 
     if cmd == "/start" || cmd == "/help" {
-        s.tg.send_msg(chat, thread_id, general_help_text(), None).await;
+        s.tg.send_msg(chat, thread_id, &general_help_text(), None)
+            .await;
         return;
     }
 
@@ -30,13 +31,8 @@ pub(crate) async fn handle_general_forum_message(
     // Never-stuck escapes precede ALL waiters (run/key/type): an armed
     // waiter must never eat /card or /esc as keys or a command.
     if cmd == "/card" || cmd == "/esc" {
-        s.tg.send_msg(
-            chat,
-            thread_id,
-            "open the agent's topic and run it there — each topic is one agent.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, thread_id, crate::ui::REDIRECT_TOPIC, None)
+            .await;
         return;
     }
     if super::tap::consume_runkey(&s, chat, thread_id, text).await {
@@ -61,13 +57,8 @@ pub(crate) async fn handle_general_forum_message(
             s.typewait.lock().await.remove(&(chat, thread_id));
         } else {
             if s.block_held(&wpane).await {
-                s.tg.send_msg(
-                    chat,
-                    thread_id,
-                    crate::ui::ANSWER_IN_FLIGHT,
-                    None,
-                )
-                .await;
+                s.tg.send_msg(chat, thread_id, crate::ui::ANSWER_IN_FLIGHT, None)
+                    .await;
                 return;
             }
             match super::tap::type_text(&s, &wpane, text).await {
@@ -97,7 +88,10 @@ pub(crate) async fn handle_general_forum_message(
                     s.tg.send_msg(
                         chat,
                         thread_id,
-                        &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
+                        &format!(
+                            "⚠️ type failed: {} — retry, or /cancel to abort",
+                            crate::types::mask_home(&e.to_string())
+                        ),
                         None,
                     )
                     .await;
@@ -125,7 +119,7 @@ pub(crate) async fn handle_general_forum_message(
         s.tg.send_msg(
             chat,
             thread_id,
-            "open an agent's topic and run `/model` there — each topic is one agent.",
+            crate::ui::scope_text::REDIRECT_TOPIC_SCOPED,
             None,
         )
         .await;
@@ -136,7 +130,7 @@ pub(crate) async fn handle_general_forum_message(
         s.tg.send_msg(
             chat,
             thread_id,
-            "open an agent's topic and run `/history` there — each topic is one agent.",
+            crate::ui::scope_text::REDIRECT_TOPIC_SCOPED,
             None,
         )
         .await;
@@ -165,9 +159,13 @@ pub(crate) async fn handle_general_forum_message(
         cmd,
         "/quit" | "/kill" | "/split" | "/read" | "/output" | "/status" | "/keys"
     ) {
-        s.tg
-            .send_msg(chat, thread_id, crate::ui::scope_text::REDIRECT_TOPIC_SCOPED, None)
-            .await;
+        s.tg.send_msg(
+            chat,
+            thread_id,
+            crate::ui::scope_text::REDIRECT_TOPIC_SCOPED,
+            None,
+        )
+        .await;
         return;
     }
 
@@ -183,22 +181,14 @@ pub(crate) async fn handle_general_forum_message(
     }
 
     if cmd.starts_with('/') {
-        s.tg.send_msg(
-            chat,
-            thread_id,
-            "unknown command — see `/help` or `/agents`",
-            None,
-        )
-        .await;
+        // General keeps the /agents nudge: unknown commands here are
+        // usually pane commands run in the wrong topic.
+        s.tg.send_msg(chat, thread_id, crate::ui::UNKNOWN_COMMAND_GENERAL, None)
+            .await;
         return;
     }
 
     // Bare text in General topic
-    s.tg.send_msg(
-        chat,
-        thread_id,
-        "💡 To talk to an agent, please open its dedicated topic or use `/agents` to spawn one.",
-        None,
-    )
-    .await;
+    s.tg.send_msg(chat, thread_id, crate::ui::GENERAL_HINT, None)
+        .await;
 }

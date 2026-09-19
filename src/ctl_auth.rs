@@ -34,16 +34,31 @@ pub fn new_control_token() -> Option<String> {
     None
 }
 
+/// Wire prefix for the control auth line. Single source: the client
+/// builds with [`auth_line`], the server checks with [`auth_line_ok`] —
+/// renaming one side alone silently breaks auth for every client.
+pub const AUTH_PREFIX: &str = "auth";
+
+/// Wire refusal for failed control auth. Single source with `ctl.rs`.
+pub const UNAUTH: &str = "ERR: unauthorized\n";
+
+/// Render the auth line for a token. Single source with [`auth_line_ok`].
+pub fn auth_line(token: &str) -> String {
+    format!("{AUTH_PREFIX} {token}")
+}
+
 /// Pure auth-line check (unit-tested): exactly `auth <token>`.
+/// Trailing line discipline only (`trim_end`): leading whitespace never
+/// belongs on the wire and must not authenticate.
 pub fn auth_line_ok(line: &str, token: &str) -> bool {
-    line.trim() == format!("auth {token}")
+    line.trim_end() == auth_line(token)
 }
 
 /// Render the token path for user-facing errors without the username.
 pub fn display_token_path() -> String {
     crate::types::collapse_home(
         &ctl_token_path().display().to_string(),
-        &std::env::var("HOME").unwrap_or_default(),
+        &crate::types::home_dir(),
     )
 }
 
@@ -60,7 +75,9 @@ pub fn write_control_token(token: &str) {
     {
         Ok(mut f) => {
             use std::os::unix::fs::PermissionsExt;
-            if f.set_permissions(std::fs::Permissions::from_mode(0o600)).is_err() {
+            if f.set_permissions(std::fs::Permissions::from_mode(0o600))
+                .is_err()
+            {
                 eprintln!("[ctl] warning: control token file may be wider than 0600");
             }
             use std::io::Write;
@@ -68,7 +85,10 @@ pub fn write_control_token(token: &str) {
                 eprintln!("[ctl] warning: cannot persist control token");
             }
         }
-        Err(e) => eprintln!("[ctl] warning: cannot persist control token: {}", crate::types::mask_home(&e.to_string())),
+        Err(e) => eprintln!(
+            "[ctl] warning: cannot persist control token: {}",
+            crate::types::mask_home(&e.to_string())
+        ),
     }
 }
 
@@ -89,11 +109,18 @@ mod tests {
 
     #[test]
     fn test_auth_line_exact_match_only() {
-        assert!(auth_line_ok("auth abc123", "abc123"));
-        assert!(auth_line_ok("auth abc123\n", "abc123")); // line discipline trims
-        assert!(!auth_line_ok("auth wrong", "abc123"));
+        // Builder + checker agree (single source: renaming the prefix
+        // must not silently break the client/server contract).
+        assert_eq!(auth_line("abc123"), format!("{AUTH_PREFIX} abc123"));
+        assert!(auth_line_ok(&auth_line("abc123"), "abc123"));
+        assert!(auth_line_ok(&format!("{AUTH_PREFIX} abc123\n"), "abc123")); // line discipline trims
+        assert!(!auth_line_ok(&format!("{AUTH_PREFIX} wrong"), "abc123"));
         assert!(!auth_line_ok("", "abc123"));
-        assert!(!auth_line_ok("auth", "abc123"));
-        assert!(!auth_line_ok("auth abc123 extra", "abc123"));
+        assert!(!auth_line_ok(AUTH_PREFIX, "abc123"));
+        assert!(!auth_line_ok(
+            &format!("{AUTH_PREFIX} abc123 extra"),
+            "abc123"
+        ));
+        assert!(!auth_line_ok(" auth abc123", "abc123"));
     }
 }

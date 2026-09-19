@@ -13,44 +13,52 @@ use crate::{
 };
 use std::time::Duration;
 
+/// Corpse-vs-outage probe (dm_info parity): confirmed-gone reports
+/// UNKNOWN_TARGET, blips retry. Single source for post_card + esc_pane.
+async fn gone_ack(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
+    match crate::herdr::client::list_panes(&s.cfg.socket).await {
+        Ok(l) if l.contains(&pane.to_string()) => {
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+        }
+        Ok(_) => {
+            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
+                .await;
+        }
+        Err(_) => {
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+        }
+    }
+}
+
 /// Re-post the pane's live dialog card. Read-only: never sends keys,
 /// never clears waiters, refuses while a tap owns the pane.
 /// Self-healing peek: a stale corpse evicts so /card stays a way out.
 async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     if s.block_held(pane).await {
-        s.tg.send_msg(
-            chat,
-            thread,
-            crate::ui::CARD_IN_FLIGHT,
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, thread, crate::ui::CARD_IN_FLIGHT, None)
+            .await;
         return;
     }
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if a.status == "blocked" => {
             if !send_blocked_card(s, chat, thread, pane).await {
-                s.tg.send_msg(
-                    chat,
-                    thread,
-                    "⚠️ card failed — try /read, or answer on the PC",
-                    None,
-                )
-                .await;
+                s.tg.send_msg(chat, thread, crate::ui::CARD_FAILED_READ_PC, None)
+                    .await;
             }
         }
         Ok(a) => {
             s.tg.send_msg(
                 chat,
                 thread,
-                &format!("not blocked (status={}) — nothing to answer", a.status),
+                &crate::ui::not_blocked_ack(&a.status, None),
                 None,
             )
             .await;
         }
         Err(_) => {
-            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
-                .await;
+            gone_ack(s, chat, thread, pane).await;
         }
     }
 }
@@ -60,13 +68,8 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
 /// Self-healing peek: a stale corpse evicts instead of refusing /esc.
 async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     if s.block_held(pane).await {
-        s.tg.send_msg(
-            chat,
-            thread,
-            crate::ui::ESC_IN_FLIGHT,
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, thread, crate::ui::ESC_IN_FLIGHT, None)
+            .await;
         return;
     }
     match get_agent(&s.cfg.socket, pane).await {
@@ -78,33 +81,23 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
                 Some(_) => "`/keys esc`".to_string(),
                 None => format!("`/keys {pane} esc`"),
             };
-            s.tg
-                .send_msg(
-                    chat,
-                    thread,
-                    &format!(
-                        "not blocked (status={}) — Esc would hit live work; use {keys_hint} if you really mean it",
-                        a.status
-                    ),
-                    None,
-                )
-                .await;
+            s.tg.send_msg(
+                chat,
+                thread,
+                &crate::ui::not_blocked_ack(&a.status, Some(&keys_hint)),
+                None,
+            )
+            .await;
             return;
         }
         Err(_) => {
-            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
-                .await;
+            gone_ack(s, chat, thread, pane).await;
             return;
         }
     }
     let Some(_op) = OpGuard::claim(&s.blockop, pane).await else {
-        s.tg.send_msg(
-            chat,
-            thread,
-            crate::ui::ESC_IN_FLIGHT,
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, thread, crate::ui::ESC_IN_FLIGHT, None)
+            .await;
         return;
     };
     // Strip before slow RPC (tap parity): buttons come off optimistically
@@ -115,7 +108,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         .await
         .is_err()
     {
-        s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
+        s.tg.send_msg(chat, thread, crate::ui::KEYS_FAILED_PC, None)
             .await;
         // Heal like Unchanged (strip already ran): buttonless must not
         // strand until the ≤60s watchdog.
@@ -216,7 +209,8 @@ async fn resolve_dm_pane(
                 row = rows.iter().find(|r| r.pane == f).cloned();
             }
             Some(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
                 return None;
             }
             None => {
@@ -274,8 +268,10 @@ pub async fn handle_esc_shell(s: &AppState, chat: i64, thread: Option<i64>, pane
             s.tg.send_msg(chat, thread, "⌨️ sent Esc (in vim this toggles mode)", None)
                 .await;
         }
-        Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
+        Err(_) => {
+            // Corpse-vs-outage parity with agent Esc (gone_ack): a dead
+            // shell reports UNKNOWN_TARGET, a blip retries — never raw.
+            gone_ack(s, chat, thread, pane).await;
         }
     }
 }

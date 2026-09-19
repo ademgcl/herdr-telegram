@@ -5,12 +5,19 @@ use crate::{
     jobs::enqueue_prompt,
     state::AppState,
     ui::{
-        scope_text::{READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC, parse_count},
+        scope_text::{
+            READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC,
+            parse_count,
+        },
         topic_help_text,
     },
 };
 
-use super::{forum::bare_cmd, forum_topic_status::{handle_model_topic, handle_status_topic}, topic_keys::handle_topic_keys_agent};
+use super::{
+    forum::bare_cmd,
+    forum_topic_status::{handle_model_topic, handle_status_topic},
+    topic_keys::handle_topic_keys_agent,
+};
 
 pub(crate) async fn handle_topic_agent_message(
     s: AppState,
@@ -31,10 +38,17 @@ pub(crate) async fn handle_topic_agent_message(
         // confirm via pane+agent lists (recover's cascade). Only a
         // confirmed live agent retries visibly; everything else takes the
         // shell side (which reports gone panes).
-        let live = list_panes(&s.cfg.socket).await.map(|l| l.contains(&pane.to_string())).unwrap_or(true);
-        let agent = list_agents(&s.cfg.socket).await.map(|a| a.iter().any(|r| r.pane == pane)).unwrap_or(true);
+        let live = list_panes(&s.cfg.socket)
+            .await
+            .map(|l| l.contains(&pane.to_string()))
+            .unwrap_or(true);
+        let agent = list_agents(&s.cfg.socket)
+            .await
+            .map(|a| a.iter().any(|r| r.pane == pane))
+            .unwrap_or(true);
         if live && agent {
-            s.tg.send_msg(chat, Some(thread_id), crate::ui::scope_text::HERDR_RETRY, None).await;
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                .await;
             return;
         }
         super::shell_topic::handle_shell_topic(s, chat, thread_id, pane, text).await;
@@ -74,11 +88,7 @@ pub(crate) async fn handle_topic_agent_message(
             return;
         }
         let n = s.cancel_jobs_for(pane).await;
-        let msg = if n {
-            format!("✋ cancelled {pane}")
-        } else {
-            format!("nothing running for {pane}")
-        };
+        let msg = crate::ui::cancel_ack(pane, n);
         s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
         return;
     }
@@ -100,7 +110,9 @@ pub(crate) async fn handle_topic_agent_message(
     // An armed typed-answer waiter wins over every command except
     // the escapes checked above (/cancel, /card, /esc) — see
     // `forum_typewait` (split for the 300-line cap).
-    match super::forum_typewait::consume_typewait(&s, chat, thread_id, text, cmd.starts_with('/')).await {
+    match super::forum_typewait::consume_typewait(&s, chat, thread_id, text, cmd.starts_with('/'))
+        .await
+    {
         super::forum_typewait::WaitOut::Handled => return,
         super::forum_typewait::WaitOut::ResumedPrompt => {
             // Raced resume: answer text must never become control —
@@ -122,8 +134,7 @@ pub(crate) async fn handle_topic_agent_message(
         // Own-pane-only: an arg names another pane — refuse (a typo must
         // never reset the wrong pane). Spawned: must not stall the pump.
         if !arg.is_empty() {
-            s.tg
-                .send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
+            s.tg.send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
                 .await;
             return;
         }
@@ -145,7 +156,7 @@ pub(crate) async fn handle_topic_agent_message(
         let dir = match arg {
             "" | "right" | "down" => arg,
             _ => {
-                s.tg.send_msg(chat, Some(thread_id), "usage: `/split [right|down]` — bare picks the longer side", None)
+                s.tg.send_msg(chat, Some(thread_id), crate::ui::USAGE_SPLIT, None)
                     .await;
                 return;
             }
@@ -178,7 +189,8 @@ pub(crate) async fn handle_topic_agent_message(
         match parse_count(arg, TOPIC_READ_DEFAULT, READ_CAP) {
             Some(n) => super::topic_read::handle_read_agent(&s, chat, thread_id, pane, n).await,
             None => {
-                s.tg.send_msg(chat, Some(thread_id), USAGE_READ_TOPIC, None).await;
+                s.tg.send_msg(chat, Some(thread_id), USAGE_READ_TOPIC, None)
+                    .await;
             }
         }
         return;
@@ -193,7 +205,8 @@ pub(crate) async fn handle_topic_agent_message(
                     .await;
             }
             None => {
-                s.tg.send_msg(chat, Some(thread_id), USAGE_HISTORY_TOPIC, None).await;
+                s.tg.send_msg(chat, Some(thread_id), USAGE_HISTORY_TOPIC, None)
+                    .await;
             }
         }
         return;
@@ -215,13 +228,8 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     if cmd.starts_with('/') {
-        s.tg.send_msg(
-            chat,
-            Some(thread_id),
-            "unknown topic command. Type `/help` for available commands.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::UNKNOWN_COMMAND, None)
+            .await;
         return;
     }
 
@@ -233,13 +241,8 @@ pub(crate) async fn handle_topic_agent_message(
         match super::tap::type_text(&s, pane, text).await {
             Ok(()) => {
                 s.set_focus(pane).await;
-                s.tg.send_msg(
-                    chat,
-                    Some(thread_id),
-                    &crate::ui::typed_ack(pane),
-                    None,
-                )
-                .await;
+                s.tg.send_msg(chat, Some(thread_id), &crate::ui::typed_ack(pane), None)
+                    .await;
             }
             Err(super::tap::TypeError::Resumed) => {
                 // Resumed between snapshot and send: the text becomes a
@@ -252,11 +255,22 @@ pub(crate) async fn handle_topic_agent_message(
                 // the user guessing why) — then fresh buttons when the
                 // card lands, text fallback when it doesn't.
                 if s.block_held(pane).await {
-                    s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None).await;
+                    s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None)
+                        .await;
                 } else {
-                    s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {}", crate::types::mask_home(&e.to_string())), None).await;
+                    s.tg.send_msg(
+                        chat,
+                        Some(thread_id),
+                        &format!(
+                            "⚠️ type failed: {}",
+                            crate::types::mask_home(&e.to_string())
+                        ),
+                        None,
+                    )
+                    .await;
                     if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
-                        s.tg.send_msg(chat, Some(thread_id), crate::ui::CARD_FAILED_PC, None).await;
+                        s.tg.send_msg(chat, Some(thread_id), crate::ui::CARD_FAILED_PC, None)
+                            .await;
                     }
                 }
             }

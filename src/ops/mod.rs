@@ -9,7 +9,7 @@ mod cmd;
 mod console;
 mod launchd;
 mod mask;
-mod proc;
+pub mod proc;
 
 pub(crate) use cmd::rotate_log_if_huge;
 pub(crate) use mask::mask_line as mask_display_line;
@@ -22,11 +22,15 @@ pub(crate) fn say(home: &str, line: &str) {
 }
 
 fn print_quick_menu() {
-    println!("[r]estart [b]uild [t]opics [e]vent [l]ogs [s]tatus [c]lear [k]stop [x]cleanup [h]elp [q]uit");
+    println!(
+        "[r]estart [b]uild [t]opics [e]vent [l]ogs [s]tatus [c]lear [k]stop [x]cleanup [h]elp [q]uit"
+    );
 }
 
 fn print_console_help() {
-    println!("r: rebuild+restart | b: cargo check | t: topics+reset | e: mock event | l: logs | s: status | c: clear log | k: stop | x: clear conflicts+start | q: quit (letter + Enter)");
+    println!(
+        "r: rebuild+restart | b: cargo check | t: topics+reset | e: mock event | l: logs | s: status | c: clear log | k: stop | x: clear conflicts+start | q: quit (letter + Enter)"
+    );
 }
 
 fn print_help() {
@@ -51,11 +55,16 @@ Background production belongs to launchd; dev commands never daemonize."
 /// path itself is untouched. Env/cwd inherit, so port + token resolve
 /// exactly as a direct `ctl` call.
 async fn ctl_capture(args: &[String], home: &str) -> (Vec<String>, bool) {
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("herdr-telegram"));
+    let exe =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("herdr-telegram"));
     let mut cmd = tokio::process::Command::new(exe);
     cmd.arg("ctl").args(args);
-    let Ok(out) = cmd.output().await else {
-        return (vec!["ctl spawn failed".to_string()], false);
+    // Bounded: a wedged ctl server must fail the console visibly, never
+    // hang the one-shot forever (server caps are 10s/line, client 30s).
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(35), cmd.output()).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(_)) => return (vec!["ctl spawn failed".to_string()], false),
+        Err(_) => return (vec!["ctl timed out".to_string()], false),
     };
     let mut lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
@@ -77,7 +86,7 @@ async fn ctl_topics(home: &str) {
 }
 
 async fn ctl_reset(pane: &str) {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::types::home_dir();
     let (lines, _) = ctl_capture(&["reset".to_string(), pane.to_string()], &home).await;
     for l in lines {
         say(&home, &l);
@@ -85,7 +94,7 @@ async fn ctl_reset(pane: &str) {
 }
 
 async fn ctl_trigger(pane: &str, status: &str) {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::types::home_dir();
     let (lines, _) = ctl_capture(
         &["trigger".to_string(), pane.to_string(), status.to_string()],
         &home,
@@ -127,8 +136,8 @@ pub(crate) async fn shutdown_watch() {
 
 /// `dev|ops` entry: no subcommand opens the console; otherwise one shot.
 pub async fn run(args: &[String]) -> Res<()> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let port = proc::guard_port();
+    let home = crate::types::home_dir();
+    let port = proc::guard_port()?;
     let cmd = args.first().map(String::as_str).unwrap_or("");
     match cmd {
         "" | "watch" | "run" => console::console().await,
@@ -157,7 +166,7 @@ pub async fn run(args: &[String]) -> Res<()> {
             }
             if follow {
                 // History first, like `tail -n N -f` (follow starts at EOF).
-                let lines = proc::tail_log(n);
+                let lines = cmd::tail_log(n);
                 if lines.is_empty() && std::fs::metadata(proc::log_path()).is_err() {
                     say(&home, "bot.log not created yet.");
                 }
@@ -174,7 +183,7 @@ pub async fn run(args: &[String]) -> Res<()> {
                 });
                 cmd::follow_log(&home, &mut rx).await;
             } else {
-                let lines = proc::tail_log(n);
+                let lines = cmd::tail_log(n);
                 if lines.is_empty() && std::fs::metadata(proc::log_path()).is_err() {
                     say(&home, "bot.log not created yet.");
                 }
@@ -187,9 +196,21 @@ pub async fn run(args: &[String]) -> Res<()> {
         "cleanup" | "clean" => {
             let stopped = proc::stop_all(port).await;
             if proc::port_busy(port) {
-                say(&home, &format!("stopped {} process(es) — port {port} STILL busy (foreign owner?)", stopped.len()));
+                say(
+                    &home,
+                    &format!(
+                        "stopped {} process(es) — port {port} STILL busy (foreign owner?)",
+                        stopped.len()
+                    ),
+                );
             } else {
-                say(&home, &format!("cleared {} process(es), port {port} released", stopped.len()));
+                say(
+                    &home,
+                    &format!(
+                        "cleared {} process(es), port {port} released",
+                        stopped.len()
+                    ),
+                );
             }
             Ok(())
         }
@@ -211,14 +232,22 @@ pub async fn run(args: &[String]) -> Res<()> {
             for l in lines {
                 say(&home, &l);
             }
-            if ok { Ok(()) } else { Err("build failed".into()) }
+            if ok {
+                Ok(())
+            } else {
+                Err("build failed".into())
+            }
         }
         "check" => {
             let (lines, ok) = proc::cargo(&["check"], &home).await;
             for l in lines {
                 say(&home, &l);
             }
-            if ok { Ok(()) } else { Err("check failed".into()) }
+            if ok {
+                Ok(())
+            } else {
+                Err("check failed".into())
+            }
         }
         "topics" | "reset" | "trigger" | "inspect" => {
             // `args` already excludes the `dev` word itself.
@@ -226,7 +255,11 @@ pub async fn run(args: &[String]) -> Res<()> {
             for l in lines {
                 say(&home, &l);
             }
-            if ok { Ok(()) } else { Err("ctl command failed".into()) }
+            if ok {
+                Ok(())
+            } else {
+                Err("ctl command failed".into())
+            }
         }
         "help" | "-h" | "--help" => {
             print_help();

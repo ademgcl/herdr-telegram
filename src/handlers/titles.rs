@@ -76,7 +76,7 @@ pub async fn sync_titles_with(
             None if s.topics.kind_changed(pane, "shell")
                 && !super::shell::confirmed_shell(s, pane).await =>
             {
-                continue
+                continue;
             }
             None => "shell",
         };

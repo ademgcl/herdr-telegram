@@ -131,15 +131,24 @@ impl TelegramClient {
         ("shell", "open a fresh shell pane"),
         ("pane", "shell pane that stays here (optional space)"),
         ("split", "sibling shell pane (topic/DM)"),
-        ("read", "recent output: this topic, or focus/reply/sole in DM (topic/DM)"),
+        (
+            "read",
+            "recent output: this topic, or focus/reply/sole in DM (topic/DM)",
+        ),
         ("output", "alias of /read with line count (topic/DM)"),
-        ("status", "agent card: this topic, or focus/reply/sole in DM (topic/DM)"),
+        (
+            "status",
+            "agent card: this topic, or focus/reply/sole in DM (topic/DM)",
+        ),
         ("history", "recent prompts you sent (topic/DM)"),
         ("cancel", "abort pending prompts / keys-mode"),
         ("reset", "reset topics (paced all; per-topic inside topics)"),
         ("card", "re-post question + buttons (topic/DM)"),
         ("esc", "guarded Esc dismiss, blocked-only (topic/DM)"),
-        ("keys", "send raw keys: `/keys y enter` here, `/keys <pane> ...` in DM (topic/DM)"),
+        (
+            "keys",
+            "send raw keys: `/keys y enter` here, `/keys <pane> ...` in DM (topic/DM)",
+        ),
         ("help", "how to drive agents from here"),
     ];
 
@@ -235,27 +244,44 @@ mod tests {
         // untagged = responds on every surface (full or guidance).
         // (topic/DM)-tagged: full function there + General redirect.
         let tagged = [
-            "model", "quit", "kill", "split", "read", "output", "status", "history",
-            "card", "esc", "keys",
+            "model", "quit", "kill", "split", "read", "output", "status", "history", "card", "esc",
+            "keys",
         ];
         // Global: full, redirect, or refusal on every surface.
         let global = [
             "start", "agents", "spawn", "space", "shell", "pane", "cancel", "help",
         ];
-        let names: Vec<&str> = TelegramClient::MENU_COMMANDS.iter().map(|(c, _)| *c).collect();
+        let names: Vec<&str> = TelegramClient::MENU_COMMANDS
+            .iter()
+            .map(|(c, _)| *c)
+            .collect();
         assert_eq!(names.len(), tagged.len() + global.len() + 1, "menu grew?");
         for cmd in tagged {
-            let desc = TelegramClient::MENU_COMMANDS.iter().find(|(c, _)| *c == cmd).unwrap().1;
+            let desc = TelegramClient::MENU_COMMANDS
+                .iter()
+                .find(|(c, _)| *c == cmd)
+                .unwrap()
+                .1;
             assert!(desc.contains("(topic/DM)"), "{cmd} lost its scope tag");
         }
         for cmd in global {
-            let desc = TelegramClient::MENU_COMMANDS.iter().find(|(c, _)| *c == cmd).unwrap().1;
+            let desc = TelegramClient::MENU_COMMANDS
+                .iter()
+                .find(|(c, _)| *c == cmd)
+                .unwrap()
+                .1;
             assert!(!desc.contains("(topic/DM)"), "{cmd} gained a scope tag");
         }
-        let reset = TelegramClient::MENU_COMMANDS.iter().find(|(c, _)| *c == "reset").unwrap().1;
+        let reset = TelegramClient::MENU_COMMANDS
+            .iter()
+            .find(|(c, _)| *c == "reset")
+            .unwrap()
+            .1;
         assert!(reset.contains("paced"), "reset lost its paced marker");
         assert!(
-            !TelegramClient::MENU_COMMANDS.iter().any(|(c, _)| *c == "reset_topics"),
+            !TelegramClient::MENU_COMMANDS
+                .iter()
+                .any(|(c, _)| *c == "reset_topics"),
             "deleted alias resurrected in menu"
         );
     }

@@ -1,7 +1,7 @@
 //! Per-pane status observer: topic ensure, typing/cards on genuine
 //! transitions, stall-episode bookkeeping. Silent mode ensures without
 //! buzzing (boot seed); event-driven ensures pause during reset (the
-//! reset lock gates topic writes, memory updates continue).
+//! reset lock gates topic writes; events skip entirely while it holds).
 use crate::{
     handlers::dialog::{refresh_blocked_card, send_blocked_card},
     herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},
@@ -12,8 +12,7 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
-/// How long after a prompt's final card an idle/done alert is redundant.
-const POST_PROMPT_QUIET_SECS: u64 = 45;
+use super::POST_PROMPT_QUIET_SECS;
 /// done↔idle bounces closer than this are flap (collapsed); slower ones
 /// are legitimate sampled completions.
 const FLAP_WINDOW_SECS: u64 = 15;
@@ -115,9 +114,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
                 // pin and retries next tick instead of duplicating.
                 match s.tg.try_edit_msg(forum, mid, &card, None).await {
                     Ok(()) => {}
-                    Err(e)
-                        if crate::telegram::messages::edit_gone(&e.to_string()) =>
-                    {
+                    Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
                         mid_opt = None;
                     }
                     Err(_) => {}
@@ -169,7 +166,14 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             // Baseline follows delivery: a dropped seed card must stay
             // "new" so the next observation posts it.
             let posted = if let Some(forum) = s.cfg.forum {
+                // One-topic-per-pane (refresh parity): a missing mapping
+                // never falls back to the forum root — stay silent until
+                // the next sync recreates the topic. Single read: bind
+                // once, no contains-then-get skew across lock releases.
                 let thread = s.topics.all_mappings().get(pane).copied();
+                if thread.is_none() {
+                    return;
+                }
                 send_blocked_card(s, forum, thread, pane).await
             } else {
                 let mut posted = false;
@@ -229,7 +233,10 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // Re-entered an agent in a shelled pane: the user did it by hand in
     // the topic, so a bare flip needs no announcement — but genuine fresh
     // output after the re-enter still buzzes. Blocked still surfaces.
-    if old.as_deref() == Some("shell") && matches!(new_status, "idle" | "done") && fresh_body.is_empty() {
+    if old.as_deref() == Some("shell")
+        && matches!(new_status, "idle" | "done")
+        && fresh_body.is_empty()
+    {
         println!("[alert] suppressed re-enter {new_status} for {pane} ({src})");
         s.seen.lock().await.insert(pane.to_string(), screen);
         return;
@@ -261,8 +268,16 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
 
     // DM mode has no topics — legacy immediate pushes.
     if s.cfg.forum.is_none() {
-        crate::notifier::dm::push_dm_alert(s, pane, &kind, raw_space, new_status, &screen, observed_at)
-            .await;
+        crate::notifier::dm::push_dm_alert(
+            s,
+            pane,
+            &kind,
+            raw_space,
+            new_status,
+            &screen,
+            observed_at,
+        )
+        .await;
         return;
     }
 

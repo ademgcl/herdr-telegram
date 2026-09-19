@@ -8,10 +8,7 @@ use crate::{
 
 fn parse_numbered_option(line: &str) -> Option<(usize, String)> {
     let t = deframe(line);
-    let s = t
-        .trim()
-        .trim_start_matches(['❯', '*', '-'])
-        .trim();
+    let s = t.trim().trim_start_matches(['❯', '*', '-']).trim();
     let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
         return None;
@@ -61,7 +58,6 @@ pub fn has_numbered_options(lines: &[String]) -> bool {
     }
     false
 }
-
 
 /// Lines that can never be options: key-hint rows and chrome-ish labels.
 /// NOTE: "confirm"/"cancel" are deliberately absent — real second
@@ -190,4 +186,3 @@ pub fn parse_options(lines: &[String]) -> Vec<String> {
     }
     Vec::new()
 }
-

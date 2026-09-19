@@ -25,7 +25,9 @@ fn snapshot(port: u16) -> Status {
         socket_ok: std::fs::metadata(&socket)
             .map(|m| m.file_type().is_socket())
             .unwrap_or(false),
-        offset: std::fs::read_to_string(dir.join("offset.state")).ok().map(|s| s.trim().to_string()),
+        offset: std::fs::read_to_string(dir.join("offset.state"))
+            .ok()
+            .map(|s| s.trim().to_string()),
         topic_titles: std::fs::read_to_string(dir.join("topics.state"))
             .map(|t| t.lines().filter(|l| l.contains("\":")).count())
             .unwrap_or(0),
@@ -34,7 +36,7 @@ fn snapshot(port: u16) -> Status {
 }
 
 pub(crate) fn print_status(port: u16) {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::types::home_dir();
     let st = snapshot(port);
     say(&home, "=== HERDR TELEGRAM STATUS ===");
     if st.bot_pids.is_empty() {
@@ -42,7 +44,14 @@ pub(crate) fn print_status(port: u16) {
     } else {
         say(
             &home,
-            &format!("  Bot Status:   Running (PID: {})", st.bot_pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")),
+            &format!(
+                "  Bot Status:   Running (PID: {})",
+                st.bot_pids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
         );
     }
     match st.port_pid {
@@ -53,15 +62,25 @@ pub(crate) fn print_status(port: u16) {
         &home,
         &format!(
             "  Herdr Socket: {} ({})",
-            if st.socket_ok { "Available" } else { "Not found" },
+            if st.socket_ok {
+                "Available"
+            } else {
+                "Not found"
+            },
             proc::herdr_socket()
         ),
     );
     if let Some(off) = st.offset {
         say(&home, &format!("  Offset State: {off}"));
     }
-    say(&home, &format!("  Topics State: ~{} titles", st.topic_titles));
-    say(&home, &format!("  Log File:     bot.log ({} bytes)", st.log_bytes));
+    say(
+        &home,
+        &format!("  Topics State: ~{} titles", st.topic_titles),
+    );
+    say(
+        &home,
+        &format!("  Log File:     bot.log ({} bytes)", st.log_bytes),
+    );
     say(&home, "=============================");
 }
 
@@ -119,6 +138,23 @@ fn read_tail_from(path: &std::path::Path, pos: u64, len: u64, cap: u64) -> Res<(
     Ok((buf, start))
 }
 
+/// Last `n` lines of bot.log (seek-capped at 256KB via
+/// [`read_tail_from`]: the log grows to 8MB between rotations — never a
+/// full-file read on a hot path).
+pub(crate) fn tail_log(n: usize) -> Vec<String> {
+    const CAP: u64 = 256 * 1024;
+    let len = std::fs::metadata(proc::log_path())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let Ok((bytes, _)) = read_tail_from(&proc::log_path(), 0, len, CAP) else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let lines: Vec<&str> = text.lines().collect();
+    let skip = lines.len().saturating_sub(n);
+    lines[skip..].iter().map(|l| l.to_string()).collect()
+}
+
 /// Log rotation: bot.log grows unbounded over long prod runs
 /// (no rotation daemon watches it). Copy-truncate over 8MB into a
 /// single backup — same inode, so writers appending across the call
@@ -160,7 +196,10 @@ pub(crate) fn rotate_log_if_huge() {
 /// reports a failed exit instead of silently returning Ok.
 pub(crate) async fn run_foreground(home: &str, port: u16) -> Res<()> {
     if proc::port_busy(port) {
-        say(home, &format!("port {port} busy — `dev cleanup` to clear, or stop the other owner"));
+        say(
+            home,
+            &format!("port {port} busy — `dev cleanup` to clear, or stop the other owner"),
+        );
         return Err("guard port busy".into());
     }
     say(home, "compiling…");
@@ -172,7 +211,10 @@ pub(crate) async fn run_foreground(home: &str, port: u16) -> Res<()> {
         return Err("build failed".into());
     }
     let mut child = proc::spawn_bot(&proc::log_path())?;
-    say(home, &format!("bot running (PID: {:?}) — Ctrl-C stops", child.id()));
+    say(
+        home,
+        &format!("bot running (PID: {:?}) — Ctrl-C stops", child.id()),
+    );
     let (stx, mut srx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         super::shutdown_watch().await;

@@ -65,16 +65,21 @@ pub async fn run_single_topic_reset(
     thread_id: Option<i64>,
     target: &str,
 ) -> Res<String> {
-    let forum = s
-        .cfg
-        .forum
-        .ok_or("Reset is only available in forum supergroup mode")?;
+    let Some(forum) = s.cfg.forum else {
+        // DM-mode ack parity with the paced reset: an explicit command
+        // must never go silent (the spawn discards our Err).
+        let msg = crate::ui::RESET_FORUM_ONLY;
+        if chat != 0 {
+            s.tg.send_msg(chat, thread_id, msg, None).await;
+        }
+        return Err(msg.into());
+    };
 
     // F9: permission guard
     if let Ok(perms) = s.tg.check_forum_permissions(forum).await
         && !perms.can_manage_topics
     {
-        let msg = "⚠️ reset aborted: bot lacks 'can_manage_topics' admin permission";
+        let msg = crate::ui::RESET_NO_PERM;
         if chat != 0 {
             s.tg.send_msg(chat, thread_id, msg, None).await;
         }

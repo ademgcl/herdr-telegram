@@ -7,7 +7,7 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
-const POST_PROMPT_QUIET_SECS: u64 = 45;
+use super::POST_PROMPT_QUIET_SECS;
 
 /// DM mode has no topics — legacy immediate pushes. The baseline is
 /// consumed only on delivery so an outage replays the delta instead

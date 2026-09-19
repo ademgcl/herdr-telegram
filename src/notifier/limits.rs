@@ -199,9 +199,7 @@ pub(crate) async fn scan_limits(s: &AppState) {
         if let Some((chat, th)) = owned_dest {
             delivered = send_one(s, chat, th, &text, &pane).await;
         }
-        if !delivered
-            && let Some((fchat, fth)) = forum_dest
-        {
+        if !delivered && let Some((fchat, fth)) = forum_dest {
             delivered = send_one(s, fchat, Some(fth), &text, &pane).await;
         }
         if !delivered && forum_dest.is_none() && !s.cfg.owners.is_empty() {
@@ -230,18 +228,23 @@ pub(crate) async fn scan_limits(s: &AppState) {
                     map.remove(&pane);
                 }
             }
-            s.limit_send_cool.lock().await.insert(pane.clone(), Instant::now());
-            eprintln!("[alert] limit stall {pane}: {} send FAILED — cooling down", hit.kind);
+            s.limit_send_cool
+                .lock()
+                .await
+                .insert(pane.clone(), Instant::now());
+            eprintln!(
+                "[alert] limit stall {pane}: {} send FAILED — cooling down",
+                hit.kind
+            );
         }
     }
 }
 
 /// One buzzing limit card + ❗ reaction; true only on delivery.
 async fn send_one(s: &AppState, chat: i64, thread: Option<i64>, text: &str, pane: &str) -> bool {
-    let mid = s
-        .tg
-        .send_msg_with_effect(chat, thread, text, None, Some(crate::telegram::EFFECT_FIRE))
-        .await;
+    let mid =
+        s.tg.send_msg_with_effect(chat, thread, text, None, Some(crate::telegram::EFFECT_FIRE))
+            .await;
     if let Some(m) = mid {
         let _ = s.tg.set_reaction(chat, m, Some("❗")).await;
     }

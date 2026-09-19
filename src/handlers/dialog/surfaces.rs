@@ -114,12 +114,7 @@ pub(crate) async fn strip_tracked(s: &AppState, pane: &str) {
 /// wiped by a trailing remove. Locks are short and never held across
 /// the strip calls.
 pub(crate) async fn resolve_cards(s: &AppState, pane: &str) {
-    let cards = s
-        .blocked_card
-        .lock()
-        .await
-        .remove(pane)
-        .unwrap_or_default();
+    let cards = s.blocked_card.lock().await.remove(pane).unwrap_or_default();
     s.blocked_sig.lock().await.remove(pane);
     for (chat, mid) in cards {
         s.tg.strip_buttons(chat, mid).await;

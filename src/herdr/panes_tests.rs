@@ -1,6 +1,7 @@
 //! Tests for [`super::panes`] (split: 300-line file limit).
 use super::*;
-use crate::herdr::labels::parse_facts;
+use crate::herdr::labels::{PaneFacts, parse_facts};
+use crate::herdr::pane_select::pane_num;
 
 fn facts(json: &str) -> HashMap<String, PaneFacts> {
     parse_facts(&serde_json::from_str(json).unwrap())

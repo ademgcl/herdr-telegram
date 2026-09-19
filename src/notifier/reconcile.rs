@@ -87,16 +87,15 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                     live_panes.insert(pane);
                 }
                 Err(e) => {
-                    let msg = e.to_string().to_lowercase();
-                    if msg.contains("not found")
-                        || msg.contains("no such")
-                        || msg.contains("unknown pane")
-                    {
+                    if crate::herdr::rpc::is_not_found(&e.to_string()) {
                         confirmed.push(pane);
                     } else {
                         // Blip keeps live (fail-closed): log so unmatched
                         // herdr vocab stays visible instead of blind.
-                        eprintln!("[reconcile] kept {pane} on blip: {}", crate::types::mask_home(&e.to_string()));
+                        eprintln!(
+                            "[reconcile] kept {pane} on blip: {}",
+                            crate::types::mask_home(&e.to_string())
+                        );
                         live_panes.insert(pane);
                     }
                 }
@@ -223,7 +222,8 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                             // CAS: an observation landing during
                                             // the RPCs wins — never clobber it.
                                             let mut st = s.status.lock().await;
-                                            if st.get(&pane).map(|v| v == "shell").unwrap_or(false) {
+                                            if st.get(&pane).map(|v| v == "shell").unwrap_or(false)
+                                            {
                                                 st.insert(pane.clone(), "shell".to_string());
                                             }
                                         } else {
@@ -234,7 +234,11 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                             // retries instead of going quiet.
                                             {
                                                 let mut st = s.status.lock().await;
-                                                if st.get(&pane).map(|v| v == "shell").unwrap_or(false) {
+                                                if st
+                                                    .get(&pane)
+                                                    .map(|v| v == "shell")
+                                                    .unwrap_or(false)
+                                                {
                                                     match prev_status {
                                                         Some(p) => {
                                                             st.insert(pane.clone(), p);

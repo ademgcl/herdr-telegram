@@ -1,12 +1,12 @@
 use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
+use super::tap_refresh::delayed_refresh;
 use crate::{
     handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card, parse_options},
     herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
 use serde_json::Value;
-use std::time::Duration;
 
 /// Button-tap entry point: sends keys, then brings the TAPPED card up
 /// to date in place — a turned-over dialog swaps question + buttons, a
@@ -44,7 +44,11 @@ pub async fn answer_tap(
     // DM shares one (chat,None) key across panes.
     {
         let mut tw = s.typewait.lock().await;
-        if tw.get(&(chat, thread)).map(|(p, _)| p == pane).unwrap_or(false) {
+        if tw
+            .get(&(chat, thread))
+            .map(|(p, _)| p == pane)
+            .unwrap_or(false)
+        {
             tw.remove(&(chat, thread));
         }
     }
@@ -115,12 +119,18 @@ pub async fn answer_tap(
                 // (edit_gone parity with Resumed/NewDialog) — transient
                 // keeps the slot for the heal below.
                 let no_kb = Some(Value::Array(Vec::new()));
-                match s.tg.try_edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, no_kb).await {
+                match s
+                    .tg
+                    .try_edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, no_kb)
+                    .await
+                {
                     Ok(()) => {
                         s.remember(chat, Some(msg_id), pane).await;
                     }
                     Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
-                        let mid = s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None).await;
+                        let mid =
+                            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
+                                .await;
                         s.remember(chat, mid, pane).await;
                         // Unverifiable tap keeps no buttons: heal re-renders below.
                         s.tg.strip_buttons(chat, msg_id).await;
@@ -138,14 +148,20 @@ pub async fn answer_tap(
                 let kb = Some(blocked_kb(pane, &opts));
                 match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
                     Ok(()) => {
-                        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
+                        s.blocked_sig
+                            .lock()
+                            .await
+                            .insert(pane.to_string(), dialog_sig(&screen));
                         s.remember(chat, Some(msg_id), pane).await;
                         // This card is current — strip sibling surfaces.
                         crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
                     }
                     Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
                         if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
-                            s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
+                            s.blocked_sig
+                                .lock()
+                                .await
+                                .insert(pane.to_string(), dialog_sig(&screen));
                             s.remember(chat, Some(mid), pane).await;
                             // Settle the fresh surface; the tapped card may be
                             // untracked (pre-restart post) — strip it too.
@@ -162,7 +178,7 @@ pub async fn answer_tap(
         }
         TapCall::KeysFailed => {
             let mid =
-                s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
+                s.tg.send_msg(chat, thread, crate::ui::KEYS_FAILED_PC, None)
                     .await;
             s.remember(chat, mid, pane).await;
             // Converge the tapped card (pending strip may have failed):
@@ -185,17 +201,17 @@ pub async fn answer_tap(
                     match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
                         Ok(()) => {
                             let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
-                            s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
+                            s.blocked_sig
+                                .lock()
+                                .await
+                                .insert(pane.to_string(), dialog_sig(&after));
                             s.remember(chat, Some(msg_id), pane).await;
                             // This card is current — strip sibling surfaces.
                             crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
                         }
-                        Err(e)
-                            if crate::telegram::messages::edit_gone(&e.to_string()) =>
-                        {
-                            if let Some(mid) = s
-                                .tg
-                                .send_msg_with_effect(
+                        Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
+                            if let Some(mid) =
+                                s.tg.send_msg_with_effect(
                                     chat,
                                     thread,
                                     &text,
@@ -205,7 +221,10 @@ pub async fn answer_tap(
                                 .await
                             {
                                 let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
-                                s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&after));
+                                s.blocked_sig
+                                    .lock()
+                                    .await
+                                    .insert(pane.to_string(), dialog_sig(&after));
                                 s.remember(chat, Some(mid), pane).await;
                                 // Settle the fresh surface; the tapped card
                                 // may be untracked (pre-restart post) —
@@ -222,8 +241,7 @@ pub async fn answer_tap(
                 }
                 TapResult::Resumed => {
                     let no_kb = Some(Value::Array(Vec::new()));
-                    let done =
-                        format!("✅ {} answered — agent resumed [{pane}]", send.label);
+                    let done = format!("✅ {} answered — agent resumed [{pane}]", send.label);
                     // Same converging rule: a failed edit must not strand
                     // live buttons, but only a gone card earns a fresh
                     // post — transient keeps the slot for the heal below
@@ -234,9 +252,7 @@ pub async fn answer_tap(
                             let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
                             s.remember(chat, Some(msg_id), pane).await;
                         }
-                        Err(e)
-                            if crate::telegram::messages::edit_gone(&e.to_string()) =>
-                        {
+                        Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
                             let mid = s.tg.send_msg(chat, thread, &done, None).await;
                             s.remember(chat, mid, pane).await;
                             s.tg.strip_buttons(chat, msg_id).await;
@@ -275,16 +291,4 @@ pub async fn answer_tap(
             }
         }
     }
-}
-
-/// Delayed self-heal for non-card outcomes (typed answers do the same):
-/// slow renders and lagging status resolve in seconds via refresh
-/// instead of the ≤60s watchdog.
-async fn delayed_refresh(s: &AppState, pane: &str) {
-    let s2 = s.clone();
-    let pane2 = pane.to_string();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        crate::handlers::dialog::refresh_blocked_card(&s2, &pane2).await;
-    });
 }

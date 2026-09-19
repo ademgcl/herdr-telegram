@@ -9,12 +9,20 @@ use super::{AppState, State};
 use std::collections::VecDeque;
 
 /// Prompts remembered per pane — enough for catch-up, small enough
-/// to hold in RAM (truncated at render, never at rest).
+/// to hold in RAM (entries truncated at rest, oldest fall off at cap).
 pub const HISTORY_CAP: usize = 20;
+/// Max chars per entry: a 1MB paste × 20 entries must not balloon RAM.
+pub const HISTORY_ENTRY_CAP: usize = 4000;
 
-/// Bounded push shared by the recorder: oldest falls off the front.
+/// Bounded push shared by the recorder: oldest falls off the front,
+/// oversize entries truncate (char-count gate + char-boundary take).
 /// Pure for tests.
 pub fn record_capped(log: &mut VecDeque<String>, text: String) {
+    let text = if text.chars().count() > HISTORY_ENTRY_CAP {
+        text.chars().take(HISTORY_ENTRY_CAP).collect()
+    } else {
+        text
+    };
     if log.len() >= HISTORY_CAP {
         log.pop_front();
     }
@@ -92,6 +100,17 @@ mod tests {
         assert_eq!(l.len(), HISTORY_CAP);
         assert_eq!(l.front().unwrap(), "m5");
         assert_eq!(l.back().unwrap(), &format!("m{}", HISTORY_CAP + 4));
+    }
+
+    #[test]
+    fn test_record_capped_truncates_huge_entry() {
+        let mut l = VecDeque::new();
+        record_capped(&mut l, "x".repeat(HISTORY_ENTRY_CAP + 100));
+        assert_eq!(l.back().unwrap().len(), HISTORY_ENTRY_CAP);
+        // Char gate (not byte gate): multi-byte entries truncate by chars.
+        let mut l = VecDeque::new();
+        record_capped(&mut l, "é".repeat(HISTORY_ENTRY_CAP + 10));
+        assert_eq!(l.back().unwrap().chars().count(), HISTORY_ENTRY_CAP);
     }
 
     #[test]

@@ -67,8 +67,10 @@ pub fn fresh_since(out: &str, before: &str) -> String {
 /// ≈ 5 minutes. Never-ending runs (servers, watchers) stop here with a
 /// single terminal tail + `/read` pointer; `/read` covers the rest.
 /// Nothing posts before that — no provisional cards, no footers: one
-/// command yields one result card. A posted card means done, except the
-/// rare budget-exhaust pointer (still running, terminal, says so).
+/// command yields one result card (a fresh tab also gets one ⏳ receipt
+/// naming the new pane — routing, not a result). A posted result card
+/// means done, except the rare budget-exhaust pointer (still running,
+/// terminal, says so).
 /// Typing is the liveness signal while it runs (per-settle sustain
 /// covers forum topics and DMs alike).
 pub(crate) const SHELL_FOLLOW_UP_ROUNDS: u32 = 20;
@@ -170,16 +172,15 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     // remember-then-bump, so check pending first and epoch last — any
     // resubmit that remembered necessarily bumped after, and the epoch
     // re-check catches even a byte-identical re-command.
-    if !s.pending_matches(pane, chat, thread, cmd).await
-        || !s.shell_epoch_is(pane, epoch).await
-    {
+    if !s.pending_matches(pane, chat, thread, cmd).await || !s.shell_epoch_is(pane, epoch).await {
         s.stop_shell_typing(pane).await;
         return;
     }
     // Shell→agent flip (`opencode` at the prompt): the shell intent is
     // now an agent session — retire silently, no cards at all.
     if flipped_to_agent(s, pane).await {
-        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch).await;
+        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch)
+            .await;
         s.stop_shell_typing(pane).await;
         return;
     }
@@ -200,7 +201,8 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
             return;
         }
         // Match-guarded: a resubmit racing the send above owns the slot now.
-        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch).await;
+        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch)
+            .await;
         s.stop_shell_typing(pane).await;
         return;
     }
@@ -209,15 +211,15 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     for _ in 0..SHELL_FOLLOW_UP_ROUNDS {
         let (next, done) = await_shell_settle(s, pane, &settle_base, chat, thread).await;
         settle_base = next.clone();
-        if !s.pending_matches(pane, chat, thread, cmd).await
-            || !s.shell_epoch_is(pane, epoch).await
+        if !s.pending_matches(pane, chat, thread, cmd).await || !s.shell_epoch_is(pane, epoch).await
         {
             s.stop_shell_typing(pane).await;
             return;
         }
         // Late flip (agent took over mid-run): same silent retire.
         if flipped_to_agent(s, pane).await {
-            s.clear_shell_if_matches(pane, chat, thread, cmd, epoch).await;
+            s.clear_shell_if_matches(pane, chat, thread, cmd, epoch)
+                .await;
             s.stop_shell_typing(pane).await;
             return;
         }
@@ -234,7 +236,8 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
         let mid2 = s.tg.send_msg(chat, thread, &body, kb.clone()).await;
         s.remember(chat, mid2, pane).await;
         if mid2.is_some() {
-            s.clear_shell_if_matches(pane, chat, thread, cmd, epoch).await;
+            s.clear_shell_if_matches(pane, chat, thread, cmd, epoch)
+                .await;
         }
         s.stop_shell_typing(pane).await;
         return;
@@ -245,14 +248,13 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     // command — and rare (agent flips retire above long before this).
     // Flip-guarded like the loop: the last round may have passed the
     // check as shell just before the flip landed.
-    if !s.pending_matches(pane, chat, thread, cmd).await
-        || !s.shell_epoch_is(pane, epoch).await
-    {
+    if !s.pending_matches(pane, chat, thread, cmd).await || !s.shell_epoch_is(pane, epoch).await {
         s.stop_shell_typing(pane).await;
         return;
     }
     if flipped_to_agent(s, pane).await {
-        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch).await;
+        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch)
+            .await;
         s.stop_shell_typing(pane).await;
         return;
     }
@@ -272,7 +274,8 @@ pub(crate) async fn settle_report_shell(s: &AppState, st: ShellSettle) {
     let mid3 = s.tg.send_msg(chat, thread, &body, kb).await;
     s.remember(chat, mid3, pane).await;
     if mid3.is_some() {
-        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch).await;
+        s.clear_shell_if_matches(pane, chat, thread, cmd, epoch)
+            .await;
     }
     s.stop_shell_typing(pane).await;
 }

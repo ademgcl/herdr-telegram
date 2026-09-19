@@ -7,7 +7,10 @@ use super::KIND_CODES;
 /// comparison basis for space names, codes, and cover checks, so
 /// `[my  space]`/`[MY SPACE]`/`[TG] API · O` all match intelligently.
 pub(crate) fn norm_title(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Display space (20-char truncation, same as forward titles).
@@ -103,7 +106,9 @@ fn split_dot_code(body: &str) -> Option<(&str, &str)> {
     let t = body.trim_end();
     if t.ends_with('$') {
         let cut = t.len() - 1;
-        let before = t[..cut].trim_end().strip_suffix(|c: char| is_dot_sep(c) || c.is_whitespace())?;
+        let before = t[..cut]
+            .trim_end()
+            .strip_suffix(|c: char| is_dot_sep(c) || c.is_whitespace())?;
         let before = before.trim_end();
         // Require a real dot separator just before (not a bare `$` name).
         let pre = t[..cut].trim_end();

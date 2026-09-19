@@ -64,7 +64,8 @@ pub(crate) async fn handle_model(
                 pane = Some(f);
             }
             Some(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
                 return;
             }
             None => {

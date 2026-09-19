@@ -33,6 +33,9 @@ pub(crate) type RunWait = (String, std::time::Instant);
 /// reap applies too — unlike runwait's workspace ids).
 pub(crate) type Waiter = (String, std::time::Instant);
 
+/// Global async-lock order (never inverted anywhere, never held across
+/// sleep/RPC — all critical sections snapshot-then-drop):
+/// `status` → `last_change`, `torder` → `targets`, `pending` → `shell_gen`.
 pub struct State {
     pub cfg: Cfg,
     pub tg: TelegramClient,
@@ -169,7 +172,7 @@ impl State {
         let topics = TopicManager::new(cfg.forum, tg.clone(), Some(cfg.socket.clone()));
         // Survive restarts: routing target must not vanish on redeploy
         let file = persist_paths::focus_file();
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::types::home_dir();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/focus"));
         if !file.exists() && legacy.exists() {
             let _ = std::fs::copy(&legacy, &file);
@@ -198,7 +201,10 @@ impl State {
                         secs
                     ));
                     let _ = std::fs::copy(persist_paths::offset_file(), &bak);
-                    eprintln!("[main] corrupt offset.state backed up to {}", crate::home_masked(&bak));
+                    eprintln!(
+                        "[main] corrupt offset.state backed up to {}",
+                        crate::home_masked(&bak)
+                    );
                     0
                 }
             },

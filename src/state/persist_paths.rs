@@ -7,9 +7,9 @@ use std::path::PathBuf;
 /// behavior). Launchd and manual runs MUST use the same one — split
 /// directories mean replayed prompts and orphaned intents.
 pub fn state_dir() -> PathBuf {
-    std::env::var("HERDR_STATE_DIR")
+    crate::config::env_or_file("HERDR_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub(crate) fn focus_file() -> PathBuf {

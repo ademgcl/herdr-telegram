@@ -1,4 +1,5 @@
-use super::labels::{PaneFacts, pane_facts};
+use super::labels::pane_facts;
+pub use super::pane_select::{best_split_direction, parse_layout, pick_first_pane};
 use super::rpc::{rpc, rpc_t};
 use crate::types::Res;
 use serde_json::json;
@@ -97,44 +98,14 @@ pub async fn close_pane(socket: &str, pane: &str) -> Res<()> {
 /// downstream fail-open as ghost panes.
 pub async fn create_tab(socket: &str, ws: &str) -> Res<String> {
     let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
-    let pane = tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string();
+    let pane = tab["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     if pane.is_empty() {
         return Err("tab.create returned no pane".into());
     }
     Ok(pane)
-}
-
-/// Numeric suffix of a pane id (`wJ:p12` → 12): orders panes within a
-/// workspace so callers can find the root pane. Unparseable → MAX
-/// (sorts last, never picked over a real pane).
-pub fn pane_num(id: &str) -> u64 {
-    id.rsplit(":p")
-        .next()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(u64::MAX)
-}
-
-/// Lowest pane (`p1`) in `ws`: `workspace.create` already ships a root
-/// pane, so fresh-space flows must reuse it — a fresh `tab.create`
-/// would orphan p1 and hang the topic on p2. Pure so tests cover it
-/// without I/O. Only for just-created workspaces: never call with an
-/// existing ws (it would hijack a live pane — see `first_shell_pane`).
-/// Empty `ws` never matches (pane rows default a missing workspace to
-/// `""`, which must not be attachable). None when nothing parses:
-/// an all-garbage tie must fall back, not pick at random.
-pub fn pick_first_pane(facts: &HashMap<String, PaneFacts>, ws: &str) -> Option<String> {
-    if ws.is_empty() {
-        return None;
-    }
-    let best = facts
-        .iter()
-        .filter(|(_, f)| f.ws == ws)
-        .map(|(id, _)| id)
-        .min_by_key(|id| pane_num(id))?;
-    if pane_num(best) == u64::MAX {
-        return None;
-    }
-    Some(best.clone())
 }
 
 /// Probe a just-created workspace's root shell pane, retrying while
@@ -159,7 +130,10 @@ pub async fn first_pane_in_ws(socket: &str, ws: &str) -> Option<String> {
     match pane_facts(socket).await {
         Ok(m) => pick_first_pane(&m, ws),
         Err(e) => {
-            eprintln!("[herdr] pane.list failed, skipping reuse: {}", crate::types::mask_home(&e.to_string()));
+            eprintln!(
+                "[herdr] pane.list failed, skipping reuse: {}",
+                crate::types::mask_home(&e.to_string())
+            );
             None
         }
     }
@@ -263,35 +237,6 @@ pub async fn split_pane(socket: &str, pane: &str, direction: &str) -> Res<String
 pub async fn pane_layout(socket: &str, tab_id: &str) -> Res<HashMap<String, (u64, u64)>> {
     let r = rpc(socket, "pane.layout", json!({"tab_id": tab_id})).await?;
     Ok(parse_layout(&r))
-}
-
-/// Pure parse so tests cover the shape without I/O. Missing rects
-/// never block a split (caller falls back to `right`).
-pub fn parse_layout(v: &serde_json::Value) -> HashMap<String, (u64, u64)> {
-    let layout = v.get("layout").unwrap_or(v);
-    let mut out = HashMap::new();
-    if let Some(arr) = layout["panes"].as_array() {
-        for p in arr {
-            if let (Some(id), Some(w), Some(h)) = (
-                p["pane_id"].as_str(),
-                p["rect"]["width"].as_u64(),
-                p["rect"]["height"].as_u64(),
-            ) {
-                out.insert(id.to_string(), (w, h));
-            }
-        }
-    }
-    out
-}
-
-/// Split along the longer axis (wide → right, tall → down); ties go
-/// right (the historic bare-`/split` default). Pure so unit-tested.
-pub fn best_split_direction(width: u64, height: u64) -> &'static str {
-    if width >= height {
-        "right"
-    } else {
-        "down"
-    }
 }
 
 #[cfg(test)]

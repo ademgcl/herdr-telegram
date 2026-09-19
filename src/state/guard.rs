@@ -181,7 +181,11 @@ impl Drop for OpGuard<'_> {
         // successor keeps its guard when our late drop lands.
         for _ in 0..DROP_SPIN_ITERS {
             if let Ok(mut set) = self.set.try_lock() {
-                if set.get(&self.pane).map(|at| *at == self.at).unwrap_or(false) {
+                if set
+                    .get(&self.pane)
+                    .map(|at| *at == self.at)
+                    .unwrap_or(false)
+                {
                     set.remove(&self.pane);
                 }
                 return;

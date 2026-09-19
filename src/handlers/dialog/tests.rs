@@ -1,8 +1,6 @@
 //! Dialog parser tests. Split from `dialog` (300-line file limit).
-use super::{
-    blocked_card_text, blocked_kb, parse_options, winner_lines,
-};
 use super::surfaces::{settle_select, track_card};
+use super::{blocked_card_text, blocked_kb, parse_options, winner_lines};
 use std::collections::HashMap;
 
 fn v(items: &[&str]) -> Vec<String> {
@@ -140,10 +138,7 @@ fn test_live_card_claude_picker_d1() {
         q.contains("What would you like to do"),
         "question intact: {q}"
     );
-    assert!(
-        !q.contains("Enter to select"),
-        "hint row filtered: {q}"
-    );
+    assert!(!q.contains("Enter to select"), "hint row filtered: {q}");
     assert_eq!(
         opts,
         vec!["Discard", "Keep", "Test", "Commit", "Chat about this"]
@@ -168,18 +163,12 @@ fn test_live_card_opencode_permission_wide_terminal_d2() {
         "  ┃   Allow once   Allow always   Reject                                                                                 ctrl+f fullscreen  ⇆ select  enter confirm",
     ]);
     let (q, opts) = super::live_card(&screen);
-    assert!(
-        q.contains("Permission required"),
-        "header intact: {q}"
-    );
+    assert!(q.contains("Permission required"), "header intact: {q}");
     assert!(
         q.contains("Access external directory"),
         "access path intact: {q}"
     );
-    assert_eq!(
-        opts,
-        vec!["Allow once", "Allow always", "Reject"]
-    );
+    assert_eq!(opts, vec!["Allow once", "Allow always", "Reject"]);
 }
 
 #[test]
@@ -273,4 +262,3 @@ fn test_is_blank_card_guards_outage_keeps_pick() {
     assert!(super::is_blank_card(&[]));
     assert!(!super::is_blank_card(&v(&["Allow once   Deny"])));
 }
-

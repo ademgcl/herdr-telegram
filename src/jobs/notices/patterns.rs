@@ -133,7 +133,14 @@ pub(crate) const CONTEXT: &[&str] = &[
 /// one of these, so bare typo prose elsewhere stays byte-identical and
 /// can never newly satisfy WEAK-context matching.
 const TYPO_CONTEXT: &[&str] = &[
-    "usage", "quota", "limit", "ratelimit", "credit", "billing", "429", "subscribe",
+    "usage",
+    "quota",
+    "limit",
+    "ratelimit",
+    "credit",
+    "billing",
+    "429",
+    "subscribe",
 ];
 
 /// Normalize a lowercased screen line before matching: collapse the
@@ -201,14 +208,20 @@ mod tests {
         assert_eq!(normalize_line("quota excede limit"), "quota exceed limit");
         assert_eq!(normalize_line("free usage exceeded"), "free usage exceeded");
         // Bare typo prose without quota markers stays byte-identical.
-        assert_eq!(normalize_line("we exceded expectations"), "we exceded expectations");
+        assert_eq!(
+            normalize_line("we exceded expectations"),
+            "we exceded expectations"
+        );
     }
 
     #[test]
     fn test_typo_banner_still_matches_strong() {
         // A drifted/mistyped quota banner must still hit after normalize.
         let raw = ["rfree usage exceded, subscribe to go".to_string()];
-        let lower: Vec<String> = raw.iter().map(|l| normalize_line(&l.to_lowercase())).collect();
+        let lower: Vec<String> = raw
+            .iter()
+            .map(|l| normalize_line(&l.to_lowercase()))
+            .collect();
         let hit = best_hit(&lower, STRONG, true).expect("typo quota must match");
         assert_eq!(hit.1, "rate-limit");
     }

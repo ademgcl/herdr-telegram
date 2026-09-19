@@ -6,20 +6,25 @@ use crate::types::{Res, SINGLE_INSTANCE_PORT};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-/// Guard port: `.env`/env wins, else the compiled default (matches the
-/// daemon bind in `main`). Callers run after `load_env_file`.
-pub fn guard_port() -> u16 {
-    std::env::var("HERDR_TG_PORT")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(SINGLE_INSTANCE_PORT)
+/// Guard port: `.env`/env wins, else the compiled default. Single source
+/// with the daemon bind in `main` — an invalid `HERDR_TG_PORT` fails
+/// loudly everywhere (a silent fallback would run ops against a different
+/// port than the daemon: split-brain).
+pub fn guard_port() -> Res<u16> {
+    match crate::config::env_or_file("HERDR_TG_PORT") {
+        Some(v) => v
+            .trim()
+            .parse()
+            .map_err(|_| "HERDR_TG_PORT invalid (must be a port number)".into()),
+        None => Ok(SINGLE_INSTANCE_PORT),
+    }
 }
 
 /// Herdr socket for the status row (same default as the daemon).
 pub fn herdr_socket() -> String {
-    let raw = std::env::var("HERDR_SOCKET").unwrap_or_default();
+    let raw = crate::config::env_or_file("HERDR_SOCKET").unwrap_or_default();
     if raw.trim().is_empty() {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::types::home_dir();
         return format!("{home}/.config/herdr/herdr.sock");
     }
     raw
@@ -70,11 +75,7 @@ fn pid_cmd(pid: u32) -> Option<String> {
         .output()
         .ok()?;
     let cmd = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if cmd.is_empty() {
-        None
-    } else {
-        Some(cmd)
-    }
+    if cmd.is_empty() { None } else { Some(cmd) }
 }
 
 /// Kill validation: argv-exact daemon match (fail-closed). The daemon
@@ -165,7 +166,10 @@ fn open_log(log: &Path) -> Res<std::fs::File> {
 
 #[cfg(not(unix))]
 fn open_log(log: &Path) -> Res<std::fs::File> {
-    Ok(std::fs::OpenOptions::new().create(true).append(true).open(log)?)
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)?)
 }
 
 /// Graceful supervised stop: TERM first (the daemon flushes its poll
@@ -214,24 +218,13 @@ pub async fn stop_all(port: u16) -> Vec<u32> {
 
 pub(crate) fn shellexpand_socket() -> String {
     let raw = herdr_socket();
-    if let Some(home) = std::env::var("HOME")
-        .ok()
-        .filter(|h| !h.is_empty())
+    let home = crate::types::home_dir();
+    if !home.is_empty()
         && let Some(rest) = raw.strip_prefix("~/")
     {
         return format!("{home}/{rest}");
     }
     raw
-}
-
-/// Last `n` lines of bot.log (read fully; logs stay small).
-pub fn tail_log(n: usize) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string("bot.log") else {
-        return Vec::new();
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    let skip = lines.len().saturating_sub(n);
-    lines[skip..].iter().map(|l| l.to_string()).collect()
 }
 
 /// Run `cargo <args>`, returning masked tail lines + success.
@@ -268,12 +261,22 @@ mod tests {
         // Bare daemons match; every subcommand form refuses.
         assert!(looks_like_bot("/Users/x/t/target/release/herdr-telegram"));
         assert!(looks_like_bot("./target/debug/herdr-telegram"));
-        assert!(!looks_like_bot("/Users/x/t/target/debug/herdr-telegram ctl trigger w1:p1 blocked"));
-        assert!(!looks_like_bot("/Users/x/t/target/debug/herdr-telegram dev"));
-        assert!(!looks_like_bot("/Users/x/t/target/debug/herdr-telegram dev status"));
-        assert!(!looks_like_bot("/Users/x/t/target/debug/herdr-telegram ops cleanup"));
+        assert!(!looks_like_bot(
+            "/Users/x/t/target/debug/herdr-telegram ctl trigger w1:p1 blocked"
+        ));
+        assert!(!looks_like_bot(
+            "/Users/x/t/target/debug/herdr-telegram dev"
+        ));
+        assert!(!looks_like_bot(
+            "/Users/x/t/target/debug/herdr-telegram dev status"
+        ));
+        assert!(!looks_like_bot(
+            "/Users/x/t/target/debug/herdr-telegram ops cleanup"
+        ));
         // Checkout path containing `ops` must not wedge cleanup.
-        assert!(looks_like_bot("/Users/x/ops/herdr-telegram/target/release/herdr-telegram"));
+        assert!(looks_like_bot(
+            "/Users/x/ops/herdr-telegram/target/release/herdr-telegram"
+        ));
         // Unrelated processes never match.
         assert!(!looks_like_bot("pgrep -f target/release/herdr-telegram"));
         assert!(!looks_like_bot("/usr/bin/some-daemon"));

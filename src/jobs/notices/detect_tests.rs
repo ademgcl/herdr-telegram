@@ -202,8 +202,7 @@ fn test_auth_provenance_strong_vs_weak() {
     assert_eq!(hit.kind, "auth");
     assert!(hit.strong);
     // …while WEAK wording needs context and is stuck-gated.
-    let hit =
-        detect_limit(&v(&["error: session expired, retrying login"])).expect("must detect");
+    let hit = detect_limit(&v(&["error: session expired, retrying login"])).expect("must detect");
     assert_eq!(hit.kind, "auth");
     assert!(!hit.strong);
     assert!(super::super::types::needs_stuck_gate(&hit));

@@ -54,7 +54,12 @@ pub fn naming_core(tab: Option<&str>, tag: &str, multi: bool) -> Option<String> 
 
 /// Watchdog-parity core: labeled splits use the pane label, else tab/tag.
 /// Single source for watchdog, reset, and inspect so they never drift.
-pub fn title_core_for(tab: Option<&str>, tag: &str, multi: bool, pane: Option<&str>) -> Option<String> {
+pub fn title_core_for(
+    tab: Option<&str>,
+    tag: &str,
+    multi: bool,
+    pane: Option<&str>,
+) -> Option<String> {
     if multi && let Some(pl) = pane.map(str::trim).filter(|l| !l.is_empty()) {
         return Some(pl.to_string());
     }
@@ -92,7 +97,12 @@ pub fn kind_bypass(last: Option<&str>, cur: &str) -> bool {
 /// remainder shed of chrome against BOTH spaces (old suffixes like `·
 /// tg` shed via the old pass, head-word echoes collapse via the new),
 /// so the result round-trips through `format_title(new_space, core)`.
-pub fn space_rename_core(rest: &str, old_space: &str, new_space: &str, kind: &str) -> Option<String> {
+pub fn space_rename_core(
+    rest: &str,
+    old_space: &str,
+    new_space: &str,
+    kind: &str,
+) -> Option<String> {
     if rest.trim().is_empty() {
         return None;
     }

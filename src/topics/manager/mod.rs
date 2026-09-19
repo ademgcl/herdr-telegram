@@ -208,8 +208,9 @@ impl TopicManager {
 
                 // F2 + D7: Identity card posted in topic header (never
                 // pinned — tracked by id so status edits stay in place).
-                let card =
-                    crate::ui::build_identity_card_text(kind, pane, space, status, raw_title, branch);
+                let card = crate::ui::build_identity_card_text(
+                    kind, pane, space, status, raw_title, branch,
+                );
                 if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await
                     && !self.storage.set_pin_if_thread(pane, thread, mid)
                 {
@@ -219,7 +220,10 @@ impl TopicManager {
                 (Some(thread), false)
             }
             Err(e) => {
-                eprintln!("[topics] failed to create topic for {pane}: {}", self.tg.redact(&e.to_string()));
+                eprintln!(
+                    "[topics] failed to create topic for {pane}: {}",
+                    self.tg.redact(&e.to_string())
+                );
                 // Roll back the tag when nothing was minted: failed
                 // creates must not leak `o<n>` gaps forever.
                 if self.storage.get_thread(pane).is_none() {
@@ -245,12 +249,7 @@ impl TopicManager {
         self.sync_inner(pane, kind, space).await
     }
 
-    async fn sync_inner(
-        &self,
-        pane: &str,
-        kind: &str,
-        space: &str,
-    ) -> (Option<i64>, bool) {
+    async fn sync_inner(&self, pane: &str, kind: &str, space: &str) -> (Option<i64>, bool) {
         let (thread_opt, pruned) = self.ensure_inner(pane, kind, space).await;
         let Some(thread) = thread_opt else {
             return (None, pruned);

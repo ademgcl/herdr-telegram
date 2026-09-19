@@ -1,7 +1,7 @@
 //! Durable topic identity (pane→thread/tag/title/icon/card): JSON file
 //! with `.prev` backup, mutex-guarded in memory. Split into `disk` + `tests`.
 //! (`card` persists under the legacy `pins` key — same ids, never pinned.)
-use std::{collections::HashMap, env, path::PathBuf, sync::Mutex};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 mod disk;
 #[cfg(test)]
@@ -17,7 +17,7 @@ pub struct TopicStorage {
 impl TopicStorage {
     pub fn new() -> Self {
         let path = crate::state::state_dir().join("topics.state");
-        let home = env::var("HOME").unwrap_or_default();
+        let home = crate::types::home_dir();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/topics.json"));
         if !path.exists() && legacy.exists() && std::fs::copy(&legacy, &path).is_ok() {
             println!(

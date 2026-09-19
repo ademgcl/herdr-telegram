@@ -58,6 +58,22 @@ pub async fn ping(socket: &str) -> Res<Value> {
     rpc(socket, "ping", json!({})).await
 }
 
+/// Herdr "gone" classifier: confirmed-dead pane vs transient blip.
+/// Single source — dm_typewait + reconcile duplicated these and re-drifted.
+/// Pure for tests. Fail-closed: unknown vocab is a blip (keep + retry).
+/// No bare `"no agent"` arm by design: it over-matches transient read
+/// errors (`no agent output…`) into confirmed death (topic close + wipe).
+/// Underscore shapes (`agent_not_found`) already match via `not_found`.
+pub fn is_not_found(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("not found")
+        || m.contains("not_found")
+        || m.contains("notfound")
+        || m.contains("no such")
+        || m.contains("no_such")
+        || m.contains("unknown pane")
+        || m.contains("unknown_pane")
+}
 /// Event-subscribe ack rejection: only a parsed non-null `error`
 /// rejects. Success acks may carry `"error": null`, which a substring
 /// match misreads as rejection (tight resubscribe loop). Unparseable
@@ -68,4 +84,23 @@ pub fn ack_rejected(ack: &str) -> bool {
         .and_then(|v| v.get("error").cloned())
         .map(|e| !e.is_null())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_not_found_variants_vs_blips() {
+        assert!(is_not_found("agent_not_found"));
+        assert!(is_not_found("Agent not found"));
+        assert!(is_not_found("no such pane"));
+        assert!(is_not_found("unknown_pane w1:p9"));
+        assert!(is_not_found("notfound"));
+        // Bare "no agent" is a blip by design (fail-closed): transient
+        // read errors containing it must retry, never confirm death.
+        assert!(!is_not_found("no agent here"));
+        assert!(!is_not_found("herdr unreachable — try again"));
+        assert!(!is_not_found("timed out"));
+    }
 }

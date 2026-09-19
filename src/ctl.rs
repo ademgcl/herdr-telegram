@@ -19,7 +19,9 @@ pub async fn run_control_server(s: AppState, listener: TcpListener) {
     // guard port (never drop the listener): releasing it would let a
     // second instance bind → split-brain. Park holding the socket.
     let Some(token) = crate::ctl_auth::new_control_token() else {
-        eprintln!("[ctl] FATAL: no OS entropy for control token — control socket disabled (holding guard)");
+        eprintln!(
+            "[ctl] FATAL: no OS entropy for control token — control socket disabled (holding guard)"
+        );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
@@ -77,7 +79,7 @@ pub async fn run_control_server(s: AppState, listener: TcpListener) {
                 None => false,
             };
             if !authed {
-                let _ = writer.write_all(b"ERR: unauthorized\n").await;
+                let _ = writer.write_all(crate::ctl_auth::UNAUTH.as_bytes()).await;
                 let _ = writer.flush().await;
                 return;
             }
@@ -95,23 +97,21 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
     let addr = format!("127.0.0.1:{port}");
     // Bounded connect: a wedged listener must fail the CLI visibly,
     // never hang it forever (fail-closed for a dev tool too).
-    let mut stream = match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        TcpStream::connect(&addr),
-    )
-    .await
-    {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => {
-            eprintln!("⚠️  Cannot connect to herdr-telegram on {addr}: {e}");
-            eprintln!("   Is the bot running? Start it with: herdr-telegram dev start");
-            return Err(e.into());
-        }
-        Err(_) => {
-            eprintln!("⚠️  Connect to herdr-telegram on {addr} timed out — is the bot wedged?");
-            return Err("control connect timed out".into());
-        }
-    };
+    let mut stream =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), TcpStream::connect(&addr))
+            .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                eprintln!("⚠️  Cannot connect to herdr-telegram on {addr}: {e}");
+                eprintln!("   Is the bot running? Start it with: herdr-telegram dev start");
+                return Err(e.into());
+            }
+            Err(_) => {
+                eprintln!("⚠️  Connect to herdr-telegram on {addr} timed out — is the bot wedged?");
+                return Err("control connect timed out".into());
+            }
+        };
 
     let Some(token) = read_control_token() else {
         eprintln!(
@@ -120,7 +120,11 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
         );
         return Err("control token missing".into());
     };
-    let cmd_line = format!("auth {token}\n{}\n", args.join(" "));
+    let cmd_line = format!(
+        "{}\n{}\n",
+        crate::ctl_auth::auth_line(&token),
+        args.join(" ")
+    );
     stream.write_all(cmd_line.as_bytes()).await?;
     stream.flush().await?;
 
@@ -128,8 +132,13 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
     let mut lines = BufReader::new(reader).lines();
     // Masked at print time (console parity): server replies carry
     // paths/titles that must not hit the terminal raw.
-    let home = std::env::var("HOME").unwrap_or_default();
-    while let Ok(Some(line)) = lines.next_line().await {
+    let home = crate::types::home_dir();
+    // Bounded reply read: a wedged server must fail the CLI visibly,
+    // never hang it forever (server caps are 10s/4KB per line).
+    while let Ok(res) =
+        tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line()).await
+    {
+        let Ok(Some(line)) = res else { break };
         println!("{}", crate::ops::mask_display_line(&line, &home));
     }
     Ok(())

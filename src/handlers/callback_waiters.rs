@@ -137,7 +137,9 @@ pub(crate) async fn handle_pane_output(
     } else {
         out
     };
-    let mid = s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(pane))).await;
+    let mid =
+        s.tg.send_msg(chat, thread, &body, Some(pane_output_kb(pane)))
+            .await;
     s.remember(chat, mid, pane).await;
 }
 

@@ -128,8 +128,16 @@ pub async fn switch_by_filter(
             s.remember(chat, mid, pane).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ switch failed: {}", crate::types::mask_home(&e.to_string())), None)
-                .await;
+            s.tg.send_msg(
+                chat,
+                thread,
+                &format!(
+                    "⚠️ switch failed: {}",
+                    crate::types::mask_home(&e.to_string())
+                ),
+                None,
+            )
+            .await;
         }
     }
 }
@@ -163,12 +171,7 @@ async fn close_picker(s: &AppState, pane: &str) {
 
 /// Switch the LIVE session's model: open → filter → Enter → verify in
 /// the footer → esc safety. Returns the new footer label.
-pub async fn switch_model(
-    s: &AppState,
-    pane: &str,
-    filter: &str,
-    marker: &str,
-) -> Res<String> {
+pub async fn switch_model(s: &AppState, pane: &str, filter: &str, marker: &str) -> Res<String> {
     // RAII claim (model threshold: switches pile more RPCs than taps):
     // cancellation mid-switch must not wedge the pane.
     let _op = crate::state::OpGuard::claim_limited(&s.modelop, pane, MODELOP_STALE_SECS)
@@ -177,12 +180,7 @@ pub async fn switch_model(
     switch_inner(s, pane, filter, marker).await
 }
 
-async fn switch_inner(
-    s: &AppState,
-    pane: &str,
-    filter: &str,
-    marker: &str,
-) -> Res<String> {
+async fn switch_inner(s: &AppState, pane: &str, filter: &str, marker: &str) -> Res<String> {
     let agent = get_agent(&s.cfg.socket, pane)
         .await
         .map_err(|e| e.to_string())?;

@@ -41,7 +41,13 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     // Reset owns migration: a native rename mid-reset would mutate herdr
     // during the read-only window and fight re-sync.
     if crate::handlers::reset::is_resetting() {
-        s.tg.send_msg(chat, thread, "⚠️ reset in progress — rename again post-reset", None).await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            "⚠️ reset in progress — rename again post-reset",
+            None,
+        )
+        .await;
         return;
     }
     let Some(th) = thread else { return };
@@ -121,7 +127,13 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             }
             let core = names::topic_core(name, &space, &kind);
             if core.trim().is_empty() {
-                s.tg.send_msg(chat, thread, "⚠️ rename ignored: empty after stripping formatting", None).await;
+                s.tg.send_msg(
+                    chat,
+                    thread,
+                    "⚠️ rename ignored: empty after stripping formatting",
+                    None,
+                )
+                .await;
                 return;
             }
             (core, kind, space)
@@ -148,17 +160,14 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     // Fail-closed: an unreadable tab list aborts, never renames blind.
     {
         let herdr_now: Option<String> = if multi {
-            facts
-                .as_ref()
-                .and_then(|m| m.get(&pane))
-                .and_then(|f| {
-                    let l = f.label.as_deref().unwrap_or("").trim();
-                    if l.is_empty() {
-                        None
-                    } else {
-                        Some(l.to_string())
-                    }
-                })
+            facts.as_ref().and_then(|m| m.get(&pane)).and_then(|f| {
+                let l = f.label.as_deref().unwrap_or("").trim();
+                if l.is_empty() {
+                    None
+                } else {
+                    Some(l.to_string())
+                }
+            })
         } else {
             match tab_labels(&s.cfg.socket).await {
                 Ok(tabs_now) => tabs_now.get(&tab_id).cloned(),
@@ -178,7 +187,13 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
     // Tab-less single pane has no tab to rename; a pane-label write
     // would be reverted next tick (watchdog reads tabs). Fail-closed.
     if !multi && tab_id.is_empty() {
-        s.tg.send_msg(chat, thread, "⚠️ rename failed: pane has no tab yet — try again", None).await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            "⚠️ rename failed: pane has no tab yet — try again",
+            None,
+        )
+        .await;
         return;
     }
     // 1:1 prompt converge: after herdr takes the core, re-assert the
@@ -204,8 +219,16 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
                 println!("[titles] rename #{th} → tab {tab_id} ({pane}) {core:?}");
             }
             Err(e) => {
-                s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {}", crate::types::mask_home(&e.to_string())), None)
-                    .await;
+                s.tg.send_msg(
+                    chat,
+                    Some(th),
+                    &format!(
+                        "⚠️ rename failed: {}",
+                        crate::types::mask_home(&e.to_string())
+                    ),
+                    None,
+                )
+                .await;
             }
         }
         return;
@@ -228,8 +251,16 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             println!("[titles] rename #{th} → pane {pane} label {core:?}");
         }
         Err(e) => {
-            s.tg.send_msg(chat, Some(th), &format!("⚠️ rename failed: {}", crate::types::mask_home(&e.to_string())), None)
-                .await;
+            s.tg.send_msg(
+                chat,
+                Some(th),
+                &format!(
+                    "⚠️ rename failed: {}",
+                    crate::types::mask_home(&e.to_string())
+                ),
+                None,
+            )
+            .await;
         }
     }
 }

@@ -2,8 +2,8 @@
 //! Telegram topic name that may carry rendering chrome. Split from
 //! `format` (300-line file limit).
 use super::chrome::{shed_once, short_space_for, strip_space_prefix, trim_stray};
-use super::format::strip_leading_word;
 use super::code;
+use super::format::strip_leading_word;
 
 #[cfg(test)]
 #[path = "core_tests.rs"]

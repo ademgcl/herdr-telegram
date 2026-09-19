@@ -130,7 +130,11 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // mints/posts. Exact-arm match — missing means cancelled.
     {
         let db = s.debounce.lock().await;
-        if db.get(&pane).map(|(st, at)| st != &settled || at != &armed_at).unwrap_or(true) {
+        if db
+            .get(&pane)
+            .map(|(st, at)| st != &settled || at != &armed_at)
+            .unwrap_or(true)
+        {
             return;
         }
     }
@@ -172,7 +176,13 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
-    if s.debounce.lock().await.get(&pane).map(|(st, at)| st != &settled || at != &armed_at).unwrap_or(true) {
+    if s.debounce
+        .lock()
+        .await
+        .get(&pane)
+        .map(|(st, at)| st != &settled || at != &armed_at)
+        .unwrap_or(true)
+    {
         return;
     }
     if s.status
@@ -229,7 +239,13 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         }
         // A newer arm owns the reply now, and a /cancel clearing the arm
         // aborts too (stale body must not beat either). Exact-arm match.
-        if s.debounce.lock().await.get(&pane).map(|(st, at)| st != &settled || at != &armed_at).unwrap_or(true) {
+        if s.debounce
+            .lock()
+            .await
+            .get(&pane)
+            .map(|(st, at)| st != &settled || at != &armed_at)
+            .unwrap_or(true)
+        {
             break;
         }
         // Spontaneous new work started mid-retry: down-window silence.

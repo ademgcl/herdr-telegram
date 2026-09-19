@@ -24,16 +24,22 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         // username leak); detail goes to the redacted log only.
         // Dead-vs-blip probe (dm_info/tap parity): a live pane on a
         // blip retries, only a confirmed-gone pane reports UNKNOWN_TARGET.
-        eprintln!("[shell] send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
+        eprintln!(
+            "[shell] send to {pane} failed: {}",
+            s.tg.redact(&crate::types::mask_home(&e.to_string()))
+        );
         match crate::herdr::client::list_panes(&s.cfg.socket).await {
             Ok(l) if l.contains(&pane.to_string()) => {
-                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
             }
             Ok(_) => {
-                s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
+                s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
             }
             Err(_) => {
-                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
             }
         }
         return;
@@ -95,8 +101,12 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         Err(e) => {
             // Chat stays static (herdr errors carry socket/cwd paths);
             // detail goes to the redacted log only (run_shell_cmd parity).
-            eprintln!("[shell] tab.create failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
-            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+            eprintln!(
+                "[shell] tab.create failed: {}",
+                s.tg.redact(&crate::types::mask_home(&e.to_string()))
+            );
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
             return;
         }
     };
@@ -121,8 +131,12 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         // herdr paths), no focus pin (run_shell_cmd parity). NOT "gone":
         // the pane was just created — a blip must read as retry, and the
         // topic+status stay for the retry (no orphan: same pane serves it).
-        eprintln!("[shell] first send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
-        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+        eprintln!(
+            "[shell] first send to {pane} failed: {}",
+            s.tg.redact(&crate::types::mask_home(&e.to_string()))
+        );
+        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+            .await;
         return;
     }
     s.tg.send_msg(

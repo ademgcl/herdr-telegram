@@ -44,9 +44,7 @@ fn test_chrome_strips_agy_tui() {
         "? for shortcuts             Gemini 3.8 Flash · high"
     ));
     assert!(is_chrome("Antigravity CLI 1.2.2"));
-    assert!(is_chrome(
-        "  ADC: firebase-adminsdk-fbsvc@ajgc-dig-pdi-dev-cdp"
-    ));
+    assert!(is_chrome("  ADC: firebase-adminsdk-fbsvc@test-proj-123"));
     assert!(is_chrome("○ Bash(cargo test)"));
     assert!(is_chrome("⡿ Running command..."));
     assert!(is_chrome("└ Tip: Run with --nocapture"));
@@ -74,21 +72,29 @@ fn test_chrome_keeps_fatal_provider_error_even_framed() {
 #[test]
 fn test_chrome_strips_claude_and_codex_chrome() {
     assert!(is_chrome("⏺ Write(src/main.rs)"));
-    assert!(is_chrome("⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent"));
+    assert!(is_chrome(
+        "⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent"
+    ));
     assert!(is_chrome("✻ Cooked for 5m 36s · done"));
     assert!(is_chrome("※ recap: completed step 1"));
     assert!(is_chrome("… +4 lines (ctrl + t to view transcript)"));
     assert!(is_chrome("• OpenCode 1.18.31"));
     assert!(is_chrome("Enter to select · Tab/Arrow keys to navigate"));
-    assert!(is_chrome("Allow once   Allow always   Reject   ctrl+f fullscreen"));
+    assert!(is_chrome(
+        "Allow once   Allow always   Reject   ctrl+f fullscreen"
+    ));
 }
 
 #[test]
 fn test_dialog_chrome_keeps_header_arrows() {
     // In dialog mode, ← marks headers and actions (never tool noise).
-    assert!(!is_dialog_chrome("← Access external directory ~/.config/opencode"));
+    assert!(!is_dialog_chrome(
+        "← Access external directory ~/.config/opencode"
+    ));
     assert!(!is_dialog_chrome("← ☐ Partial ☐ Story ✔ Submit →"));
     // Regular chrome still filters.
-    assert!(is_dialog_chrome("Enter to select · Tab/Arrow keys to navigate"));
+    assert!(is_dialog_chrome(
+        "Enter to select · Tab/Arrow keys to navigate"
+    ));
     assert!(is_dialog_chrome("• OpenCode 1.18.31"));
 }

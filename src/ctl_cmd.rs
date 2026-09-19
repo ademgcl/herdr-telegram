@@ -15,6 +15,19 @@ use crate::{
 };
 use std::collections::HashSet;
 
+/// Single source for the unknown control command (impl + test).
+pub(crate) const UNKNOWN_CTL: &str =
+    "ERR: unknown command. Supported: ping, status, topics, reset, trigger, inspect\n";
+/// Single source for the ping ack (impl + test).
+pub(crate) const PONG: &str = "PONG\n";
+/// Single source for control usage lines (impl + tests).
+pub(crate) const USAGE_RESET: &str = "ERR: usage: reset <pane_or_topic_id>\n";
+pub(crate) const USAGE_TRIGGER: &str =
+    "ERR: usage: trigger <pane> <status> (e.g. trigger w1:p2 blocked)\n";
+pub(crate) const USAGE_TRIGGER_STATUS: &str =
+    "ERR: usage: trigger <pane> <blocked|working|done|idle|shell>\n";
+pub(crate) const USAGE_INSPECT: &str = "ERR: usage: inspect <pane>\n";
+
 pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
     // Trim first: TCP clients (netcat, scripts) often send leading or
     // trailing whitespace, which must not turn `reset` into "unknown".
@@ -25,7 +38,7 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
     };
 
     match cmd {
-        "ping" => "PONG\n".to_string(),
+        "ping" => PONG.to_string(),
         "status" => {
             let topics_cnt = s.topics.all_mappings().len();
             format!("OK: herdr-telegram running, {topics_cnt} topic(s) mapped\n")
@@ -33,7 +46,7 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
         "topics" => report_topics(s).await,
         "reset" => {
             if args.is_empty() {
-                "ERR: usage: reset <pane_or_topic_id>\n".to_string()
+                USAGE_RESET.to_string()
             } else {
                 // chat=0: silent CLI reply only — never spam the forum
                 // General with `✅ Reset…` confirmations.
@@ -46,12 +59,12 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
         "trigger" => {
             let parts: Vec<&str> = args.split_whitespace().collect();
             if parts.len() < 2 {
-                "ERR: usage: trigger <pane> <status> (e.g. trigger w1:p2 blocked)\n".to_string()
+                USAGE_TRIGGER.to_string()
             } else {
                 let (pane, status) = (parts[0], parts[1]);
                 // Fail-closed: junk statuses must not flow into observers.
                 if !matches!(status, "blocked" | "working" | "done" | "idle" | "shell") {
-                    return "ERR: usage: trigger <pane> <blocked|working|done|idle|shell>\n".to_string();
+                    return USAGE_TRIGGER_STATUS.to_string();
                 }
                 observe_status(s, pane, status, false, "ctl").await;
                 format!("OK: triggered '{status}' on pane '{pane}'\n")
@@ -59,13 +72,12 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
         }
         "inspect" => {
             if args.is_empty() {
-                "ERR: usage: inspect <pane>\n".to_string()
+                USAGE_INSPECT.to_string()
             } else {
                 inspect_pane(s, args).await
             }
         }
-        _ => "ERR: unknown command. Supported: ping, status, topics, reset, trigger, inspect\n"
-            .to_string(),
+        _ => UNKNOWN_CTL.to_string(),
     }
 }
 
@@ -200,29 +212,17 @@ mod tests {
         // Isolated state (no live mappings, no socket): pure dispatch
         // branches only — success paths need herdr RPCs.
         let (s, _dir) = isolated_state();
-        assert_eq!(handle_cmd(&s, "ping").await, "PONG\n");
-        assert_eq!(
-            handle_cmd(&s, "bogus").await,
-            "ERR: unknown command. Supported: ping, status, topics, reset, trigger, inspect\n"
-        );
+        assert_eq!(handle_cmd(&s, "ping").await, PONG);
+        assert_eq!(handle_cmd(&s, "bogus").await, UNKNOWN_CTL);
         // Whitespace-tolerant split, usage before any I/O.
-        assert_eq!(
-            handle_cmd(&s, "  reset  ").await,
-            "ERR: usage: reset <pane_or_topic_id>\n"
-        );
-        assert_eq!(
-            handle_cmd(&s, "trigger w1:p1").await,
-            "ERR: usage: trigger <pane> <status> (e.g. trigger w1:p2 blocked)\n"
-        );
+        assert_eq!(handle_cmd(&s, "  reset  ").await, USAGE_RESET);
+        assert_eq!(handle_cmd(&s, "trigger w1:p1").await, USAGE_TRIGGER);
         // Junk statuses refuse before any observer I/O (fail-closed).
         assert_eq!(
             handle_cmd(&s, "trigger w1:p1 frobnicate").await,
-            "ERR: usage: trigger <pane> <blocked|working|done|idle|shell>\n"
+            USAGE_TRIGGER_STATUS
         );
-        assert_eq!(
-            handle_cmd(&s, "inspect").await,
-            "ERR: usage: inspect <pane>\n"
-        );
+        assert_eq!(handle_cmd(&s, "inspect").await, USAGE_INSPECT);
         // Status shape (count varies with live data — assert the frame).
         let st = handle_cmd(&s, "status").await;
         assert!(st.starts_with("OK: herdr-telegram running, "));

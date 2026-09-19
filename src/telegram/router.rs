@@ -153,8 +153,13 @@ pub async fn handle_update(s: AppState, u: &Value) {
             due
         };
         if due {
-            s.tg.send_msg(chat_id, th, "⌛️ that message arrived too late — please resend", None)
-                .await;
+            s.tg.send_msg(
+                chat_id,
+                th,
+                "⌛️ that message arrived too late — please resend",
+                None,
+            )
+            .await;
         }
         return;
     }

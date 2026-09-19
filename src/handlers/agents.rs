@@ -68,7 +68,7 @@ pub(crate) async fn spawn_with_arg(s: &AppState, chat: i64, thread: Option<i64>,
                 Some(ws_id.as_str())
             }
             None => {
-                s.tg.send_msg(chat, thread, &format!("⚠️ unknown space `{w}` — see `/agents`"), None)
+                s.tg.send_msg(chat, thread, &crate::ui::unknown_space(w), None)
                     .await;
                 return;
             }
@@ -111,7 +111,7 @@ pub(crate) async fn spawn_with_arg(s: &AppState, chat: i64, thread: Option<i64>,
             s.set_focus(&row.pane).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ spawn failed: {}", crate::types::mask_home(&e.to_string())), None)
+            s.tg.send_msg(chat, thread, &crate::ui::spawn_failed(&e.to_string()), None)
                 .await;
         }
     }

@@ -8,9 +8,9 @@ mod chrome;
 mod core;
 mod format;
 
+pub(crate) use chrome::{norm_title, space_rename_parts};
 pub use core::topic_core;
 pub use format::format_title;
-pub(crate) use chrome::{norm_title, space_rename_parts};
 
 #[cfg(test)]
 #[path = "icon_tests.rs"]

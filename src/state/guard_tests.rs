@@ -22,7 +22,11 @@ fn test_claim_stale_threshold() {
     let old = now - Duration::from_secs(BLOCKOP_STALE_SECS + 1);
     assert!(claim_stale(old, now, BLOCKOP_STALE_SECS));
     assert!(!claim_stale(now, now, BLOCKOP_STALE_SECS));
-    assert!(!claim_stale(now - Duration::from_secs(3), now, BLOCKOP_STALE_SECS));
+    assert!(!claim_stale(
+        now - Duration::from_secs(3),
+        now,
+        BLOCKOP_STALE_SECS
+    ));
 }
 
 #[tokio::test]
@@ -87,7 +91,10 @@ fn test_reap_keeps_live_fresh_drops_stale_dead() {
     let live = HashSet::from(["live-fresh".to_string(), "live-stale".to_string()]);
     let mut reaped = reap_stale(&mut map, &live, now, BLOCKOP_STALE_SECS);
     reaped.sort();
-    assert_eq!(reaped, vec!["dead-stale".to_string(), "live-stale".to_string()]);
+    assert_eq!(
+        reaped,
+        vec!["dead-stale".to_string(), "live-stale".to_string()]
+    );
     assert!(map.contains_key("live-fresh"));
     assert!(!map.contains_key("live-stale"));
     assert!(!map.contains_key("dead-fresh"));

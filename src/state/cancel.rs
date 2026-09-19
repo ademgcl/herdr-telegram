@@ -191,19 +191,27 @@ impl State {
 
 /// Isolated AppState for tests (shared by cancel/hygiene/ctl suites).
 /// Cancel + reap paths persist jobs.state, so tests must never touch the
-/// repo's live files: each call mints a fresh temp state dir. Env is
-/// set-and-left (unique dir per call — restoring would race parallel
-/// tests worse). No other test reads HERDR_STATE_DIR; the live bot is a
-/// separate process. Edition 2024 marks env mutation unsafe — justified
-/// here by the above.
+/// repo's live files: each call mints a fresh temp state dir. Serialized
+/// via a static mutex: `set_var`/`var` is UB under parallel `cargo test`
+/// (Edition 2024 marks it unsafe), so holders keep the guard for the
+/// whole test (`_dir` alive) and restore the prior value on drop.
+#[cfg(test)]
+static TEST_ENV_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 pub(crate) struct TestStateDir {
     path: std::path::PathBuf,
+    _guard: std::sync::MutexGuard<'static, ()>,
+    old: Option<std::ffi::OsString>,
 }
-
 #[cfg(test)]
 impl Drop for TestStateDir {
     fn drop(&mut self) {
+        if let Some(old) = self.old.take() {
+            unsafe { std::env::set_var("HERDR_STATE_DIR", old) };
+        } else {
+            unsafe { std::env::remove_var("HERDR_STATE_DIR") };
+        }
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
@@ -213,6 +221,8 @@ static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 #[cfg(test)]
 pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
+    let guard = TEST_ENV_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let old = std::env::var_os("HERDR_STATE_DIR");
     let n = TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -228,7 +238,14 @@ pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
         forum: None,
     };
     let s = super::State::new(cfg).expect("test state");
-    (s, TestStateDir { path })
+    (
+        s,
+        TestStateDir {
+            path,
+            _guard: guard,
+            old,
+        },
+    )
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ pub mod arbitrate;
 pub mod books;
 pub mod echo;
 pub mod enqueue;
+pub mod enqueue_blocked;
 pub mod episode;
 pub mod filter;
 pub mod finalize;
