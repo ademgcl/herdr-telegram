@@ -1,6 +1,6 @@
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
-    herdr::client::{get_agent, list_workspaces, read_agent_output, send_agent_keys},
+    herdr::client::{get_agent, list_panes, list_workspaces, read_agent_output, send_agent_keys, send_pane_keys},
     state::AppState,
     types::AgentRow,
     ui::{
@@ -24,9 +24,12 @@ pub(crate) async fn handle_keys(
     // An explicit pane with no keys is a usage error, not keys for the
     // reply (typo guard) — as is a kind/pane-shaped word that matched
     // nothing (ambiguous kinds must not become keystrokes elsewhere).
+    // Rowless shells (pane-shaped, invisible to agent.list) flow to
+    // send_keys for liveness-classified delivery instead of usage.
     let (pane, keys) = match resolve_target(rows, Some(t)) {
         Some(r) if !keys.is_empty() => (Some(r.pane), keys),
         Some(_) => (None, keys),
+        None if super::dm_prompt::pane_shaped(t) && !keys.is_empty() => (Some(t.to_string()), keys),
         None if rows.iter().any(|r| r.kind == t) || t.contains(':') => (None, keys),
         None if reply_pane.is_some() && !arg.is_empty() => (reply_pane.clone(), arg),
         _ => (None, keys),
@@ -58,8 +61,34 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
         s.tg.send_msg(chat, None, &msg, None).await;
         return;
     }
-    match send_agent_keys(&s.cfg.socket, pane, &key_list).await {
+    // Classify without guessing (tap_input parity): get_agent-ok means
+    // an agent owns the pane (agent keys); a confirmed live pane with
+    // no agent is a shell (pane keys). Unreadable refuses visibly.
+    let was_shell = match get_agent(&s.cfg.socket, pane).await {
+        Ok(_) => false,
+        Err(_) => match list_panes(&s.cfg.socket).await {
+            Ok(l) if l.contains(&pane.to_string()) => true,
+            Ok(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                return;
+            }
+            Err(_) => {
+                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None).await;
+                return;
+            }
+        },
+    };
+    let r = if !was_shell {
+        send_agent_keys(&s.cfg.socket, pane, &key_list).await
+    } else {
+        send_pane_keys(&s.cfg.socket, pane, &key_list).await
+    };
+    match r {
         Ok(_) => {
+            if was_shell {
+                super::shell_lifecycle::spawn_flip_watch(s, pane);
+            }
+            s.set_focus(pane).await;
             s.tg.send_msg(chat, None, crate::ui::KEYS_SENT, None).await;
         }
         Err(e) => {
@@ -120,14 +149,20 @@ pub(crate) async fn handle_read(
             .and_then(|p| rows.iter().find(|r| r.pane == p).cloned()),
     };
     if row.is_none() {
-        if let Some(f) = s
-            .get_focus()
-            .await
-            .filter(|f| rows.iter().any(|r| &r.pane == f))
-        {
-            row = rows.iter().find(|r| r.pane == f).cloned();
-        } else {
-            row = resolve_target(rows, Some(""));
+        // Rowless (shell) focus must not shadow to sole-agent: serving
+        // the wrong session + stealing focus is a cross-pane write.
+        // Agent-only commands refuse — bare text serves shells via fallback.
+        match s.get_focus().await {
+            Some(f) if rows.iter().any(|r| r.pane == f) => {
+                row = rows.iter().find(|r| r.pane == f).cloned();
+            }
+            Some(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                return;
+            }
+            None => {
+                row = resolve_target(rows, Some(""));
+            }
         }
     }
     let Some(row) = row else {
@@ -178,14 +213,18 @@ pub(crate) async fn handle_status(
         None => reply_pane.clone(),
     };
     if pane.is_none() {
-        if let Some(f) = s
-            .get_focus()
-            .await
-            .filter(|f| rows.iter().any(|r| &r.pane == f))
-        {
-            pane = Some(f);
-        } else {
-            pane = resolve_target(rows, Some("")).map(|r| r.pane);
+        // Rowless focus must not shadow to sole-agent (cross-pane card).
+        match s.get_focus().await {
+            Some(f) if rows.iter().any(|r| r.pane == f) => {
+                pane = Some(f);
+            }
+            Some(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                return;
+            }
+            None => {
+                pane = resolve_target(rows, Some("")).map(|r| r.pane);
+            }
         }
     }
     let Some(pane) = pane else {

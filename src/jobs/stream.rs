@@ -1,7 +1,7 @@
 use crate::types::Res;
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncWriteExt, BufReader},
     net::UnixStream,
 };
 
@@ -39,7 +39,16 @@ impl EvStream {
 
         let mut reader = BufReader::new(reader);
         let mut ack = String::new();
-        reader.read_line(&mut ack).await?;
+        // Bounded (ctl parity, take-during-read): a hung/rogue ack must
+        // not OOM the watcher. Events are small — 64KB cap.
+        {
+            use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+            let mut limited = (&mut reader).take(65_536);
+            limited.read_line(&mut ack).await?;
+            if ack.len() >= 65_536 {
+                return Err("event subscribe ack too large".into());
+            }
+        }
         if crate::herdr::client::ack_rejected(&ack) {
             return Err(format!("event subscribe rejected: {}", ack.trim()).into());
         }
@@ -64,9 +73,19 @@ impl EvStream {
     pub async fn next(&mut self) -> Option<WatchEvent> {
         loop {
             let mut line = String::new();
-            let n = self.reader.read_line(&mut line).await.ok()?;
-            if n == 0 {
-                return None;
+            // Bounded: a rogue herdr line must not OOM a watcher (ctl
+            // take-during-read parity). 256KB covers events; larger
+            // skips instead of buffering unbounded.
+            {
+                use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+                let mut limited = (&mut self.reader).take(262_144);
+                let n = limited.read_line(&mut line).await.ok()?;
+                if line.len() >= 262_144 {
+                    continue;
+                }
+                if n == 0 {
+                    return None;
+                }
             }
             let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else {
                 continue;

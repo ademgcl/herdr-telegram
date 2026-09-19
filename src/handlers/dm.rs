@@ -186,14 +186,17 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
                 .and_then(|p| rows.iter().find(|r| r.pane == p).map(|r| r.pane.clone())),
         };
         if pane.is_none() {
-            if let Some(f) = s
-                .get_focus()
-                .await
-                .filter(|f| rows.iter().any(|r| &r.pane == f))
-            {
-                pane = Some(f);
-            } else {
-                pane = resolve_target(&rows, Some("")).map(|r| r.pane);
+            match s.get_focus().await {
+                Some(f) if rows.iter().any(|r| r.pane == f) => {
+                    pane = Some(f);
+                }
+                Some(_) => {
+                    s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                    return;
+                }
+                None => {
+                    pane = resolve_target(&rows, Some("")).map(|r| r.pane);
+                }
             }
         }
         match pane {
@@ -201,13 +204,8 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
                 crate::state::history::send_history(&s, chat, None, &pane, n as usize).await;
             }
             None => {
-                s.tg.send_msg(
-                    chat,
-                    None,
-                    "who? reply to an agent card or tap one in /agents",
-                    None,
-                )
-                .await;
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                    .await;
             }
         }
         return;

@@ -89,13 +89,15 @@ impl TopicManager {
         }
     }
 
-    /// Round-robin liveness probe: re-assert THREE mappings' stored
-    /// titles per watchdog tick (3 RPCs). Converged titles otherwise
-    /// never fire an RPC, so a human-deleted topic would dangle — the
-    /// probe answers TOPIC_ID_INVALID → prune, and the next ensure
-    /// recreates. One-per-tick healed N topics in N×60s; three keeps
-    /// the drift small on busy hosts. Skipped while resetting (would
-    /// fight identity restore). Returns pruned panes for dialog retire.
+    /// Round-robin liveness probe: re-assert mappings' stored titles
+    /// per watchdog tick so a human-deleted topic prunes within ≤60s.
+    /// Converged titles otherwise never fire an RPC, so a deleted topic
+    /// would dangle — the probe answers TOPIC_ID_INVALID → prune, and
+    /// the next ensure recreates. Budget scales with map size (all
+    /// mappings each tick): N RPCs per 60s stays well under limits for
+    /// realistic hosts and keeps herdr→tg ≤60s for any N. Skipped while
+    /// resetting (would fight identity restore). Returns pruned panes
+    /// for dialog retire.
     pub async fn probe_deleted(&self) -> Vec<String> {
         if crate::handlers::reset::is_resetting() {
             return Vec::new();
@@ -103,8 +105,9 @@ impl TopicManager {
         let Some(forum) = self.forum_id else {
             return Vec::new();
         };
+        let n = self.storage.all_mappings().len().max(3);
         let mut pruned = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..n {
             if let Some(p) = self.probe_next(forum).await {
                 pruned.push(p);
             }
@@ -113,8 +116,8 @@ impl TopicManager {
     }
 
     /// Probe a single mapping (one RPC): the ring cursor advances per
-    /// call so consecutive calls walk the map. Split for the 3-per-tick
-    /// loop above. Returns the pane when pruned.
+    /// call so consecutive calls walk the map. Split for the scaled
+    /// per-tick loop above. Returns the pane when pruned.
     async fn probe_next(&self, forum: i64) -> Option<String> {
         let mappings = self.storage.all_mappings();
         if mappings.is_empty() {

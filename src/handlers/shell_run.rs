@@ -22,14 +22,9 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         // Chat stays static (herdr errors carry socket/cwd paths — no
         // username leak); detail goes to the redacted log only.
+        // Single source (UNKNOWN_TARGET): dup'd "gone" literals re-drift.
         eprintln!("[shell] send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
-        s.tg.send_msg(
-            chat,
-            thread,
-            &format!("⚠️ pane {pane} is gone"),
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
         return;
     }
     // Focus only after a live send: focusing a corpse re-arms every next
@@ -111,7 +106,18 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     // Focus only after a live send (same rule as run_shell_cmd): a fresh
     // tab whose first send fails must not pin focus on the orphan.
     // Fresh shells start slow (rc files, version managers) — settle first.
+    // One-command-one-card: the ⏳ posts AFTER a live send, so a failed
+    // first send leaves no orphan provisional beside the gone notice.
     let before = shell_snapshot(s, &pane).await;
+    if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
+        // Fresh tab whose first send fails: static outage ack (never raw
+        // herdr paths), no focus pin (run_shell_cmd parity). NOT "gone":
+        // the pane was just created — a blip must read as retry, and the
+        // topic+status stay for the retry (no orphan: same pane serves it).
+        eprintln!("[shell] first send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
+        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+        return;
+    }
     s.tg.send_msg(
         chat,
         thread,
@@ -119,13 +125,6 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         None,
     )
     .await;
-    if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
-        // Fresh tab whose first send fails is an orphan: static text
-        // (never raw herdr paths), no focus pin (run_shell_cmd parity).
-        eprintln!("[shell] first send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
-        s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None).await;
-        return;
-    }
     s.set_focus(&pane).await;
     s.remember_pending(&pane, chat, thread, cmd).await;
     s.push_history(&pane, cmd).await;

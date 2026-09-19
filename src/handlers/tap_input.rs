@@ -235,7 +235,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                 match crate::herdr::client::list_panes(&s.cfg.socket).await {
                     Ok(l) if l.contains(&pane.to_string()) => true,
                     Ok(_) => {
-                        s.tg.send_msg(chat, thread, &format!("pane {pane} is gone"), None).await;
+                        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
                         return true;
                     }
                     Err(_) => {

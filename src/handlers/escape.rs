@@ -107,6 +107,9 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         .await;
         return;
     };
+    // Strip before slow RPC (tap parity): buttons come off optimistically
+    // so the Esc reads instant and cannot double-fire. Text untouched.
+    crate::handlers::dialog::strip_tracked(s, pane).await;
     let before = read_screen_visible(&s.cfg.socket, pane, 30).await;
     if send_agent_keys(&s.cfg.socket, pane, &["esc"])
         .await
@@ -114,6 +117,15 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     {
         s.tg.send_msg(chat, thread, "⚠️ keys failed — answer on the PC", None)
             .await;
+        // Heal like Unchanged (strip already ran): buttonless must not
+        // strand until the ≤60s watchdog.
+        crate::handlers::dialog::strip_tracked(s, pane).await;
+        let s2 = s.clone();
+        let pane2 = pane.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            crate::handlers::dialog::refresh_blocked_card(&s2, &pane2).await;
+        });
         return;
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -155,6 +167,15 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
                 None,
             )
             .await;
+            // Dead-end buttons stay off (tap Unchanged parity): the
+            // explainer above carries the way out, heal re-renders below.
+            crate::handlers::dialog::strip_tracked(s, pane).await;
+            let s2 = s.clone();
+            let pane2 = pane.to_string();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                crate::handlers::dialog::refresh_blocked_card(&s2, &pane2).await;
+            });
         }
     }
 }
@@ -188,14 +209,19 @@ async fn resolve_dm_pane(
             .and_then(|p| rows.iter().find(|r| r.pane == p).cloned()),
     };
     if row.is_none() {
-        if let Some(f) = s
-            .get_focus()
-            .await
-            .filter(|f| rows.iter().any(|r| &r.pane == f))
-        {
-            row = rows.iter().find(|r| r.pane == f).cloned();
-        } else {
-            row = resolve_target(rows, Some(""));
+        // Rowless focus must not shadow to sole-agent: /esc into the
+        // wrong agent is a cross-pane write. Refuse instead.
+        match s.get_focus().await {
+            Some(f) if rows.iter().any(|r| r.pane == f) => {
+                row = rows.iter().find(|r| r.pane == f).cloned();
+            }
+            Some(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                return None;
+            }
+            None => {
+                row = resolve_target(rows, Some(""));
+            }
         }
     }
     match row {

@@ -20,9 +20,13 @@ use std::collections::HashSet;
 pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // While reset runs, topic lifecycle belongs to reset: a watchdog tick
     // opening topics and posting cards would race delete/create and cause
-    // a 429 storm. The first tick after reset already catches everything.
+    // a 429 storm. Hygiene still runs (no topic writes) so status, limits
+    // and dead-pane reaps never black out behind a paced reset; the first
+    // tick after reset catches everything else.
     if is_resetting() {
-        println!("[reconcile] skipped ({src}): paced reset in progress");
+        println!("[reconcile] degraded ({src}): paced reset in progress");
+        let mut pane_list: Option<HashSet<String>> = None;
+        reap_orphans(s, &mut pane_list).await;
         return;
     }
     let Ok(rows) = list_agents(&s.cfg.socket).await else {

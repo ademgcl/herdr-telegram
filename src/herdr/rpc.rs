@@ -18,7 +18,16 @@ pub async fn rpc_t(socket: &str, method: &str, params: Value, timeout_secs: u64)
         conn.flush().await?;
         let mut reader = BufReader::new(conn);
         let mut line = String::new();
-        reader.read_line(&mut line).await?;
+        // Bounded like ctl (take-during-read): a rogue herdr line must
+        // not OOM the bot. 2MB covers screens; anything larger refuses.
+        {
+            use tokio::io::AsyncReadExt;
+            let mut limited = (&mut reader).take(2_097_152);
+            limited.read_line(&mut line).await?;
+            if line.len() >= 2_097_152 {
+                return Err("herdr reply too large".into());
+            }
+        }
         if line.trim().is_empty() {
             return Err("herdr closed connection (empty reply)".into());
         }

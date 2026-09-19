@@ -109,10 +109,26 @@ pub async fn answer_tap(
             }
             let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
             if screen.is_empty() {
-                let mid = s.tg.send_msg(chat, thread, "unknown button", None).await;
-                s.remember(chat, mid, pane).await;
-                // Unverifiable tap keeps no buttons: heal re-renders below.
-                s.tg.strip_buttons(chat, msg_id).await;
+                // Edit in place (no fresh-message accumulation): every
+                // other tap arm converges the tapped card via edit first.
+                // Fresh post only when the card is definitely gone
+                // (edit_gone parity with Resumed/NewDialog) — transient
+                // keeps the slot for the heal below.
+                let no_kb = Some(Value::Array(Vec::new()));
+                match s.tg.try_edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, no_kb).await {
+                    Ok(()) => {
+                        s.remember(chat, Some(msg_id), pane).await;
+                    }
+                    Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
+                        let mid = s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None).await;
+                        s.remember(chat, mid, pane).await;
+                        // Unverifiable tap keeps no buttons: heal re-renders below.
+                        s.tg.strip_buttons(chat, msg_id).await;
+                    }
+                    Err(_) => {
+                        s.tg.strip_buttons(chat, msg_id).await;
+                    }
+                }
             } else {
                 let (q, opts) = live_card(&screen);
                 let text = format!(
@@ -120,22 +136,26 @@ pub async fn answer_tap(
                     blocked_card_text(&q, &opts)
                 );
                 let kb = Some(blocked_kb(pane, &opts));
-                if s.tg
-                    .try_edit_msg(chat, msg_id, &text, kb.clone())
-                    .await
-                    .is_ok()
-                {
-                    s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
-                    s.remember(chat, Some(msg_id), pane).await;
-                    // This card is current — strip sibling surfaces.
-                    crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
-                } else if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
-                    s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
-                    s.remember(chat, Some(mid), pane).await;
-                    // Settle the fresh surface; the tapped card may be
-                    // untracked (pre-restart post) — strip it too.
-                    crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
-                    s.tg.strip_buttons(chat, msg_id).await;
+                match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
+                    Ok(()) => {
+                        s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
+                        s.remember(chat, Some(msg_id), pane).await;
+                        // This card is current — strip sibling surfaces.
+                        crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
+                    }
+                    Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
+                        if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
+                            s.blocked_sig.lock().await.insert(pane.to_string(), dialog_sig(&screen));
+                            s.remember(chat, Some(mid), pane).await;
+                            // Settle the fresh surface; the tapped card may be
+                            // untracked (pre-restart post) — strip it too.
+                            crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
+                            s.tg.strip_buttons(chat, msg_id).await;
+                        }
+                    }
+                    Err(_) => {
+                        s.tg.strip_buttons(chat, msg_id).await;
+                    }
                 }
             }
             delayed_refresh(s, pane).await;
@@ -195,6 +215,7 @@ pub async fn answer_tap(
                             }
                         }
                         Err(_) => {
+                            s.tg.strip_buttons(chat, msg_id).await;
                             delayed_refresh(s, pane).await;
                         }
                     }

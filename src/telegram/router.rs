@@ -67,8 +67,17 @@ pub async fn handle_update(s: AppState, u: &Value) {
     }
 
     let msg = &u["message"];
+    // Edited messages (typo-fixes) are intentionally ignored: routing
+    // the edited body like a new message double-executes prompts and
+    // re-mints/re-kills on command edits, and staleness would use the
+    // original date (always stale). Fail-closed — resend as a new message.
     if msg.is_null() {
-        println!("[tg] ignoring unknown update kind: {kind}");
+        // Distinguish edits (known, dropped) from truly unknown kinds.
+        if !u["edited_message"].is_null() {
+            println!("[tg] ignoring edited_message (resend as new)");
+        } else {
+            println!("[tg] ignoring unknown update kind: {kind}");
+        }
         return;
     }
 

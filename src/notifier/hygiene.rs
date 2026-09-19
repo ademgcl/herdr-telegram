@@ -46,6 +46,13 @@ pub(crate) async fn panes_once(
 pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<String>>) {
     let mut known: Vec<String> = s.jobs.lock().await.keys().cloned().collect();
     known.extend(s.pending.lock().await.keys().cloned());
+    // Focus-only corpses pin nothing above: a dead focus with no job,
+    // intent, waiter or guard never entered `known`, so clear_pane never
+    // ran and every bare DM prompt bricked on UNKNOWN_TARGET. Pin it.
+    if let Some(f) = s.get_focus().await
+        && !known.contains(&f) {
+            known.push(f);
+        }
     // Armed input waiters also pin a pane: a keywait/typewait for an
     // externally-closed shell (no job, no intent, DM mode) must die
     // with it instead of eating the next message as dead input.
@@ -130,9 +137,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                 // Double-confirm suspected deaths: a single `list_panes`
                 // miss retires the job + clears the pane, leaving the
                 // intent watcherless until restart. Re-fetch fresh (cache
-                // bypass) and retire only panes missing twice. A failed
-                // or empty confirm falls back to the first affirmative
-                // read (Err/empty FIRST reads already no-op above/below).
+                // bypass) and retire only panes missing twice. A transient
+                // empty confirm fails OPEN (keep all); a failed confirm
+                // (Err) falls back to the first affirmative read (Err/empty
+                // FIRST reads already no-op above/below).
                 let dying: Vec<String> = known
                     .iter()
                     .filter(|p| !live.contains(*p))
@@ -147,9 +155,14 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                         Some(fresh) if !fresh.is_empty() => {
                             dying.into_iter().filter(|p| !fresh.contains(p)).collect()
                         }
+                        Some(_) => {
+                            eprintln!("[reconcile] confirm empty, keeping all");
+                            *pane_list = Some(first);
+                            Vec::new()
+                        }
                         _ => {
                             eprintln!("[reconcile] confirm read failed, using first read");
-                            *pane_list = Some(first);
+                            *pane_list = Some(first.clone());
                             dying
                         }
                     }

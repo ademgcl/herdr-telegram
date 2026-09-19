@@ -22,9 +22,8 @@ pub(crate) async fn pane_live(s: &AppState, pane: &str) -> bool {
 }
 
 /// Dead pane tapped: retire the stale card, route nothing.
-pub(crate) async fn gone_card(s: &AppState, chat: i64, msg_id: i64, pane: &str) {
-    s.tg.edit_msg(chat, msg_id, &format!("pane {pane} is gone"), None)
-        .await;
+pub(crate) async fn gone_card(s: &AppState, chat: i64, msg_id: i64, _pane: &str) {
+    s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_TARGET, None).await;
     s.forget_target(chat, msg_id).await;
 }
 

@@ -43,10 +43,19 @@ pub(crate) async fn handle_kill(
 
 pub(crate) async fn handle_shell(s: &AppState, chat: i64, rows: &[AgentRow], arg: &str) {
     // No arg: shell next to the focused agent, else the tg space.
-    let focus_ws = s
-        .get_focus()
-        .await
-        .and_then(|p| rows.iter().find(|r| r.pane == p).map(|r| r.ws.clone()));
+    // Shell focus counts — facts cover every pane (rows omit shells).
+    let focus_ws = match s.get_focus().await {
+        Some(p) => match rows.iter().find(|r| r.pane == p).map(|r| r.ws.clone()) {
+            Some(ws) => Some(ws),
+            None => {
+                crate::herdr::labels::pane_facts(&s.cfg.socket)
+                    .await
+                    .ok()
+                    .and_then(|m| m.get(&p).map(|f| f.ws.clone()))
+            }
+        },
+        None => None,
+    };
     let ws = if arg.is_empty() {
         focus_ws
     } else {

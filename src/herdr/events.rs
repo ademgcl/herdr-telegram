@@ -7,7 +7,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncWriteExt, BufReader},
     net::UnixStream,
 };
 
@@ -67,7 +67,13 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
     let mut ack = String::new();
     // Bounded like the watcher stream: a hung ack must return to the
     // backoff loop, never wedge the task. Empty acks reject (blind loop).
-    match tokio::time::timeout(Duration::from_secs(30), reader.read_line(&mut ack)).await {
+    // Take-during-read (ctl parity): a rogue line never OOMs (64KB cap).
+    match tokio::time::timeout(Duration::from_secs(30), async {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+        let mut limited = (&mut reader).take(65_536);
+        limited.read_line(&mut ack).await
+    })
+    .await {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => return Err(e.into()),
         Err(_) => return Err("event subscribe ack timed out".into()),
@@ -89,14 +95,22 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
             return Ok("refresh");
         }
         let mut line = String::new();
-        let n = match tokio::time::timeout(Duration::from_secs(90), reader.read_line(&mut line))
-            .await
+        // Bounded (ctl take-during-read parity): rogue lines skip, never OOM.
+        let n = match tokio::time::timeout(Duration::from_secs(90), async {
+            use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+            let mut limited = (&mut reader).take(262_144);
+            limited.read_line(&mut line).await
+        })
+        .await
         {
             Err(_) => return Ok("idle timeout"),
             Ok(res) => res?,
         };
         if n == 0 {
             return Ok("connection closed");
+        }
+        if line.len() >= 262_144 {
+            continue;
         }
         let Ok(ev) = serde_json::from_str::<Value>(line.trim()) else {
             continue;

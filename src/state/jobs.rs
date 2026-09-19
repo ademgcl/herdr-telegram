@@ -220,10 +220,9 @@ impl State {
         self.shell_gen.lock().await.get(pane).copied() == Some(epoch)
     }
 
-    /// Clear the shell intent only for our own generation: text first,
-    /// epoch second (submit order is remember-then-bump), then the
-    /// atomic text check-and-remove — a resubmit racing the send owns
-    /// the slot now, even byte-identical text.
+    /// Clear the shell intent only for our own generation (single
+    /// critical section, pending→shell_gen order): the old 3-lock
+    /// sequence let an identical resubmit wipe fresh intent.
     pub async fn clear_shell_if_matches(
         &self,
         pane: &str,
@@ -232,20 +231,25 @@ impl State {
         prompt: &str,
         epoch: u64,
     ) -> bool {
-        let mine = self
-            .pending
-            .lock()
-            .await
-            .get(pane)
-            .map(|p| p.chat == chat && p.thread == thread && p.prompt == prompt)
-            .unwrap_or(false);
-        if !mine {
-            return false;
-        }
-        if !self.shell_epoch_is(pane, epoch).await {
-            return false;
-        }
-        self.clear_pending_if_matches(pane, chat, thread, prompt).await
+        let snap = {
+            // Lock order pending → shell_gen (never inverted anywhere).
+            let mut pending = self.pending.lock().await;
+            let gens = self.shell_gen.lock().await;
+            let mine = pending
+                .get(pane)
+                .map(|p| p.chat == chat && p.thread == thread && p.prompt == prompt)
+                .unwrap_or(false);
+            if !mine {
+                return false;
+            }
+            if gens.get(pane).copied() != Some(epoch) {
+                return false;
+            }
+            pending.remove(pane);
+            pending.clone()
+        };
+        persist::save_file(&persist::store_path(), &snap);
+        true
     }
 
     /// Install a shell generation only when the pane has none (boot

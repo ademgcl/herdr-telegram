@@ -65,8 +65,7 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
                     }
                 };
                 if dead {
-                    s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None)
-                        .await;
+                    s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
                     return;
                 }
                 let mid =

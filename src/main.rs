@@ -87,7 +87,7 @@ async fn main() -> Res<()> {
                 break;
             }
             Err(e) => {
-                ping_err = e.to_string();
+                ping_err = crate::types::mask_home(&e.to_string());
                 if attempt == 5 {
                     break;
                 }

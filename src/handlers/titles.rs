@@ -105,7 +105,7 @@ pub async fn sync_titles_with(
             crate::handlers::dialog::retire_dialog(s, &p).await;
         }
     }
-    // One liveness probe per tick: human-deleted topics never fire a
+    // Scaled liveness probe per tick: human-deleted topics never fire a
     // rename (converged titles stay quiet), so without this the mapping
     // would dangle until a rename came due. Pruned panes retire their
     // dialog generation (same stale-sig silence as a reset remint).

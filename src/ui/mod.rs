@@ -60,3 +60,7 @@ pub const CARD_FAILED_PC: &str = "card failed too — answer on the PC";
 /// Single source for the stale-arm refuse (an expired run/keys waiter
 /// must never fire its write late — the retry is just tapping again).
 pub const ARM_EXPIRED: &str = "that button expired — tap it again";
+
+/// Single source for the stale-tap empty-screen ack (unverifiable tap:
+/// no buttons, no pane leak — heal follows). Dup'd literals re-drift.
+pub const UNKNOWN_BUTTON: &str = "unknown button — /card for fresh buttons";

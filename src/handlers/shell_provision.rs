@@ -52,13 +52,8 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
             }
         }
         None => {
-            s.tg.send_msg(
-                chat,
-                None,
-                "who? tap an agent in /agents, or reply to its last message",
-                None,
-            )
-            .await;
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                .await;
         }
     }
 }

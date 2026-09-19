@@ -80,7 +80,7 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
 /// Pane-id shape (`w1:p1`, dead `w9:p7`): `w<n>` colon `p<n>` suffix,
 /// no URL/mention chars. Pure for tests — ordinary words (`note:`,
 /// `note:p1`, `https://…`) return false so normal prompts never refuse.
-fn pane_shaped(head: &str) -> bool {
+pub(crate) fn pane_shaped(head: &str) -> bool {
     let Some((a, b)) = head.split_once(':') else {
         return false;
     };
@@ -154,9 +154,11 @@ pub(crate) async fn handle_bare_prompt(
         .as_deref()
         .and_then(|p| rows.iter().find(|r| r.pane == p))
         .cloned();
-    let via_focus = s
-        .get_focus()
-        .await
+    // Single focus read (no TOCTOU): a concurrent set_focus between
+    // two reads lost just-set live focus into sole/fallback misroute.
+    let focus = s.get_focus().await;
+    let via_focus = focus
+        .as_deref()
         .and_then(|p| rows.iter().find(|r| r.pane == p))
         .cloned();
 
@@ -192,17 +194,14 @@ pub(crate) async fn handle_bare_prompt(
         return;
     } else if let Some(r) = via_focus {
         (r, text.to_string())
-    } else if let Some(focus) = s
-        .get_focus()
-        .await
-        .filter(|f| rows.iter().all(|r| r.pane != *f))
-    {
+    } else if let Some(focus) = focus.filter(|f| rows.iter().all(|r| r.pane != *f)) {
         // Rowless focus (live shell or corpse) with no reply: the sole
         // agent below must not shadow it — shell text into the agent is
         // a cross-session write. Liveness probe first (reply-corpse
-        // parity): a corpse refuses UNKNOWN_TARGET instead of attempting
-        // a doomed shell write; an unreadable list falls through to the
-        // fallback, which reports gone/unreachable instead of writing.
+        // parity): a corpse refuses UNKNOWN_TARGET; an unreadable list
+        // refuses HERDR_UNREACHABLE (never masks outage as "gone").
+        // Pass the snapshot (no re-read inside the fallback): a concurrent
+        // set_focus between reads must not reroute shell text as a prompt.
         match crate::herdr::client::list_panes(&s.cfg.socket).await {
             Ok(l) if l.contains(&focus) => {}
             Ok(_) => {
@@ -210,18 +209,19 @@ pub(crate) async fn handle_bare_prompt(
                     .await;
                 return;
             }
-            Err(_) => {}
+            Err(_) => {
+                s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return;
+            }
         }
-        super::shell::run_shell_fallback(s, chat, None, text).await;
+        super::shell::run_shell_fallback(s, chat, Some(focus), text).await;
         return;
     } else if let Some(r) = resolve_target(rows, Some("")) {
-        // Sole agent: a leading pane-id prefix ("w1:p1 fix bug") is an
-        // address, not prompt text — strip it when present.
-        let prompt_text = match text.split_once(char::is_whitespace) {
-            Some((h, rest)) if h == r.pane && !rest.trim().is_empty() => rest.to_string(),
-            _ => text.to_string(),
-        };
-        (r, prompt_text)
+        // Sole agent: explicit already consumed any `<pane> <prompt>`
+        // address above, so the full text is the prompt (no prefix
+        // strip — the old strip was unreachable dead code).
+        (r, text.to_string())
     } else {
         // Reply/focus may point at a shell pane (invisible to agent.list).
         super::shell::run_shell_fallback(s, chat, reply_pane.clone(), text).await;

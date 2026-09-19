@@ -10,13 +10,14 @@ pub(crate) async fn handle_model(
 ) {
     // `/model [target] [search]` — first token is a target only when it
     // resolves to a pane/kind; otherwise the whole arg is the search.
-    // Pane-shaped (`w:p`) tokens are never search text: an unresolvable
-    // one is an explicit address — refuse instead of falling through to
-    // focus/sole with a junk filter driving the wrong picker's keys.
+    // Pane-shaped (`w<n>:p<n>`) or known-kind tokens are never search
+    // text: an unresolvable one is an explicit address — refuse instead
+    // of falling through to focus/sole with a junk filter driving the
+    // wrong picker's keys. Strict shape only (`note:fix`, URLs stay searches).
     let (mut pane, query) = match arg.split_once(char::is_whitespace) {
         Some((t, rest)) => match resolve_target(rows, Some(t)) {
             Some(r) => (Some(r.pane), rest.trim()),
-            None if t.contains(':') => {
+            None if super::dm_prompt::pane_shaped(t) || rows.iter().any(|r| r.kind == t) => {
                 s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                     .await;
                 return;
@@ -28,7 +29,7 @@ pub(crate) async fn handle_model(
                 (None, "")
             } else if let Some(r) = resolve_target(rows, Some(arg)) {
                 (Some(r.pane), "")
-            } else if arg.contains(':') {
+            } else if super::dm_prompt::pane_shaped(arg) || rows.iter().any(|r| r.kind == arg) {
                 s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
                     .await;
                 return;
@@ -56,14 +57,20 @@ pub(crate) async fn handle_model(
         .await;
         return;
     }
-    if pane.is_none()
-        && let Some(f) = s.get_focus().await
-        && rows.iter().any(|r| r.pane == f)
-    {
-        pane = Some(f);
-    }
     if pane.is_none() {
-        pane = resolve_target(rows, Some("")).map(|r| r.pane);
+        // Rowless focus must not shadow to sole-agent (wrong picker keys).
+        match s.get_focus().await {
+            Some(f) if rows.iter().any(|r| r.pane == f) => {
+                pane = Some(f);
+            }
+            Some(_) => {
+                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+                return;
+            }
+            None => {
+                pane = resolve_target(rows, Some("")).map(|r| r.pane);
+            }
+        }
     }
     let Some(pane) = pane else {
         s.tg.send_msg(
