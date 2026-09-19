@@ -75,7 +75,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
-    if super::dm_prompt::handle_typewait(&s, chat, text).await {
+    if super::dm_typewait::handle_typewait(&s, chat, text).await {
         return;
     }
 

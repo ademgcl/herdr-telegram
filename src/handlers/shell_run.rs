@@ -22,9 +22,20 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
         // Chat stays static (herdr errors carry socket/cwd paths — no
         // username leak); detail goes to the redacted log only.
-        // Single source (UNKNOWN_TARGET): dup'd "gone" literals re-drift.
+        // Dead-vs-blip probe (dm_info/tap parity): a live pane on a
+        // blip retries, only a confirmed-gone pane reports UNKNOWN_TARGET.
         eprintln!("[shell] send to {pane} failed: {}", s.tg.redact(&crate::types::mask_home(&e.to_string())));
-        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
+        match crate::herdr::client::list_panes(&s.cfg.socket).await {
+            Ok(l) if l.contains(&pane.to_string()) => {
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+            }
+            Ok(_) => {
+                s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None).await;
+            }
+            Err(_) => {
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
+            }
+        }
         return;
     }
     // Focus only after a live send: focusing a corpse re-arms every next
@@ -79,12 +90,8 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
         }
     };
     let pane = match create_tab(&s.cfg.socket, ws).await {
-        Ok(p) if !p.is_empty() => p,
-        Ok(_) => {
-            s.tg.send_msg(chat, thread, "⚠️ tab.create returned no pane", None)
-                .await;
-            return;
-        }
+        // create_tab fail-closed (empty→Err): no dead Ok-empty arm.
+        Ok(p) => p,
         Err(e) => {
             // Chat stays static (herdr errors carry socket/cwd paths);
             // detail goes to the redacted log only (run_shell_cmd parity).

@@ -1,82 +1,6 @@
 use super::target::resolve_target;
 use crate::{jobs::enqueue_prompt, state::AppState, types::AgentRow};
 
-/// Answering a waiting prompt (set by the ⌨️ button on blocked cards).
-/// Checked before routing: the next message belongs to the waiter.
-/// Returns true when the message was consumed.
-pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool {
-    // Peek first (mirrors topics): a blockop race or failed send must
-    // not consume the waiter — the retry is just sending again.
-    // Self-healing: a stale corpse evicts instead of bricking answers.
-    let Some((wpane, armed_at)) = s.typewait.lock().await.get(&(chat, None)).cloned() else {
-        return false;
-    };
-    // Corpse bound at consume (mirrors topics): a stale arm degrades
-    // to normal routing instead of answering a dead question.
-    if crate::state::guard::claim_stale(
-        armed_at,
-        std::time::Instant::now(),
-        crate::state::guard::TYPEWAIT_STALE_SECS,
-    ) {
-        s.typewait.lock().await.remove(&(chat, None));
-        return false;
-    }
-    if s.block_held(&wpane).await {
-        s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None)
-            .await;
-        return true;
-    }
-    match super::tap::type_text(s, &wpane, text).await {
-        Ok(()) => {
-            s.typewait.lock().await.remove(&(chat, None));
-            s.tg.send_msg(chat, None, &crate::ui::typed_ack(&wpane), None)
-                .await;
-            true
-        }
-        // Raced by a resume: the waiter is consumed — route the text to
-        // the waited pane as a prompt (never re-route via reply/focus:
-        // the answer belongs to wpane, and focus may point elsewhere).
-        // Fail-closed: a "/" answer must become a prompt, never DM
-        // control (a literal "/kill" as an answer must not kill).
-        Err(super::tap::TypeError::Resumed) => {
-            match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
-                Ok(a) => {
-                    s.typewait.lock().await.remove(&(chat, None));
-                    enqueue_prompt(
-                        crate::state::AppState::clone(s),
-                        chat,
-                        None,
-                        a.into(),
-                        text.to_string(),
-                    )
-                    .await;
-                }
-                Err(_) => {
-                    // Unreadable re-read after a resume: keep the
-                    // waiter with its ORIGINAL instant (never consume
-                    // on ambiguous read, never re-stamp now — a fresh
-                    // stamp would immortalize the waiter across a
-                    // prolonged outage) so the retry re-routes.
-                    s.typewait.lock().await.insert((chat, None), (wpane, armed_at));
-                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
-                        .await;
-                }
-            }
-            true
-        }
-        Err(e) => {
-            s.tg.send_msg(
-                chat,
-                None,
-                &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
-                None,
-            )
-            .await;
-            true
-        }
-    }
-}
-
 /// Pane-id shape (`w1:p1`, dead `w9:p7`): `w<n>` colon `p<n>` suffix,
 /// no URL/mention chars. Pure for tests — ordinary words (`note:`,
 /// `note:p1`, `https://…`) return false so normal prompts never refuse.
@@ -138,9 +62,26 @@ pub(crate) async fn handle_bare_prompt(
     // refuses with UNKNOWN_TARGET instead of prompting focus/sole-agent
     // with the address as text (fail-closed parity with dm_info.rs:30).
     // `pane_shaped` keeps ordinary `note:`/`https://` prompts serving.
+    // Explicit rowless shells (`w8:p7 ls`) serve via the shell fallback
+    // (/keys parity): liveness probe first, corpse refuses, outage retries.
     if resolve_target(rows, Some(head)).is_none()
         && (pane_shaped(head) || rows.iter().any(|r| r.kind == head))
     {
+        // Kinds never contain ':' so pane_shaped implies not-a-kind —
+        // no extra kind conjunct (zero-dead-code).
+        if pane_shaped(head) && !rest.trim().is_empty() {
+            match crate::herdr::client::list_panes(&s.cfg.socket).await {
+                Ok(l) if l.contains(&head.to_string()) => {
+                    super::shell::run_shell_fallback(s, chat, Some(head.to_string()), rest).await;
+                    return;
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None).await;
+                    return;
+                }
+            }
+        }
         s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
             .await;
         return;
@@ -223,8 +164,14 @@ pub(crate) async fn handle_bare_prompt(
         // strip — the old strip was unreachable dead code).
         (r, text.to_string())
     } else {
-        // Reply/focus may point at a shell pane (invisible to agent.list).
-        super::shell::run_shell_fallback(s, chat, reply_pane.clone(), text).await;
+        // No agent rows at all: reply may still name a rowless shell.
+        // Never re-read focus here (snapshot was None): a concurrent
+        // set_focus between reads must not reroute shell text as a prompt.
+        if let Some(rp) = reply_pane.clone() {
+            super::shell::run_shell_fallback(s, chat, Some(rp), text).await;
+        } else {
+            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None).await;
+        }
         return;
     };
 

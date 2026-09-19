@@ -15,10 +15,14 @@ use tokio::net::{TcpListener, TcpStream};
 
 pub async fn run_control_server(s: AppState, listener: TcpListener) {
     // No entropy → no socket (fail-closed): serving unauthenticated
-    // mutating commands is worse than no control plane at all.
+    // mutating commands is worse than no control plane at all. Hold the
+    // guard port (never drop the listener): releasing it would let a
+    // second instance bind → split-brain. Park holding the socket.
     let Some(token) = crate::ctl_auth::new_control_token() else {
-        eprintln!("[ctl] FATAL: no OS entropy for control token — control socket disabled");
-        return;
+        eprintln!("[ctl] FATAL: no OS entropy for control token — control socket disabled (holding guard)");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
     };
     write_control_token(&token);
     loop {

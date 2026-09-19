@@ -37,8 +37,7 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, reply: Option<String>, 
                 }),
                 Err(_) => match list_agents(&s.cfg.socket).await {
                     Err(_) => {
-                        s.tg.send_msg(chat, None, crate::ui::scope_text::HERDR_RETRY, None)
-                            .await;
+                        s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None).await;
                         return;
                     }
                     Ok(rows) => rows.into_iter().find(|r| r.pane == p),
@@ -178,12 +177,8 @@ pub async fn open_space_shell(s: &AppState, chat: i64, thread: Option<i64>, ws_i
 /// resolved — never `resolve_ws` here (fresh ids may not list yet).
 async fn create_tab_and_attach(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str, follow: bool) {
     let pane = match create_tab(&s.cfg.socket, ws_id).await {
-        Ok(p) if !p.is_empty() => p,
-        Ok(_) => {
-            s.tg.send_msg(chat, thread, "⚠️ tab.create returned no pane", None)
-                .await;
-            return;
-        }
+        // create_tab fail-closed (empty→Err): no dead Ok-empty arm.
+        Ok(p) => p,
         Err(e) => {
             s.tg.send_msg(chat, thread, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
             return;

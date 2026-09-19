@@ -143,9 +143,12 @@ pub fn build_ws_text(ws: &str, spaces: &[WorkspaceInfo], agents: &[AgentRow]) ->
 
 pub fn build_agent_card_text(a: &AgentDetail, space: &str) -> String {
     let branch_line = match &a.branch {
-        Some(b) => format!("\nbranch: 🌿 {b}"),
+        Some(b) => format!("\nbranch: 🌿 {}", crate::types::mask_home(b)),
         None => String::new(),
     };
+    // Mask $HOME in cwd + title (titles carry terminal paths).
+    let cwd = crate::types::mask_home(&a.cwd);
+    let title = crate::types::mask_home(&a.title);
     format!(
         "{} {} [{}]\nstatus: {}\nspace: {}{}\ncwd: {}\ntitle: {}",
         emoji(&a.status),
@@ -154,8 +157,8 @@ pub fn build_agent_card_text(a: &AgentDetail, space: &str) -> String {
         a.status,
         space,
         branch_line,
-        a.cwd,
-        a.title,
+        cwd,
+        title,
     )
 }
 
@@ -171,10 +174,10 @@ pub fn build_identity_card_text(
 ) -> String {
     let mut card = format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`");
     if let Some(t) = title.filter(|t| !t.trim().is_empty()) {
-        card.push_str(&format!("\nTitle: {}", t.trim()));
+        card.push_str(&format!("\nTitle: {}", crate::types::mask_home(t.trim())));
     }
     if let Some(b) = branch.filter(|b| !b.trim().is_empty()) {
-        card.push_str(&format!("\nBranch: 🌿 {}", b.trim()));
+        card.push_str(&format!("\nBranch: 🌿 {}", crate::types::mask_home(b.trim())));
     }
     let st_emoji = emoji(status);
     let display_status = if status == "idle" { "ready" } else { status };

@@ -86,8 +86,10 @@ pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
     } else if git_entry.is_file()
         && let Ok(content) = tokio::fs::read_to_string(&git_entry).await
         && let Some(gitdir) = content.trim().strip_prefix("gitdir:")
+        // Relative worktree gitdir resolves against the pane cwd, never
+        // the bot CWD (else wrong HEAD → wrong branch card, silently).
         && let Ok(head_content) =
-            tokio::fs::read_to_string(std::path::Path::new(gitdir.trim()).join("HEAD")).await
+            tokio::fs::read_to_string(cwd_path.join(gitdir.trim()).join("HEAD")).await
         && let Some(b) = parse_branch_from_head(&head_content)
     {
         return Some(b);

@@ -5,12 +5,9 @@
 use crate::{
     handlers::reset::is_resetting,
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
-    handlers::titles::sync_titles_with,
-    herdr::client::{get_agent, list_agents, list_workspaces, read_shell_output},
-    herdr::labels::{pane_facts, tab_labels},
+    herdr::client::{get_agent, list_agents, read_shell_output},
     jobs::finalize::report,
     notifier::hygiene::{panes_once, reap_orphans},
-    notifier::hygiene_flip::flip_dm_shells,
     notifier::limits::scan_limits,
     notifier::status::observe_status,
     state::AppState,
@@ -79,15 +76,30 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         // Vanish confirm: a single `list_agents` dropout (Ok but
         // partial) must not flip a live agent to shell (false "quit"
         // card + watcher retire). `get_agent` re-proves each suspect —
-        // only the still-missing proceed. Suspects-only, so the steady
-        // state costs zero extra RPCs.
+        // only the still-missing proceed. Fail-closed: a blip (timeout,
+        // unreachable) keeps the pane live; only a not-found answer
+        // confirms death. Suspects-only, so the steady state costs zero
+        // extra RPCs.
         let mut confirmed = Vec::with_capacity(missing.len());
         for pane in missing {
             match get_agent(&s.cfg.socket, &pane).await {
                 Ok(_) => {
                     live_panes.insert(pane);
                 }
-                Err(_) => confirmed.push(pane),
+                Err(e) => {
+                    let msg = e.to_string().to_lowercase();
+                    if msg.contains("not found")
+                        || msg.contains("no such")
+                        || msg.contains("unknown pane")
+                    {
+                        confirmed.push(pane);
+                    } else {
+                        // Blip keeps live (fail-closed): log so unmatched
+                        // herdr vocab stays visible instead of blind.
+                        eprintln!("[reconcile] kept {pane} on blip: {}", crate::types::mask_home(&e.to_string()));
+                        live_panes.insert(pane);
+                    }
+                }
             }
         }
         let missing = confirmed;
@@ -270,30 +282,6 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         }
     }
 
-    // DM mode has no topics, but `status` still drives the limit
-    // scanner — flip shell-reused panes (status + episode, no report).
-    if s.cfg.forum.is_none() {
-        flip_dm_shells(s, &live_panes, &mut pane_list).await;
-    }
-
-    // Mode-independent dead-pane hygiene (jobs, intent, per-pane maps
-    // for externally-closed panes). Fail-open on Err/empty (see hygiene).
-    reap_orphans(s, &mut pane_list).await;
-
-    // 1:1 tab↔topic titles (herdr tab names win; native TG renames
-    // flow back via forum_topic_edited). Reuses this tick's rows plus
-    // one spaces/facts/tabs fetch — no extra list_agents per tick.
-    // Fail-closed: any degraded fetch skips the tick (never tag/? mass
-    // reformats); an Ok-but-empty facts map is still safe (unknown panes
-    // skip per-pane inside).
-    if s.cfg.forum.is_some() {
-        let (Some(spaces), Some(facts), Some(tabs)) = (
-            list_workspaces(&s.cfg.socket).await.ok(),
-            pane_facts(&s.cfg.socket).await.ok(),
-            tab_labels(&s.cfg.socket).await.ok(),
-        ) else {
-            return;
-        };
-        sync_titles_with(s, &rows, &spaces, &facts, &tabs).await;
-    }
+    // DM flip + hygiene + titles tail (split: 300-line file limit).
+    super::reconcile_tail::reconcile_tail(s, &rows, &live_panes, &mut pane_list).await;
 }

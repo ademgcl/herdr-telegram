@@ -93,12 +93,15 @@ pub async fn close_pane(socket: &str, pane: &str) -> Res<()> {
 }
 
 /// Fresh tab in `ws`, returning its root (shell) pane id.
+/// Malformed replies error (workspaces parity): empty ids must not flow
+/// downstream fail-open as ghost panes.
 pub async fn create_tab(socket: &str, ws: &str) -> Res<String> {
     let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
-    Ok(tab["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string())
+    let pane = tab["root_pane"]["pane_id"].as_str().unwrap_or("").to_string();
+    if pane.is_empty() {
+        return Err("tab.create returned no pane".into());
+    }
+    Ok(pane)
 }
 
 /// Numeric suffix of a pane id (`wJ:p12` → 12): orders panes within a

@@ -38,11 +38,14 @@ pub async fn rpc_t(socket: &str, method: &str, params: Value, timeout_secs: u64)
         // close, rename) ignore the value, and failing them on a bare
         // ack would break working submits.
         if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
-            return Err(e["message"]
-                .as_str()
-                .unwrap_or("herdr error")
-                .to_string()
-                .into());
+            // Object-form (`{"message": ...}`) or string-form errors both
+            // passthrough (string-form must not collapse to generic or
+            // `contains("blocked")` dispatch misses the blocked-card path).
+            let msg = match e {
+                Value::String(s) => s.clone(),
+                _ => e["message"].as_str().unwrap_or("herdr error").to_string(),
+            };
+            return Err(msg.into());
         }
         Ok(v.get("result").cloned().unwrap_or(Value::Null))
     };

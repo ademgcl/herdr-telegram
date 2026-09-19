@@ -6,6 +6,7 @@ pub mod limit_decide;
 pub mod limits;
 pub mod reconcile;
 pub mod reconcile_close;
+pub mod reconcile_tail;
 pub mod spontaneous;
 pub mod status;
 

@@ -10,8 +10,14 @@ impl State {
         let Some(msg_id) = msg_id else { return };
         self.topics.record_msg(pane, msg_id);
         // Lock order (never inverted anywhere): torder → targets.
+        // LRU refresh on hit: hot cards survive the 512-cap, cold corpses evict first.
         let mut ord = self.torder.lock().await;
         let mut map = self.targets.lock().await;
+        if map.insert((chat, msg_id), pane.to_string()).is_some() {
+            ord.retain(|k| *k != (chat, msg_id));
+            ord.push_back((chat, msg_id));
+            return;
+        }
         while map.len() >= 512 {
             match ord.pop_front() {
                 Some(old) => {
@@ -20,9 +26,7 @@ impl State {
                 None => break,
             }
         }
-        if map.insert((chat, msg_id), pane.to_string()).is_none() {
-            ord.push_back((chat, msg_id));
-        }
+        ord.push_back((chat, msg_id));
     }
 
     /// Retire one card target (same lock order): `targets.remove` alone
