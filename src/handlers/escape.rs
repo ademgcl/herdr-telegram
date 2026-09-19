@@ -32,6 +32,31 @@ async fn gone_ack(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     }
 }
 
+/// Shared not-blocked ack (single source for pre + post gates):
+/// remedy syntax differs by surface (topics own-pane, DM names pane).
+async fn not_blocked_msg(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, status: &str) {
+    let hint = match thread {
+        Some(_) => "`/keys esc`".to_string(),
+        None => format!("`/keys {pane} esc`"),
+    };
+    s.tg.send_msg(
+        chat,
+        thread,
+        &crate::ui::not_blocked_ack(status, Some(&hint)),
+        None,
+    )
+    .await;
+}
+
+/// Shared get_agent error ack (single source for all gates): classified
+/// death → gone probe, blips → retryable. Never UNKNOWN_TARGET on outage.
+/// Verdict via esc_guard::classify (pinned by test).
+async fn get_err_msg(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, msg: &str) {
+    match super::esc_guard::classify(Err(msg.to_string())) {
+        super::esc_guard::EscGate::Gone => gone_ack(s, chat, thread, pane).await,
+        _ => _ = s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await,
+    }
+}
 /// Re-post the pane's live dialog card. Read-only: never sends keys,
 /// never clears waiters, refuses while a tap owns the pane.
 /// Self-healing peek: a stale corpse evicts so /card stays a way out.
@@ -49,16 +74,10 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             }
         }
         Ok(a) => {
-            s.tg.send_msg(
-                chat,
-                thread,
-                &crate::ui::not_blocked_ack(&a.status, None),
-                None,
-            )
-            .await;
+            not_blocked_msg(s, chat, thread, pane, &a.status).await;
         }
-        Err(_) => {
-            gone_ack(s, chat, thread, pane).await;
+        Err(e) => {
+            get_err_msg(s, chat, thread, pane, &e.to_string()).await;
         }
     }
 }
@@ -75,23 +94,11 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if a.status == "blocked" => {}
         Ok(a) => {
-            // Remedy syntax differs by surface: topics send own-pane
-            // keys, DM must name the pane.
-            let keys_hint = match thread {
-                Some(_) => "`/keys esc`".to_string(),
-                None => format!("`/keys {pane} esc`"),
-            };
-            s.tg.send_msg(
-                chat,
-                thread,
-                &crate::ui::not_blocked_ack(&a.status, Some(&keys_hint)),
-                None,
-            )
-            .await;
+            not_blocked_msg(s, chat, thread, pane, &a.status).await;
             return;
         }
-        Err(_) => {
-            gone_ack(s, chat, thread, pane).await;
+        Err(e) => {
+            get_err_msg(s, chat, thread, pane, &e.to_string()).await;
             return;
         }
     }
@@ -104,6 +111,21 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     // so the Esc reads instant and cannot double-fire. Text untouched.
     crate::handlers::dialog::strip_tracked(s, pane).await;
     let before = read_screen_visible(&s.cfg.socket, pane, 30).await;
+    // Re-validate after the slow read: a resume in the window must not
+    // receive an Esc into live work (tap_keys parity — gate, read, gate).
+    // Blips retry (fail-closed, no Esc, no gone report); classified death
+    // takes the gone probe. Verdict via esc_guard::classify (pinned).
+    match get_agent(&s.cfg.socket, pane).await {
+        Ok(a) if a.status == "blocked" => {}
+        Ok(a) => {
+            not_blocked_msg(s, chat, thread, pane, &a.status).await;
+            return;
+        }
+        Err(e) => {
+            get_err_msg(s, chat, thread, pane, &e.to_string()).await;
+            return;
+        }
+    }
     if send_agent_keys(&s.cfg.socket, pane, &["esc"])
         .await
         .is_err()

@@ -15,6 +15,22 @@ pub fn recoverable(started_unix: u64, now: u64) -> bool {
     now.saturating_sub(started_unix) <= 86400 && started_unix <= now.saturating_add(3600)
 }
 
+/// Atomic watcher claim: check + insert under the caller's single
+/// jobs-lock hold. Returns false when a watcher already owns the pane
+/// (a concurrent re-arm won the race) — caller must stand down, never
+/// run two watchers. Pure over the map so tests pin the verdict.
+pub(crate) fn claim_watcher(
+    jobs: &mut std::collections::HashMap<String, std::sync::Arc<Job>>,
+    pane: &str,
+    job: std::sync::Arc<Job>,
+) -> bool {
+    if jobs.contains_key(pane) {
+        return false;
+    }
+    jobs.insert(pane.to_string(), job);
+    true
+}
+
 /// Boot recovery: re-arm watchers for prompts orphaned by a restart so
 /// their replies still land. Dead panes and stale entries are dropped.
 pub async fn recover_pending(s: &AppState) {
@@ -170,20 +186,20 @@ pub async fn recover_pending(s: &AppState) {
             }
         }
         let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-        // Defensive: never run two watchers on one pane (two episodes =
-        // double alerts for the same stall). Boot runs once with an empty
-        // map, but a re-entrant call must not duplicate.
-        if s.jobs.lock().await.contains_key(&pane) {
-            println!("[recover] already watched {pane}, skipping");
-            continue;
-        }
         let job = Job::new(baseline, pp.chat, pp.thread);
         *job.prompt.lock().await = pp.prompt.clone();
         // The intent file holds one owed prompt: mirror it in the
         // in-memory count or the next failed submit reads owed==0 and
         // retires the watcher + wipes this intent.
         *job.pending.lock().await = 1;
-        s.jobs.lock().await.insert(pane.clone(), job.clone());
+        // Single acquisition: check + insert under ONE jobs-lock hold.
+        // The awaits above released every lock, so a concurrent re-arm
+        // could have inserted this pane meanwhile — never run two
+        // watchers. Holding one guard across both closes the race.
+        if !claim_watcher(&mut *s.jobs.lock().await, &pane, job.clone()) {
+            println!("[recover] already watched {pane}, skipping");
+            continue;
+        }
         // Stagger re-arms: dozens of pendings must not open dozens of
         // event streams + reads against herdr in the same instant.
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -204,5 +220,19 @@ mod tests {
         assert!(!recoverable(now - 86401, now)); // stale
         assert!(!recoverable(now + 3601, now)); // future clock jump
         assert!(recoverable(now + 60, now)); // small skew tolerated
+    }
+
+    #[test]
+    fn test_claim_watcher_single_owner_wins() {
+        // First claim inserts; a racing second claim for the same pane
+        // stands down (no duplicate watchers → no double alerts).
+        let mut map = std::collections::HashMap::new();
+        let a = Job::new(vec![], 1, None);
+        let b = Job::new(vec![], 2, None);
+        assert!(claim_watcher(&mut map, "w1:p1", a.clone()));
+        assert!(!claim_watcher(&mut map, "w1:p1", b.clone()));
+        assert!(std::sync::Arc::ptr_eq(map.get("w1:p1").unwrap(), &a));
+        // Distinct pane still claims.
+        assert!(claim_watcher(&mut map, "w1:p2", b));
     }
 }

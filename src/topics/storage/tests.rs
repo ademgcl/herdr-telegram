@@ -198,6 +198,26 @@ fn test_recent_msgs_roundtrip_and_bounding() {
 }
 
 #[test]
+fn test_remove_tag_if_threadless_rolls_back_failed_create() {
+    // Failed creates must not leak threadless tags (tag gaps forever):
+    // a tag with no thread rolls back, a threaded tag survives.
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-tagrollback-{}.json", std::process::id())),
+    );
+    let tag = st.assign_tag("w1:p9", "opencode");
+    assert_eq!(st.get_tag("w1:p9"), Some(tag));
+    assert_eq!(st.get_thread("w1:p9"), None);
+    st.remove_tag_if_threadless("w1:p9");
+    assert_eq!(st.get_tag("w1:p9"), None);
+    // Threaded tags are never rolled back.
+    st.assign_tag("w1:p1", "opencode");
+    st.insert("w1:p1".into(), 42);
+    st.remove_tag_if_threadless("w1:p1");
+    assert!(st.get_tag("w1:p1").is_some());
+    let _ = std::fs::remove_file(&st.file_path);
+}
+
+#[test]
 fn test_empty_main_falls_back_to_prev() {
     // A zeroed main (failed copy, truncate, disk-full artifact) must
     // restore `.prev` like corrupt does — never wipe every mapping

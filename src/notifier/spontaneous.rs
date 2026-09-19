@@ -37,6 +37,18 @@ pub(crate) fn liveness(live: Option<&Vec<String>>, pane: &str) -> Liveness {
     }
 }
 
+/// Settle-arm currency (single source for forum + DM inside-post
+/// re-checks): missing means cancelled, any status/instant mismatch means
+/// superseded. Pure for tests.
+pub(crate) fn arm_superseded(
+    cur: Option<(&str, &std::time::Instant)>,
+    settled: &str,
+    armed_at: &std::time::Instant,
+) -> bool {
+    cur.map(|(st, at)| st != settled || at != armed_at)
+        .unwrap_or(true)
+}
+
 /// Answer push: the body alone (never a status-word lead), plus the reply
 /// affordance when input is needed. Blocked keeps its urgent prefix.
 /// True when a part landed: drops must neither stamp `last_done` (it
@@ -92,15 +104,15 @@ pub(crate) async fn post_spontaneous_card(
             if s.jobs.lock().await.contains_key(pane) {
                 return false;
             }
-            if let Some(at) = armed_at
-                && s.debounce
-                    .lock()
-                    .await
-                    .get(pane)
-                    .map(|(st, a)| st != settled || a != &at)
-                    .unwrap_or(true)
-            {
-                return false;
+            if let Some(at) = armed_at {
+                let cur = s.debounce.lock().await.get(pane).cloned();
+                if arm_superseded(
+                    cur.as_ref().map(|(st, a)| (st.as_str(), a)),
+                    settled,
+                    &at,
+                ) {
+                    return false;
+                }
             }
             if let Some(at) = armed_at
                 && let Some(t) = s.last_done.lock().await.get(pane)
@@ -124,6 +136,12 @@ pub(crate) async fn post_spontaneous_card(
         // DM immediate: no sync RPC, check immediately before sends.
         if s.jobs.lock().await.contains_key(pane) {
             return false;
+        }
+        if let Some(at) = armed_at {
+            let cur = s.debounce.lock().await.get(pane).cloned();
+            if arm_superseded(cur.as_ref().map(|(st, a)| (st.as_str(), a)), settled, &at) {
+                return false;
+            }
         }
         if let Some(at) = armed_at
             && let Some(t) = s.last_done.lock().await.get(pane)
@@ -200,5 +218,17 @@ mod tests {
             liveness(Some(&Vec::new()), "w1:p1"),
             Liveness::Ambiguous
         );
+    }
+
+    #[test]
+    fn test_arm_superseded_currency() {
+        // Exact arm proceeds; missing means cancelled; any mismatch
+        // (newer arm, status flip) aborts the stale post.
+        let at = std::time::Instant::now();
+        let later = at + std::time::Duration::from_secs(1);
+        assert!(!arm_superseded(Some(("done", &at)), "done", &at));
+        assert!(arm_superseded(None, "done", &at));
+        assert!(arm_superseded(Some(("done", &later)), "done", &at));
+        assert!(arm_superseded(Some(("idle", &at)), "done", &at));
     }
 }

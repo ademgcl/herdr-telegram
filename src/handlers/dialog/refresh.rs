@@ -18,6 +18,45 @@ async fn is_known_sig(s: &AppState, pane: &str, sig: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Post-read verdict for the blocked-card gate (single source for the
+/// pre + post slow-read checks): a resume owns the pane (resolve, no
+/// post), a classified-dead shell resolves too, blips fall through so an
+/// outage never bricks real dialogs. Pure for tests.
+#[derive(Debug, PartialEq)]
+pub(crate) enum RefreshGate {
+    Proceed,
+    Resolve,
+}
+
+pub(crate) fn post_read_gate(status: Result<&str, &str>, is_shell: bool) -> RefreshGate {
+    match status {
+        Ok("blocked") => RefreshGate::Proceed,
+        Ok(_) => RefreshGate::Resolve,
+        Err(m) if crate::herdr::rpc::is_not_found(m) && is_shell => RefreshGate::Resolve,
+        Err(_) => RefreshGate::Proceed,
+    }
+}
+
+/// Single RPC gate for both pre + post slow-read checks: classifies via
+/// post_read_gate (pinned). Shell probe runs only on classified death.
+async fn refresh_gate(s: &AppState, pane: &str) -> RefreshGate {
+    match get_agent(&s.cfg.socket, pane).await {
+        Ok(a) => post_read_gate(Ok(a.status.as_str()), false),
+        Err(e) => {
+            let msg = e.to_string();
+            if crate::herdr::rpc::is_not_found(&msg) {
+                let shell = crate::herdr::client::list_panes(&s.cfg.socket)
+                    .await
+                    .map(|l| l.contains(&pane.to_string()))
+                    .unwrap_or(false);
+                post_read_gate(Err(msg.as_str()), shell)
+            } else {
+                post_read_gate(Err(msg.as_str()), false)
+            }
+        }
+    }
+}
+
 /// Content-addressed blocked post for status observations: repeats of
 /// the same dialog stay silent, a NEW dialog posts even with no status
 /// transition. Skips while a tap is in flight (it owns the update) and
@@ -36,32 +75,22 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     if s.cfg.forum.is_some() && !s.topics.all_mappings().contains_key(pane) {
         return false;
     }
-    match get_agent(&s.cfg.socket, pane).await {
-        Ok(a) if a.status != "blocked" => {
-            // Answered elsewhere (PC tap/dismiss, typed on the box):
-            // the posted buttons must come off, not linger as bait.
-            super::surfaces::resolve_cards(s, pane).await;
-            return false;
-        }
-        // No agent here: shells never need blocked cards (a delayed
-        // refresh after quit-to-shell would post a ghost). Fail-closed:
-        // only a classified death consults the shell probe — a blip
-        // (timeout) on a live blocked agent falls through to the screen
-        // read below (empty on outage → silent, buttons untouched).
-        Err(e) if crate::herdr::rpc::is_not_found(&e.to_string()) => {
-            let shell = crate::herdr::client::list_panes(&s.cfg.socket)
-                .await
-                .map(|l| l.contains(&pane.to_string()))
-                .unwrap_or(false);
-            if shell {
-                super::surfaces::resolve_cards(s, pane).await;
-                return false;
-            }
-        }
-        _ => {}
+    // No agent here: shells never need blocked cards (a delayed refresh
+    // after quit-to-shell would post a ghost). Answered elsewhere also
+    // resolves (buttons must not linger as bait).
+    if refresh_gate(s, pane).await == RefreshGate::Resolve {
+        super::surfaces::resolve_cards(s, pane).await;
+        return false;
     }
     let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
     if screen.is_empty() || is_blank_card(&screen) {
+        return false;
+    }
+    // Post-read re-validation: a resume during the slow read owns the
+    // pane now — never post a blocked card with live buttons into live
+    // work. Blips fall through (outage must not brick real dialogs).
+    if refresh_gate(s, pane).await == RefreshGate::Resolve {
+        super::surfaces::resolve_cards(s, pane).await;
         return false;
     }
     let sig = dialog_sig(&screen);
@@ -106,4 +135,36 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         println!("[alert] blocked card {pane}");
     }
     posted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_post_read_gate_resume_vs_blip() {
+        // Live blocked proceeds; a resume during the slow read resolves.
+        assert_eq!(post_read_gate(Ok("blocked"), false), RefreshGate::Proceed);
+        assert_eq!(post_read_gate(Ok("working"), false), RefreshGate::Resolve);
+        assert_eq!(post_read_gate(Ok("idle"), true), RefreshGate::Resolve);
+        // Classified-dead shell resolves (no ghost card); the same death
+        // with no shell falls through (pre-existing shell probe decides).
+        assert_eq!(
+            post_read_gate(Err("agent_not_found"), true),
+            RefreshGate::Resolve
+        );
+        assert_eq!(
+            post_read_gate(Err("agent_not_found"), false),
+            RefreshGate::Proceed
+        );
+        // Blips fall through — an outage must not brick real dialogs.
+        assert_eq!(
+            post_read_gate(Err("herdr timed out"), false),
+            RefreshGate::Proceed
+        );
+        assert_eq!(
+            post_read_gate(Err("herdr timed out"), true),
+            RefreshGate::Proceed
+        );
+    }
 }

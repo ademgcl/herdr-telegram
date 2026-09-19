@@ -206,17 +206,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     {
         return;
     }
-    if s.status
-        .lock()
-        .await
-        .get(&pane)
-        .map(|st| {
-            st != &settled
-                && !(matches!(settled.as_str(), "idle" | "done")
-                    && matches!(st.as_str(), "idle" | "done"))
-        })
-        .unwrap_or(true)
-    {
+    if super::retry_guard::moved_on(
+        s.status.lock().await.get(&pane).map(String::as_str),
+        &settled,
+    ) {
         // Moved on: exact-consume only (a newer arm survives).
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
@@ -237,8 +230,15 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // Refusals (takeover, newer last_done/arm, moved-on) break instead
     // of spinning; reset aborts the loop.
     let mut delivered = false;
-    for _ in 0..3 {
+    for i in 0..3 {
         if crate::handlers::reset::is_resetting() {
+            break;
+        }
+        // Post-sleep re-check (window = 15s inter-retry sleep): work
+        // starting mid-sleep owns the pane now — moved-on stays silent.
+        // First iteration already passed the pre-post guards above; the
+        // post itself re-checks jobs/arm/done before every send.
+        if i > 0 && super::retry_guard::moved_on_now(&s, &pane, &settled).await {
             break;
         }
         if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at)).await
@@ -270,18 +270,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
             break;
         }
         // Spontaneous new work started mid-retry: down-window silence.
-        let moved_on = s
-            .status
-            .lock()
-            .await
-            .get(&pane)
-            .map(|st| {
-                st != &settled
-                    && !(matches!(settled.as_str(), "idle" | "done")
-                        && matches!(st.as_str(), "idle" | "done"))
-            })
-            .unwrap_or(true);
-        if moved_on {
+        if super::retry_guard::moved_on_now(&s, &pane, &settled).await {
             break;
         }
         tokio::time::sleep(Duration::from_secs(15)).await;

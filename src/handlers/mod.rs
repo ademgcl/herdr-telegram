@@ -12,6 +12,7 @@ pub mod dm_model;
 pub mod dm_prompt;
 pub mod dm_typewait;
 pub mod escape;
+pub mod esc_guard;
 pub mod forum;
 pub mod forum_topic;
 pub mod forum_topic_status;

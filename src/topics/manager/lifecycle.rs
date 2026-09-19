@@ -207,6 +207,11 @@ impl TopicManager {
                     "[reset] create topic failed for {pane}: {}",
                     self.tg.redact(&e.to_string())
                 );
+                // Roll back the tag when nothing was minted (ensure_inner
+                // parity): failed creates must not leak threadless tags.
+                if self.storage.get_thread(pane).is_none() {
+                    self.storage.remove_tag_if_threadless(pane);
+                }
                 return None;
             }
         };
