@@ -19,7 +19,11 @@ pub fn plist_path(home: &str) -> PathBuf {
 /// Prod must run the release binary (state/log/cwd parity with the
 /// documented setup); a debug `dev install` would pin a dev build.
 pub fn release_exe(exe: &str) -> bool {
-    exe.contains("target/release")
+    // Component-exact, never substring: `…/target/release-evil/…` or
+    // `…/target/release.bak/debug/…` must not pass the gate.
+    let mut parts = exe.split('/').rev();
+    let file_ok = parts.next().is_some_and(|f| !f.is_empty());
+    file_ok && parts.next() == Some("release") && parts.next() == Some("target")
 }
 
 pub fn render_plist(exe: &str, dir: &str) -> String {
@@ -99,13 +103,41 @@ pub async fn install(home: &str) -> Res<()> {
     let _ = launchctl(&["bootout", &format!("gui/{id}/{LABEL}")]).await;
     // Fail-closed: a STILL-busy guard means a foreign owner (dev
     // console, manual run) — restore the previous job (old plist is
-    // untouched) and refuse instead of orphaning prod.
-    let port = proc::guard_port()?;
+    // untouched) and refuse instead of orphaning prod. Every early
+    // return below restores too: bootout already ran, so a bad port or
+    // a failed plist write must not leave prod DOWN.
+    let port = match proc::guard_port() {
+        Ok(p) => p,
+        Err(e) => {
+            let (ok, err) =
+                launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
+            if !ok {
+                return Err(format!("{e} (previous job restore FAILED: {err})").into());
+            }
+            return Err(e);
+        }
+    };
     if proc::port_busy(port) || !proc::bot_pids().is_empty() {
-        let _ = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
+        // The previous job was bootouted above: a failed restore leaves
+        // prod DOWN while the error says only "guard busy". Report the
+        // restore outcome loudly instead of swallowing it.
+        let (ok, err) = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
+        if !ok {
+            return Err(format!(
+                "guard busy — dev stop/cleanup first, then dev install (previous job restore FAILED: {err})"
+            )
+            .into());
+        }
         return Err("guard busy — dev stop/cleanup first, then dev install".into());
     }
-    std::fs::write(&path, render_plist(&exe, &dir)).map_err(|e| format!("write plist: {e}"))?;
+    if let Err(e) = std::fs::write(&path, render_plist(&exe, &dir)) {
+        let (ok, rerr) =
+            launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
+        if !ok {
+            return Err(format!("write plist: {e} (previous job restore FAILED: {rerr})").into());
+        }
+        return Err(format!("write plist: {e}").into());
+    }
     let (ok, err) = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
     if !ok {
         return Err(format!("bootstrap failed: {err}").into());
@@ -162,6 +194,10 @@ mod tests {
     fn test_release_exe_gate() {
         assert!(release_exe("/r/target/release/herdr-telegram"));
         assert!(!release_exe("/r/target/debug/herdr-telegram"));
+        // Substring lookalikes must not pass the prod gate.
+        assert!(!release_exe("/tmp/target/release-evil/herdr-telegram"));
+        assert!(!release_exe("/r/target/release.bak/debug/herdr-telegram"));
+        assert!(!release_exe("herdr-telegram"));
     }
 
     #[test]

@@ -12,10 +12,21 @@ use std::process::Stdio;
 /// port than the daemon: split-brain).
 pub fn guard_port() -> Res<u16> {
     match crate::config::env_or_file("HERDR_TG_PORT") {
-        Some(v) => v
-            .trim()
-            .parse()
-            .map_err(|_| "HERDR_TG_PORT invalid (must be a port number)".into()),
+        Some(v) => {
+            let port: u16 = v
+                .trim()
+                .parse()
+                .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+                    "HERDR_TG_PORT invalid (must be a port number)".into()
+                })?;
+            // Port 0 binds an OS-assigned ephemeral port, which always
+            // succeeds — the single-instance guard would never fire and
+            // two daemons would run side by side. Reject fail-closed.
+            if port == 0 {
+                return Err("HERDR_TG_PORT invalid (must be a port number)".into());
+            }
+            Ok(port)
+        }
         None => Ok(SINGLE_INSTANCE_PORT),
     }
 }
@@ -23,11 +34,12 @@ pub fn guard_port() -> Res<u16> {
 /// Herdr socket for the status row (same default as the daemon).
 pub fn herdr_socket() -> String {
     let raw = crate::config::env_or_file("HERDR_SOCKET").unwrap_or_default();
-    if raw.trim().is_empty() {
+    let v = raw.trim();
+    if v.is_empty() {
         let home = crate::types::home_dir();
         return format!("{home}/.config/herdr/herdr.sock");
     }
-    raw
+    v.to_string()
 }
 
 /// Port busy probe: bind it ourselves — exact, no lsof. TOCTOU

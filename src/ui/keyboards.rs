@@ -118,6 +118,9 @@ pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
 }
 
 pub fn agent_card_kb(pane: &str, ws_id: &str, ws_label: &str) -> Value {
+    // Space labels are user-controlled (/space): cap like the menu arms
+    // or long names fail sendMessage with BUTTON_TEXT_INVALID.
+    let ws_label: String = ws_label.chars().take(28).collect();
     json!([
         [
             btn("📄 output", &format!("o:{pane}")),
@@ -138,6 +141,14 @@ pub fn pane_output_kb(pane: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_agent_card_kb_caps_long_space_label() {
+        let long = "x".repeat(100);
+        let kb = agent_card_kb("w1:p1", "w1", &long);
+        let text = kb[2][0]["text"].as_str().unwrap();
+        assert!(text.chars().count() <= 30, "uncapped label: {text:?}");
+    }
 
     #[test]
     fn test_topic_link_private_super() {

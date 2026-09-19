@@ -29,7 +29,12 @@ impl TelegramClient {
             .timeout(timeout)
             .send()
             .await?;
-        let v: Value = resp.json().await?;
+        // `.timeout()` above covers `.send()` (headers) only — a stalled
+        // body would hang the poll/watchdog loop inside `json()`. Bound
+        // the read with the same budget instead of hanging forever.
+        let v: Value = tokio::time::timeout(timeout, resp.json::<Value>())
+            .await
+            .map_err(|_| "telegram response timed out")??;
         if v["ok"].as_bool() != Some(true) {
             let desc = v["description"].as_str().unwrap_or("telegram error");
             return Err(desc.to_string().into());
@@ -51,6 +56,26 @@ impl TelegramClient {
             .parse::<u64>()
             .ok()
             .map(|s| Duration::from_secs(s + 1))
+    }
+
+    /// True when a Telegram error string is a transient server/net
+    /// fault worth retrying. `call` turns HTTP-200 `ok:false` bodies
+    /// into plain string errors, so Telegram 5xx arrives exactly that
+    /// way ("Internal Server Error") and a reqwest downcast alone never
+    /// matches them — the fatal shapes above already returned early.
+    /// Single source: `call_retrying` and the loud send path share it.
+    pub(crate) fn is_transient_msg(msg: &str) -> bool {
+        let low = msg.to_lowercase();
+        [
+            "internal server error",
+            "bad gateway",
+            "service unavailable",
+            "gateway timeout",
+            "timed out",
+            "connection reset",
+        ]
+        .iter()
+        .any(|m| low.contains(m))
     }
 
     /// Execute a Telegram API call with 429 flood-wait (`retry_after`)
@@ -82,20 +107,6 @@ impl TelegramClient {
                         continue;
                     }
                     attempts += 1;
-                    // `call` turns HTTP-200 `ok:false` bodies into plain
-                    // string errors, so the reqwest downcast below never
-                    // matches them: Telegram 5xx arrives exactly that way
-                    // ("Internal Server Error") and must retry, while the
-                    // fatal shapes above already returned early.
-                    let low = msg.to_lowercase();
-                    let server_markers = [
-                        "internal server error",
-                        "bad gateway",
-                        "service unavailable",
-                        "gateway timeout",
-                        "timed out",
-                        "connection reset",
-                    ];
                     let retryable = e
                         .downcast_ref::<reqwest::Error>()
                         .map(|re| {
@@ -104,7 +115,7 @@ impl TelegramClient {
                                 || re.status().map(|s| s.is_server_error()).unwrap_or(false)
                         })
                         .unwrap_or(false)
-                        || server_markers.iter().any(|m| low.contains(m));
+                        || Self::is_transient_msg(&msg);
                     if !retryable || attempts >= 3 {
                         return Err(e);
                     }
@@ -166,6 +177,14 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// True when a Telegram error means the token is dead (revoked/
+    /// invalid), never a transient fault. Matches the `Unauthorized`
+    /// description Telegram sends for bad tokens — never a bare `"401"`
+    /// substring, which also appears in retry intervals, message text,
+    /// and chat ids and would FATAL-exit a healthy daemon.
+    pub(crate) fn is_unauthorized(msg: &str) -> bool {
+        msg.contains("Unauthorized") || msg.contains("unauthorized")
+    }
     /// Fire-and-forget menu registration: the menu persists server-side
     /// once set, so a blip at boot must not fail the boot (fail-dead =
     /// launchd crash-loop for the whole outage). Boot continues
@@ -182,7 +201,7 @@ impl TelegramClient {
                     Ok(()) => break,
                     Err(e) => {
                         let msg = self.redact(&e.to_string());
-                        if msg.contains("401") || msg.contains("Unauthorized") {
+                        if Self::is_unauthorized(&msg) {
                             eprintln!(
                                 "[telegram] FATAL: setMyCommands Unauthorized — token invalid, fix .env + restart ({msg})"
                             );
@@ -200,89 +219,5 @@ impl TelegramClient {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn test_client() -> TelegramClient {
-        TelegramClient::new("fake-token-123".to_string()).expect("client build")
-    }
-
-    #[test]
-    fn redact_replaces_token() {
-        let c = test_client();
-        let out = c.redact("https://api.telegram.org/botfake-token-123/getUpdates failed");
-        assert!(!out.contains("fake-token-123"));
-        assert!(out.contains("<redacted>"));
-    }
-
-    #[test]
-    fn test_redact_leaves_clean_input_unchanged() {
-        let c = test_client();
-        assert_eq!(c.redact("connection reset"), "connection reset");
-    }
-
-    #[test]
-    fn test_retry_after_parsing() {
-        use std::time::Duration;
-        // +1s bias on top of the asked wait.
-        assert_eq!(
-            TelegramClient::retry_after("Too Many Requests: retry after 30"),
-            Some(Duration::from_secs(31))
-        );
-        assert_eq!(
-            TelegramClient::retry_after("retry after 0"),
-            Some(Duration::from_secs(1))
-        );
-        assert_eq!(TelegramClient::retry_after("connection reset"), None);
-        assert_eq!(TelegramClient::retry_after("retry after many"), None);
-    }
-
-    #[test]
-    fn test_menu_names_tags_and_no_alias() {
-        // Scope contract (not prose): every menu name, its tag shape, and
-        // the deleted alias staying absent. Tags = full-function scope;
-        // untagged = responds on every surface (full or guidance).
-        // (topic/DM)-tagged: full function there + General redirect.
-        let tagged = [
-            "model", "quit", "kill", "split", "read", "output", "status", "history", "card", "esc",
-            "keys",
-        ];
-        // Global: full, redirect, or refusal on every surface.
-        let global = [
-            "start", "agents", "spawn", "space", "shell", "pane", "cancel", "help",
-        ];
-        let names: Vec<&str> = TelegramClient::MENU_COMMANDS
-            .iter()
-            .map(|(c, _)| *c)
-            .collect();
-        assert_eq!(names.len(), tagged.len() + global.len() + 1, "menu grew?");
-        for cmd in tagged {
-            let desc = TelegramClient::MENU_COMMANDS
-                .iter()
-                .find(|(c, _)| *c == cmd)
-                .unwrap()
-                .1;
-            assert!(desc.contains("(topic/DM)"), "{cmd} lost its scope tag");
-        }
-        for cmd in global {
-            let desc = TelegramClient::MENU_COMMANDS
-                .iter()
-                .find(|(c, _)| *c == cmd)
-                .unwrap()
-                .1;
-            assert!(!desc.contains("(topic/DM)"), "{cmd} gained a scope tag");
-        }
-        let reset = TelegramClient::MENU_COMMANDS
-            .iter()
-            .find(|(c, _)| *c == "reset")
-            .unwrap()
-            .1;
-        assert!(reset.contains("paced"), "reset lost its paced marker");
-        assert!(
-            !TelegramClient::MENU_COMMANDS
-                .iter()
-                .any(|(c, _)| *c == "reset_topics"),
-            "deleted alias resurrected in menu"
-        );
-    }
-}
+#[path = "client_tests.rs"]
+mod tests;

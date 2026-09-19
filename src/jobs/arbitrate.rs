@@ -48,7 +48,7 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
     // A tiny stream fragment ("ok") merely contained somewhere in a
     // longer screen must not summon the whole screen: takeovers need a
     // substantial fragment, matched reflow-proof.
-    if screen_body.len() > acc_body.len()
+    if screen_body.chars().count() > acc_body.chars().count()
         && (acc_body.is_empty()
             || (acc_squashed.chars().count() >= 8 && squash(&screen_body).contains(&acc_squashed)))
     {

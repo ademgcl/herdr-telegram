@@ -255,7 +255,7 @@ async fn main() -> Res<()> {
                         // Revoked-token 401 never recovers by retrying:
                         // FATAL-break like menu sync so a fixed replacement
                         // can bind instead of squatting the guard forever.
-                        if msg.contains("401") || msg.contains("Unauthorized") {
+                        if crate::telegram::client::TelegramClient::is_unauthorized(&msg) {
                             eprintln!("[tg] FATAL: getUpdates unauthorized (401) — token revoked?");
                             s.save_offset().await;
                             break;

@@ -19,10 +19,20 @@ pub(crate) const STRONG: &[(&str, &str)] = &[
     ("insufficient quota", "rate-limit"),
     ("over quota", "rate-limit"),
     ("subscribe to go", "rate-limit"),
-    ("retrying in", "rate-limit"),
+    // NOTE: no bare `retrying in` countdown here. The true free-tier
+    // banner always carries exceeded/subscribe wording (matched above);
+    // a bare countdown matches agent prose discussing the pattern and
+    // paged a false limit DM (live 2026-09-19: a builder report naming
+    // the pattern backticked). No test relied on the bare shape — every
+    // quota test uses the full banner.
     ("rate limited", "rate-limit"),
     ("rate-limited", "rate-limit"),
     ("hit your usage limit", "rate-limit"), // also covers "you've hit…"
+    // Opencode/Zen agent-cap banner ("Agent limit reached", "You have
+    // reached your agent limit", "agent limit hit"): specific enough to
+    // stand alone as rate-limit, stuck-gated like other quota stalls.
+    ("agent limit", "rate-limit"),
+    ("agent-limit", "rate-limit"),
     // Fatal provider request failures (opencode surfaces these as
     // `Error from provider (Console): Upstream request failed:
     // [invalid_request_error] ...`). Unlike overloads they settle fast
@@ -56,6 +66,8 @@ pub(crate) const FATAL_PROVIDER_MARKERS: &[&str] = &[
     "encrypted_content",
     "was not issued to this caller",
     "hit your usage limit", // also covers "you've hit…"
+    "agent limit",
+    "agent-limit",
 ];
 
 /// Weak patterns: common words that also occur in normal prose — they

@@ -1,9 +1,9 @@
-use super::callback_parse::{gone_card, live_target, pane_live, split_action, split_head};
+use super::callback_parse::{gone_card, live_target, split_action, split_head};
 use super::callback_waiters::{
     handle_agent_output, handle_keys_arm, handle_pane_output, handle_run_arm,
 };
 use crate::{
-    herdr::client::{get_agent, list_agents, list_workspaces},
+    herdr::client::{get_agent, list_agents, list_panes, list_workspaces},
     state::{
         AppState, OpGuard,
         guard::{SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS},
@@ -193,21 +193,31 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                     .await;
                 }
                 Err(_) => {
-                    if pane_live(&s, pane).await {
-                        // Agent gone but the shell lives: deliberate taps
-                        // may still navigate here — focus moves, but there
-                        // is no agent card to show.
-                        s.remember(chat, Some(msg_id), pane).await;
-                        s.set_focus(pane).await;
-                        s.tg.edit_msg(
-                            chat,
-                            msg_id,
-                            &format!("{pane} is now a shell pane (agent gone)"),
-                            None,
-                        )
-                        .await;
-                    } else {
-                        gone_card(&s, chat, msg_id, pane).await;
+                    // Fail-closed like the K/p/o arms: an unreadable herdr
+                    // never moves focus, remembers routing, or edits a
+                    // shell card (ambiguous read → no write, visible retry).
+                    match list_panes(&s.cfg.socket).await {
+                        Ok(l) if l.contains(&pane.to_string()) => {
+                            // Agent gone but the shell lives: deliberate taps
+                            // may still navigate here — focus moves, but there
+                            // is no agent card to show.
+                            s.remember(chat, Some(msg_id), pane).await;
+                            s.set_focus(pane).await;
+                            s.tg.edit_msg(
+                                chat,
+                                msg_id,
+                                &format!("{pane} is now a shell pane (agent gone)"),
+                                None,
+                            )
+                            .await;
+                        }
+                        Ok(_) => {
+                            gone_card(&s, chat, msg_id, pane).await;
+                        }
+                        Err(_) => {
+                            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                                .await;
+                        }
                     }
                 }
             }

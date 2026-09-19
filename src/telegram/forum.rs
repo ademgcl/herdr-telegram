@@ -113,14 +113,21 @@ impl TelegramClient {
     /// Rename a forum topic — the herdr→telegram half of 1:1 title
     /// sync. Silent (never notifies); our own edit echoes back as
     /// `forum_topic_edited`, which the stored-title compare absorbs.
+    /// A no-op rename is converged, not a failure (set_topic_icon
+    /// parity via the shared helper — never retry-spam the tick).
     pub async fn set_topic_title(&self, chat_id: i64, thread_id: i64, name: &str) -> Res<()> {
-        self.call_retrying(
-            "editForumTopic",
-            json!({"chat_id": chat_id, "message_thread_id": thread_id, "name": name}),
-            Duration::from_secs(15),
-        )
-        .await?;
-        Ok(())
+        match self
+            .call_retrying(
+                "editForumTopic",
+                json!({"chat_id": chat_id, "message_thread_id": thread_id, "name": name}),
+                Duration::from_secs(15),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) if super::errors::topic_not_modified(&e.to_string()) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Set a forum topic's custom-emoji icon — the silent state signal.
@@ -180,8 +187,15 @@ impl TelegramClient {
             .await?;
         let status = member["status"].as_str().unwrap_or("");
         let is_admin = status == "administrator" || status == "creator";
-        let can_manage_topics = member["can_manage_topics"].as_bool().unwrap_or(false);
-        let can_delete_messages = member["can_delete_messages"].as_bool().unwrap_or(false);
+        // A `creator` bot omits the can_* flags (implicit full rights):
+        // defaulting absent flags to false would false-WARN and wrongly
+        // refuse gates keyed on them. Absent reads as admin iff admin.
+        let can_manage_topics = member["can_manage_topics"]
+            .as_bool()
+            .unwrap_or(is_admin);
+        let can_delete_messages = member["can_delete_messages"]
+            .as_bool()
+            .unwrap_or(is_admin);
         Ok(BotPermissions {
             is_admin,
             can_manage_topics,

@@ -142,6 +142,9 @@ impl TelegramClient {
                         continue;
                     }
                     sends += 1;
+                    // Telegram 5xx arrives as plain strings via `call`
+                    // (never a reqwest downcast match): same transient
+                    // set as `call_retrying` or buzz alerts drop silently.
                     let retryable = e
                         .downcast_ref::<reqwest::Error>()
                         .map(|re| {
@@ -149,7 +152,8 @@ impl TelegramClient {
                                 || re.is_timeout()
                                 || re.status().map(|s| s.is_server_error()).unwrap_or(false)
                         })
-                        .unwrap_or(false);
+                        .unwrap_or(false)
+                        || Self::is_transient_msg(&msg);
                     if !retryable || sends >= 3 {
                         break;
                     }

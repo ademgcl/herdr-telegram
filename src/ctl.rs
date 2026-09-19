@@ -134,12 +134,18 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
     // paths/titles that must not hit the terminal raw.
     let home = crate::types::home_dir();
     // Bounded reply read: a wedged server must fail the CLI visibly,
-    // never hang it forever (server caps are 10s/4KB per line).
-    while let Ok(res) =
-        tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line()).await
-    {
-        let Ok(Some(line)) = res else { break };
-        println!("{}", crate::ops::mask_display_line(&line, &home));
+    // never hang it forever (server caps are 10s/4KB per line). A reply
+    // timeout is a failure, never a silent success: falling through to
+    // Ok(()) would report a truncated `topics`/`reset`/`trigger` as good.
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line()).await {
+            Err(_) => return Err("control reply timed out".into()),
+            Ok(Err(e)) => return Err(e.into()),
+            Ok(Ok(None)) => break,
+            Ok(Ok(Some(line))) => {
+                println!("{}", crate::ops::mask_display_line(&line, &home));
+            }
+        }
     }
     Ok(())
 }

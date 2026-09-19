@@ -142,6 +142,53 @@ fn test_codex_usage_limit_is_rate_limit() {
 }
 
 #[test]
+fn test_agent_limit_is_rate_limit() {
+    // Opencode/Zen agent-cap banners: must buzz as rate-limit (STRONG,
+    // stuck-gated), and survive as fatal markers so settled screens keep
+    // them over footers/chrome.
+    for line in [
+        "Agent limit reached",
+        "You have reached your agent limit",
+        "agent limit hit",
+        "Agent-Limit reached, retry later",
+    ] {
+        let screen = v(&[line]);
+        let hit = detect_limit(&screen).expect("agent limit banner must detect");
+        assert_eq!(hit.kind, "rate-limit", "line: {line}");
+        assert!(hit.strong, "line: {line}");
+        assert!(
+            super::super::types::needs_stuck_gate(&hit),
+            "line: {line}"
+        );
+        assert!(screen_has_provider_failure(&screen), "line: {line}");
+        assert!(is_provider_failure_line(line), "line: {line}");
+    }
+}
+
+#[test]
+fn test_bare_retrying_in_countdown_stays_silent() {
+    // Live 2026-09-19: a builder report discussing the `retrying in`
+    // pattern by name paged a false rate-limit DM via the bare
+    // countdown. The true banner always carries exceeded/subscribe
+    // wording (covered above) — a bare countdown alone is prose.
+    assert!(detect_limit(&v(&["[retrying in 42s]"])).is_none());
+    // A countdown next to error words is only a WEAK provider signal
+    // (stuck-gated, never an immediate quota page): it must not match
+    // STRONG `rate-limit` on the bare countdown anymore.
+    let hit = detect_limit(&v(&["ping failed — retrying in 10s"])).expect("weak provider may detect");
+    assert_eq!(hit.kind, "provider");
+    assert!(!hit.strong);
+    assert!(super::super::types::needs_stuck_gate(&hit));
+    // Full banner still fires.
+    let hit = detect_limit(&v(&[
+        "Free usage exceeded, subscribe to Go [retrying in 42s]",
+    ]))
+    .expect("quota must detect");
+    assert_eq!(hit.kind, "rate-limit");
+    assert!(hit.strong);
+}
+
+#[test]
 fn test_fresh_quota_beats_stale_transient() {
     // Scrollback keeps an old transient retry line above the fresh
     // quota banner: the top-priority kind must win, not topmost order.

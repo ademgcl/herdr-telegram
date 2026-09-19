@@ -45,9 +45,11 @@ fn parse_dotenv_text(txt: &str) -> HashMap<String, String> {
         {
             v = v[1..v.len() - 1].to_string();
         } else {
-            if let Some((head, _)) = v.split_once(" #") {
-                // Unquoted trailing comment (`TOKEN=x # note`). Quoted values
-                // keep everything (secrets may contain `#`).
+            // Unquoted trailing comment (`TOKEN=x # note`): strip the
+            // comment only when ` #` sits OUTSIDE quotes, so a quoted
+            // value containing ` #` (`Q="a # b" # note`) keeps its inner
+            // text instead of corrupting to `"a`.
+            if let Some(head) = strip_unquoted_comment(&v) {
                 v = head.trim_end().to_string();
             }
             if v.len() >= 2
@@ -61,6 +63,35 @@ fn parse_dotenv_text(txt: &str) -> HashMap<String, String> {
         map.entry(k.to_string()).or_insert(v);
     }
     map
+}
+
+/// Cut a trailing ` # comment` only when it sits outside single/double
+/// quotes. Returns None when there is no such comment. Any whitespace
+/// (space or tab) may precede the `#`; a backslash-escaped quote inside
+/// double quotes never toggles the quote state (single quotes are
+/// literal, dotenv-style).
+fn strip_unquoted_comment(v: &str) -> Option<String> {
+    let b = v.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if q == b'"' && c == b'\\' && i + 1 < b.len() {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = Some(c);
+        } else if c.is_ascii_whitespace() && i + 1 < b.len() && b[i + 1] == b'#' {
+            return Some(v[..i].to_string());
+        }
+        i += 1;
+    }
+    None
 }
 
 fn is_owner_key(k: &str) -> bool {
@@ -209,6 +240,16 @@ mod tests {
         let m2 = parse_dotenv_text("S='v' # note\nD=\"a\" # note\n");
         assert_eq!(m2.get("S").map(String::as_str), Some("v"));
         assert_eq!(m2.get("D").map(String::as_str), Some("a"));
+        // Quoted value containing ` #` plus a trailing comment: the inner
+        // ` #` survives, only the trailing comment strips.
+        let m3 = parse_dotenv_text("Q=\"a # b\" # note\nQ2='x # y' # note\n");
+        assert_eq!(m3.get("Q").map(String::as_str), Some("a # b"));
+        assert_eq!(m3.get("Q2").map(String::as_str), Some("x # y"));
+        // Tab before `#` is a comment too; an escaped quote inside
+        // double quotes never ends the string early.
+        let m4 = parse_dotenv_text("T=v\t# note\nE=\"a \\\" # b\" # note\n");
+        assert_eq!(m4.get("T").map(String::as_str), Some("v"));
+        assert_eq!(m4.get("E").map(String::as_str), Some("a \\\" # b"));
         assert_eq!(m.get("EMPTY").map(String::as_str), Some(""));
         // First wins (set_var-if-absent parity).
         assert_eq!(m.get("DUP").map(String::as_str), Some("1"));

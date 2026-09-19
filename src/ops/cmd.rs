@@ -67,7 +67,9 @@ pub(crate) fn print_status(port: u16) {
             } else {
                 "Not found"
             },
-            proc::herdr_socket()
+            // Display the expanded path actually probed above — raw
+            // `~/…` would show a path the daemon never dials.
+            proc::shellexpand_socket()
         ),
     );
     if let Some(off) = st.offset {
@@ -157,8 +159,11 @@ pub(crate) fn tail_log(n: usize) -> Vec<String> {
 
 /// Log rotation: bot.log grows unbounded over long prod runs
 /// (no rotation daemon watches it). Copy-truncate over 8MB into a
-/// single backup — same inode, so writers appending across the call
-/// never lose output. Called at boot and on the 60s watchdog tick
+/// single backup — same inode, so writers holding the fd keep appending
+/// to the live file. Best-effort race note: bytes appended between the
+/// copy and the truncate are lost (small boot/tick window) — the backup
+/// is a diagnostic convenience, never durable history.
+/// Called at boot and on the 60s watchdog tick
 /// (size-check first, so the steady-state cost is one stat).
 /// Best effort throughout: rotation must never fail the boot/tick.
 pub(crate) fn rotate_log_if_huge() {

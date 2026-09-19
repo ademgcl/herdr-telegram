@@ -11,13 +11,23 @@ pub(crate) async fn handle_model_tap(
     r: &str,
 ) {
     let Some((idx, pane)) = r.split_once(':') else {
+        // Malformed tap (no pane): visible ack like B:/X: arms, never a
+        // silent drop — a dead spinner looks wedged.
+        s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+            .await;
         return;
     };
     if idx == "list" {
-        let kind = get_agent(&s.cfg.socket, pane)
-            .await
-            .map(|a| a.kind)
-            .unwrap_or_else(|_| "?".into());
+        // Fail-closed like the K/R arms: an unreadable herdr never moves
+        // focus, remembers routing, or renders a "?" card (ambiguous
+        // read → no write, visible retry).
+        let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
+            s.tg
+                .edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        };
+        let kind = agent.kind;
         let cur = super::model::current_model(s, pane).await;
         let text = super::model::model_card_text(cur.as_deref(), pane, &kind);
         let kb = if kind == "opencode" {
@@ -30,8 +40,29 @@ pub(crate) async fn handle_model_tap(
         s.tg.edit_msg(chat, msg_id, &text, kb).await;
         return;
     }
-    let Ok(i) = idx.parse::<usize>() else { return };
+    let Ok(i) = idx.parse::<usize>() else {
+        s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+            .await;
+        return;
+    };
     let Some((filter, marker)) = super::model_parse::free_tap(i) else {
+        // Out-of-range index (stale shortlist button): fresh picker beats
+        // a dead end — the next tap can't miss.
+        let kind = get_agent(&s.cfg.socket, pane)
+            .await
+            .map(|a| a.kind)
+            .unwrap_or_else(|_| "?".into());
+        let cur = super::model::current_model(s, pane).await;
+        let text = format!(
+            "⚠️ that button was stale — fresh list, tap again:\n\n{}",
+            super::model::model_card_text(cur.as_deref(), pane, &kind)
+        );
+        let kb = if kind == "opencode" {
+            Some(super::model::model_kb(pane))
+        } else {
+            None
+        };
+        s.tg.edit_msg(chat, msg_id, &text, kb).await;
         return;
     };
     // Strip the buttons while switching: mid-switch taps can only collide.
