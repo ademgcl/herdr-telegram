@@ -97,8 +97,11 @@ impl TopicManager {
         self.storage.get_pin(pane)
     }
 
-    pub fn set_pin(&self, pane: &str, mid: i64) {
-        self.storage.set_pin(pane, mid);
+    /// Single-lock compare-and-set pin (storage guard): stores only when
+    /// the thread still matches — a stale send must never clobber a
+    /// fresh remint's pin with a dead mid.
+    pub fn set_pin_if_thread(&self, pane: &str, thread: i64, mid: i64) -> bool {
+        self.storage.set_pin_if_thread(pane, thread, mid)
     }
 
     /// Ensure the pane's topic exists and return its thread. New topics
@@ -205,8 +208,10 @@ impl TopicManager {
                 // pinned — tracked by id so status edits stay in place).
                 let card =
                     crate::ui::build_identity_card_text(kind, pane, space, status, raw_title, branch);
-                if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await {
-                    self.storage.set_pin(pane, mid);
+                if let Some(mid) = self.tg.send_msg(forum, Some(thread), &card, None).await
+                    && !self.storage.set_pin_if_thread(pane, thread, mid)
+                {
+                    println!("[topics] pin reminted during mint for {pane} — dropping stale mid");
                 }
 
                 Some(thread)

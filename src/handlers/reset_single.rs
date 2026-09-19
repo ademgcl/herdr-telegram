@@ -175,6 +175,7 @@ pub async fn run_single_topic_reset(
         .await
     {
         Some(new_th) => {
+            super::dialog::retire_dialog(s, &pane).await;
             let old_desc = old_thread
                 .map(|t| format!("#{t}"))
                 .unwrap_or_else(|| "none".into());

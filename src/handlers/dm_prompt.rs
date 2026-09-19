@@ -68,7 +68,7 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
             s.tg.send_msg(
                 chat,
                 None,
-                &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
+                &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
                 None,
             )
             .await;
@@ -94,20 +94,24 @@ fn pane_shaped(head: &str) -> bool {
         return false;
     }
     // Real panes are `w<n>:p<n>` — the `w` prefix reclaims `note:p1`
-    // style prompts that a suffix-only check would refuse.
+    // style prompts that a suffix-only check would refuse. Full-digit
+    // match both sides so `w1x:p1`/`w1:p1extra` stay prompts.
     let mut ac = a.chars();
     if ac.next() != Some('w') {
         return false;
     }
-    if !ac.next().is_some_and(|d| d.is_ascii_digit()) {
+    let arest: String = ac.collect();
+    if arest.is_empty() || !arest.chars().all(|d| d.is_ascii_digit()) {
         return false;
     }
-    // Suffix `p<n>` covers live + dead panes (`w1:p1`, `w9:p7`).
+    // Suffix `p<n>` covers live + dead panes (`w1:p1`, `w9:p7`) —
+    // full-digit match so `w1:p1extra` stays a prompt, never an address.
     let mut c = b.chars();
     if c.next() != Some('p') {
         return false;
     }
-    c.next().is_some_and(|d| d.is_ascii_digit())
+    let rest: String = c.collect();
+    !rest.is_empty() && rest.chars().all(|d| d.is_ascii_digit())
 }
 
 /// Bare text prompt routing: explicit `<pane> <prompt>`, else reply,
@@ -164,26 +168,41 @@ pub(crate) async fn handle_bare_prompt(
         // The reply names a rowless (shell) pane: run it as a command
         // instead of falling through to the focused agent (which would
         // send shell text to the wrong agent as a prompt). Fail-closed
-        // first: a corpse reply (dead pane) refuses with UNKNOWN_TARGET
-        // instead of attempting a shell write — rowless LIVE shells
-        // still serve (one list RPC to tell them apart; a failed list
-        // falls open to the fallback, which reports gone/unreachable).
+        // first: a corpse reply (dead pane) refuses with UNKNOWN_TARGET,
+        // an unreadable pane list refuses with HERDR_UNREACHABLE (tap
+        // parity) — rowless LIVE shells still serve via the fallback.
         // (`via_reply==None` here already implies unmatched, so no
         // extra dead-check — just the liveness probe.)
-        if let Some(rp) = &reply_pane
-            && !crate::herdr::client::list_panes(&s.cfg.socket)
-                .await
-                .map(|l| l.contains(rp))
-                .unwrap_or(true)
-        {
-            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-                .await;
-            return;
+        if let Some(rp) = &reply_pane {
+            match crate::herdr::client::list_panes(&s.cfg.socket).await {
+                Ok(l) if l.contains(rp) => {}
+                Ok(_) => {
+                    s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
+                        .await;
+                    return;
+                }
+                Err(_) => {
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                }
+            }
         }
         super::shell::run_shell_fallback(s, chat, reply_pane.clone(), text).await;
         return;
     } else if let Some(r) = via_focus {
         (r, text.to_string())
+    } else if s
+        .get_focus()
+        .await
+        .is_some_and(|f| rows.iter().all(|r| r.pane != f))
+    {
+        // Rowless focus (live shell or corpse) with no reply: the sole
+        // agent below must not shadow it — shell text into the agent is
+        // a cross-session write. The fallback probes liveness itself
+        // (corpse reports gone, never writes wrong).
+        super::shell::run_shell_fallback(s, chat, None, text).await;
+        return;
     } else if let Some(r) = resolve_target(rows, Some("")) {
         // Sole agent: a leading pane-id prefix ("w1:p1 fix bug") is an
         // address, not prompt text — strip it when present.
@@ -225,7 +244,7 @@ pub(crate) async fn handle_bare_prompt(
                 if s.block_held(&row.pane).await {
                     s.tg.send_msg(chat, None, crate::ui::ANSWER_IN_FLIGHT, None).await;
                 } else {
-                    s.tg.send_msg(chat, None, &format!("⚠️ type failed: {e}"), None).await;
+                    s.tg.send_msg(chat, None, &format!("⚠️ type failed: {}", crate::types::mask_home(&e.to_string())), None).await;
                     if !super::dialog::send_blocked_card(s, chat, None, &row.pane).await {
                         s.tg.send_msg(chat, None, crate::ui::CARD_FAILED_PC, None).await;
                     }
@@ -254,6 +273,9 @@ mod tests {
         assert!(pane_shaped("w1:p1"));
         assert!(pane_shaped("w8:p3"));
         assert!(pane_shaped("w9:p7"));
+        assert!(pane_shaped("w10:p12"));
+        assert!(!pane_shaped("w1:p1extra"));
+        assert!(!pane_shaped("w1x:p1"));
         assert!(!pane_shaped("note:"));
         assert!(!pane_shaped("note:p1"));
         assert!(!pane_shaped("dead:p9"));

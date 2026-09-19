@@ -72,11 +72,13 @@ pub(crate) async fn handle_status_topic(
     }
     // Resend targets the validated `thread_id` (== live mapping after
     // the re-check above), never a bare re-read — a stale tap must not
-    // inject into a reminted topic.
+    // inject into a reminted topic. CAS-store: a remint landing mid-send
+    // drops the dead mid instead of clobbering the fresh pin.
     if mid_opt.is_none()
         && let Some(new_mid) = s.tg.send_msg(forum, Some(thread_id), &text, None).await
+        && !s.topics.set_pin_if_thread(pane, thread_id, new_mid)
     {
-        s.topics.set_pin(pane, new_mid);
+        println!("[forum] pin reminted during send for {pane} — dropping stale mid");
     }
 }
 

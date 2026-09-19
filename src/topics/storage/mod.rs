@@ -70,9 +70,15 @@ impl TopicStorage {
     }
 
     /// Atomic thread+title insert: one lock, one save — no crash window
-    /// leaving a title-less mapping the probe would skip forever.
+    /// leaving a title-less mapping the probe would skip forever. A
+    /// changed thread also drops the pin (a remint's fresh card mints
+    /// its own; a failed send must not leave edits aimed at a deleted
+    /// message while the new topic starves).
     pub fn insert_with_title(&self, pane: String, thread: i64, title: &str) {
         let mut s = self.lock();
+        if s.topics.get(&pane) != Some(&thread) {
+            s.pins.remove(&pane);
+        }
         s.topics.insert(pane.clone(), thread);
         s.titles.insert(pane, title.to_string());
         self.save(&s);
@@ -193,6 +199,8 @@ impl TopicStorage {
         self.lock().pins.get(pane).copied()
     }
 
+    /// Test-only pin store (prod paths use the CAS guard below).
+    #[cfg(test)]
     pub fn set_pin(&self, pane: &str, mid: i64) {
         let mut s = self.lock();
         if s.pins.get(pane).copied() == Some(mid) {
@@ -200,6 +208,22 @@ impl TopicStorage {
         }
         s.pins.insert(pane.to_string(), mid);
         self.save(&s);
+    }
+
+    /// Atomic compare-and-set pin: stores only when the thread still
+    /// matches (no orphan pin on a fresh remint — future edits would
+    /// target a deleted message). Returns stored or not.
+    pub fn set_pin_if_thread(&self, pane: &str, thread: i64, mid: i64) -> bool {
+        let mut s = self.lock();
+        if s.topics.get(pane) != Some(&thread) {
+            return false;
+        }
+        if s.pins.get(pane).copied() == Some(mid) {
+            return true;
+        }
+        s.pins.insert(pane.to_string(), mid);
+        self.save(&s);
+        true
     }
 
     /// F6: Record last seen message ID for a pane (bounded to 3 recent msgs).

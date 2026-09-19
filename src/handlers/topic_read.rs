@@ -22,7 +22,7 @@ pub(crate) async fn handle_read_agent(
             s.tg.send_msg(chat, Some(thread_id), &body, None).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
+            s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
                 .await;
         }
     }

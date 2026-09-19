@@ -97,7 +97,7 @@ pub(crate) async fn handle_general_forum_message(
                     s.tg.send_msg(
                         chat,
                         thread_id,
-                        &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
+                        &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
                         None,
                     )
                     .await;

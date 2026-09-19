@@ -78,7 +78,7 @@ pub(crate) async fn handle_topic_keys_agent(
         }
         Err(e) => {
             s.tg
-                .send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
+                .send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
                 .await;
         }
     }

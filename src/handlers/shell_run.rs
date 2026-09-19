@@ -20,10 +20,13 @@ pub async fn run_shell_cmd(s: &AppState, chat: i64, thread: Option<i64>, pane: &
     };
     let before = shell_snapshot(s, pane).await;
     if let Err(e) = send_pane_input(&s.cfg.socket, pane, cmd).await {
+        // Chat stays static (herdr errors carry socket/cwd paths — no
+        // username leak); detail goes to the redacted log only.
+        eprintln!("[shell] send to {pane} failed: {}", s.tg.redact(&e.to_string()));
         s.tg.send_msg(
             chat,
             thread,
-            &format!("⚠️ pane gone or unreachable: {e}"),
+            &format!("⚠️ pane {pane} is gone"),
             None,
         )
         .await;
@@ -88,7 +91,10 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
             return;
         }
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+            // Chat stays static (herdr errors carry socket/cwd paths);
+            // detail goes to the redacted log only (run_shell_cmd parity).
+            eprintln!("[shell] tab.create failed: {}", s.tg.redact(&e.to_string()));
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await;
             return;
         }
     };
@@ -111,7 +117,10 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
     )
     .await;
     if let Err(e) = send_pane_input(&s.cfg.socket, &pane, cmd).await {
-        s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+        // Fresh tab whose first send fails is an orphan: static text
+        // (never raw herdr paths), no focus pin (run_shell_cmd parity).
+        eprintln!("[shell] first send to {pane} failed: {}", s.tg.redact(&e.to_string()));
+        s.tg.send_msg(chat, thread, &format!("⚠️ pane {pane} is gone"), None).await;
         return;
     }
     s.set_focus(&pane).await;

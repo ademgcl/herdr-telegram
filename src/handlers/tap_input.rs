@@ -259,7 +259,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                 s.tg.send_msg(chat, thread, crate::ui::KEYS_SENT, None).await;
             }
             Err(e) => {
-                s.tg.send_msg(chat, thread, &format!("keys failed: {e}"), None)
+                s.tg.send_msg(chat, thread, &format!("keys failed: {}", crate::types::mask_home(&e.to_string())), None)
                     .await;
             }
         }

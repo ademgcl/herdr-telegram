@@ -212,6 +212,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         {
             Some(_) => {
                 migrated += 1;
+                super::dialog::retire_dialog(s, &r.pane).await;
             }
             None => {
                 failed.push(r.pane.clone());
@@ -247,6 +248,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
             {
                 Some(_) => {
                     migrated += 1;
+                    super::dialog::retire_dialog(s, &pane).await;
                 }
                 None => {
                     failed.push(pane.clone());

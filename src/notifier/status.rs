@@ -84,8 +84,13 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // The pane's topic exists (ensured silently — never notifies).
     // Skipped during reset: event-driven ensure must not instantly reopen
     // a topic deleted by reset and race delete/create. Memory
-    // (status/last_change above) keeps updating.
-    if !crate::handlers::reset::is_resetting() {
+    // (status/last_change above) keeps updating. Skipped on unreadable
+    // agent too: a blipped read must not write a "?" card over the live
+    // one (fail-closed — the next tick retries with the real kind).
+    // `kind != "?"` covers the Ok-with-missing-field shape as well
+    // (`herdr/agents` defaults absent fields to "?" — same guard as
+    // `sync_inner`'s no-mint rule).
+    if info.is_some() && kind != "?" && !crate::handlers::reset::is_resetting() {
         s.topics.sync_topic(pane, &kind, raw_space).await;
 
         if let Some(forum) = s.cfg.forum {
@@ -117,8 +122,9 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             if mid_opt.is_none()
                 && let Some(thread) = s.topics.all_mappings().get(pane).copied()
                 && let Some(new_mid) = s.tg.send_msg(forum, Some(thread), &card, None).await
+                && !s.topics.set_pin_if_thread(pane, thread, new_mid)
             {
-                s.topics.set_pin(pane, new_mid);
+                println!("[alert] pin reminted during send for {pane} — dropping stale mid");
             }
         }
     }

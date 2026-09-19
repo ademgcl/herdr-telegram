@@ -63,7 +63,9 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
             s.tg.send_msg(chat, None, crate::ui::KEYS_SENT, None).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+            // Masked (herdr errors carry socket/cwd paths — reason kept,
+            // username dropped).
+            s.tg.send_msg(chat, None, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
         }
     }
 }
@@ -145,7 +147,7 @@ pub(crate) async fn handle_read(
             s.set_focus(&row.pane).await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, None, &format!("⚠️ {e}"), None).await;
+            s.tg.send_msg(chat, None, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
         }
     }
 }
@@ -210,7 +212,7 @@ pub(crate) async fn handle_status(
             s.tg.send_msg(
                 chat,
                 None,
-                &format!("⚠️ status failed: {e} — try /agents"),
+                &format!("⚠️ status failed: {} — try /agents", crate::types::mask_home(&e.to_string())),
                 None,
             )
             .await;

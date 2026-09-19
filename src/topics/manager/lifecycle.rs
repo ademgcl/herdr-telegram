@@ -220,8 +220,10 @@ impl TopicManager {
         // F2: fresh identity card, tracked by id for status edits —
         // never pinned.
         let card = crate::ui::build_identity_card_text(kind, pane, space, status, names.card, branch);
-        if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await {
-            self.storage.set_pin(pane, mid);
+        if let Some(mid) = self.tg.send_msg(forum, Some(new_thread), &card, None).await
+            && !self.storage.set_pin_if_thread(pane, new_thread, mid)
+        {
+            println!("[reset] pin reminted during migrate for {pane} — dropping stale mid");
         }
 
         // Delete old topic now that the mapping already points at the

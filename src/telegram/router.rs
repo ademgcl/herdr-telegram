@@ -107,7 +107,7 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // stored-title compare, and a redelivered rename heals the down-window.
     if let Some((thread, name)) = crate::handlers::topic_edit::parse_topic_edit(msg) {
         if (chat_type == "supergroup" || chat_type == "group") && s.cfg.forum == Some(chat_id) {
-            crate::handlers::titles::adopt_topic_title(s, chat_id, Some(thread), &name).await;
+            crate::handlers::titles_adopt::adopt_topic_title(s, chat_id, Some(thread), &name).await;
         }
         return;
     }

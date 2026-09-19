@@ -181,6 +181,11 @@ async fn main() -> Res<()> {
     tokio::spawn(event_task(s.clone()));
 
     let mut watchdog_tick = tokio::time::interval(Duration::from_secs(60));
+    // Skip catch-up bursts: a slow reconcile (many panes × RPCs) overrunning
+    // 60s must resume with ONE tick, never back-to-back scans (double-buzz,
+    // 429 storm). The loop awaits each reconcile inline, so ticks can't
+    // overlap — only the queued backlog needs dropping.
+    watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first interval tick fires immediately: consume it so boot isn't
     // a double-scan (seed reconcile just ran above).
     watchdog_tick.tick().await;

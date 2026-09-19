@@ -62,6 +62,40 @@ pub struct PromptRequest {
     pub text: String,
 }
 
+/// Mask $HOME anywhere in a display string (chat/log hygiene: herdr
+/// errors carry socket/cwd paths with the username). Boundary-aware:
+/// `/Users/x2` never matches `/Users/x`; only a trailing `/` or
+/// end-of-string counts. Pure so it is unit-tested.
+pub fn mask_home_with(s: &str, home: &str) -> String {
+    let home = home
+        .strip_suffix('/')
+        .filter(|h| !h.is_empty())
+        .unwrap_or(home);
+    if home.is_empty() || home == "/" {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(home) {
+        let after = &rest[i + home.len()..];
+        if after.starts_with('/') || after.is_empty() {
+            out.push_str(&rest[..i]);
+            out.push('~');
+            rest = after;
+        } else {
+            out.push_str(&rest[..i + home.len()]);
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// [`mask_home_with`] with the process HOME (chat/log call sites).
+pub fn mask_home(s: &str) -> String {
+    mask_home_with(s, &std::env::var("HOME").unwrap_or_default())
+}
+
 /// Collapse $HOME to `~` in a display path (log hygiene: no username
 /// leak). Pure so it is unit-tested; empty home leaves the path alone.
 pub fn collapse_home(path: &str, home: &str) -> String {
@@ -134,6 +168,25 @@ mod tests {
         assert_eq!(collapse_home("/etc/hosts", "/"), "~/etc/hosts");
         assert_eq!(collapse_home("/Users/x", "/Users/x/"), "~");
         assert_eq!(collapse_home("/Users/x/a", "/Users/x/"), "~/a");
+    }
+
+    #[test]
+    fn test_mask_home_with_mid_string_and_boundary() {
+        // Mid-string socket/cwd paths mask (chat herdr errors); the
+        // reason survives, the username doesn't.
+        assert_eq!(
+            mask_home_with("dial /Users/x/.config/herdr.sock: refused", "/Users/x"),
+            "dial ~/.config/herdr.sock: refused"
+        );
+        assert_eq!(
+            mask_home_with("a /Users/x/b c /Users/x/d", "/Users/x"),
+            "a ~/b c ~/d"
+        );
+        // Mid-name prefix never masks; empty/root home leaves alone.
+        assert_eq!(mask_home_with("/Users/x2/a", "/Users/x"), "/Users/x2/a");
+        assert_eq!(mask_home_with("/Users/x/a", ""), "/Users/x/a");
+        assert_eq!(mask_home_with("/etc/hosts", "/"), "/etc/hosts");
+        assert_eq!(mask_home_with("no paths here", "/Users/x"), "no paths here");
     }
 
     #[test]

@@ -107,6 +107,40 @@ fn test_pins_roundtrip() {
 }
 
 #[test]
+fn test_set_pin_if_thread_guards_remint() {
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-pincas-{}.json", std::process::id())),
+    );
+    st.insert("w1:p1".into(), 42);
+    assert!(st.set_pin_if_thread("w1:p1", 42, 111));
+    assert_eq!(st.get_pin("w1:p1"), Some(111));
+    // Stale thread (pre-remint send) must not clobber the fresh pin.
+    st.insert("w1:p1".into(), 43);
+    assert!(!st.set_pin_if_thread("w1:p1", 42, 222));
+    assert_eq!(st.get_pin("w1:p1"), Some(111));
+    assert!(st.set_pin_if_thread("w1:p1", 43, 333));
+    assert_eq!(st.get_pin("w1:p1"), Some(333));
+    let _ = std::fs::remove_file(&st.file_path);
+}
+
+#[test]
+fn test_insert_with_title_clears_pin_on_remint() {
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-pinremint-{}.json", std::process::id())),
+    );
+    st.insert_with_title("w1:p1".into(), 42, "a");
+    st.set_pin("w1:p1", 111);
+    // Same thread re-insert keeps the pin (no spurious repost).
+    st.insert_with_title("w1:p1".into(), 42, "a");
+    assert_eq!(st.get_pin("w1:p1"), Some(111));
+    // Changed thread (remint) drops it — a failed fresh-card send must
+    // not leave edits aimed at the deleted message.
+    st.insert_with_title("w1:p1".into(), 43, "b");
+    assert_eq!(st.get_pin("w1:p1"), None);
+    let _ = std::fs::remove_file(&st.file_path);
+}
+
+#[test]
 fn test_corrupt_state_falls_back_to_prev() {
     // A good save rotates a .prev backup; a later corrupt write loads
     // the backup instead of wiping every mapping (mass duplicates).

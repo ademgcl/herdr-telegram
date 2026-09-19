@@ -115,7 +115,7 @@ pub async fn enqueue_prompt(
                     req.chat_id,
                     req.message_thread_id,
                     &pane,
-                    &format!("⚠️ error: {e}"),
+                    &format!("⚠️ error: {}", crate::types::mask_home(&e.to_string())),
                 )
                 .await;
             } else {
@@ -140,7 +140,7 @@ pub async fn enqueue_prompt(
                 req.chat_id,
                 req.message_thread_id,
                 &pane,
-                &format!("⚠️ error: {e}"),
+                &format!("⚠️ error: {}", crate::types::mask_home(&e.to_string())),
             )
             .await;
         }

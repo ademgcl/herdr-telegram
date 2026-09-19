@@ -67,7 +67,7 @@ pub(crate) async fn consume_typewait(
                 .send_msg(
                     chat,
                     Some(thread_id),
-                    &format!("⚠️ type failed: {e} — retry, or /cancel to abort"),
+                    &format!("⚠️ type failed: {} — retry, or /cancel to abort", crate::types::mask_home(&e.to_string())),
                     None,
                 )
                 .await;

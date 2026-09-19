@@ -159,7 +159,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
                 s.tg.send_msg(chat, Some(thread_id), &body, None).await;
             }
             Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
+                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
                     .await;
             }
         }
@@ -205,7 +205,7 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
                     .await;
             }
             Err(e) => {
-                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {e}"), None)
+                s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None)
                     .await;
             }
         }

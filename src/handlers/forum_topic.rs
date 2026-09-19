@@ -254,7 +254,7 @@ pub(crate) async fn handle_topic_agent_message(
                 if s.block_held(pane).await {
                     s.tg.send_msg(chat, Some(thread_id), crate::ui::ANSWER_IN_FLIGHT, None).await;
                 } else {
-                    s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {e}"), None).await;
+                    s.tg.send_msg(chat, Some(thread_id), &format!("⚠️ type failed: {}", crate::types::mask_home(&e.to_string())), None).await;
                     if !super::dialog::send_blocked_card(&s, chat, Some(thread_id), pane).await {
                         s.tg.send_msg(chat, Some(thread_id), crate::ui::CARD_FAILED_PC, None).await;
                     }

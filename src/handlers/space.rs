@@ -51,7 +51,7 @@ pub async fn open_space(s: &AppState, chat: i64, thread: Option<i64>, label: &st
             s.tg.send_msg(
                 chat,
                 thread,
-                &format!("⚠️ failed to create space `{label}`: {e}"),
+                &format!("⚠️ failed to create space `{label}`: {}", crate::types::mask_home(&e.to_string())),
                 None,
             )
             .await;

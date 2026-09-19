@@ -18,10 +18,12 @@ pub(crate) mod cancel;
 pub(crate) mod guard;
 pub(crate) mod history;
 mod jobs;
+mod persist_paths;
 mod targets;
 mod typing;
 
 pub use self::guard::OpGuard;
+pub use self::persist_paths::state_dir;
 
 /// Armed shell-run waiter: workspace id + arm instant (see `runwait`).
 /// Alias keeps the triple-nested map under clippy's type-complexity bar.
@@ -143,31 +145,13 @@ pub type AppState = Arc<State>;
 /// the watcher piggyback, and the submit sustain loops.
 pub(crate) const TYPING_TICK_SECS: u64 = 2;
 
-/// Directory holding bot state files (jobs/focus/offset/topics).
-/// `HERDR_STATE_DIR` overrides it; default is the launch CWD (historic
-/// behavior). Launchd and manual runs MUST use the same one — split
-/// directories mean replayed prompts and orphaned intents.
-pub fn state_dir() -> PathBuf {
-    std::env::var("HERDR_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-}
-
 impl State {
-    fn focus_file() -> PathBuf {
-        state_dir().join("focus.state")
-    }
-
-    fn offset_file() -> PathBuf {
-        state_dir().join("offset.state")
-    }
-
     /// Persist the Telegram poll offset (atomic tmp+rename, like focus):
     /// a crash between handling an update and the next poll ack must not
     /// replay the prompt and double-submit it to the agent.
     pub async fn save_offset(&self) {
         let off = *self.offset.lock().await;
-        let file = Self::offset_file();
+        let file = persist_paths::offset_file();
         let mut tmp = file.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
@@ -184,7 +168,7 @@ impl State {
         let tg = TelegramClient::new(cfg.token.clone())?;
         let topics = TopicManager::new(cfg.forum, tg.clone(), Some(cfg.socket.clone()));
         // Survive restarts: routing target must not vanish on redeploy
-        let file = Self::focus_file();
+        let file = persist_paths::focus_file();
         let home = std::env::var("HOME").unwrap_or_default();
         let legacy = PathBuf::from(format!("{home}/.local/share/herdr-telegram/focus"));
         if !file.exists() && legacy.exists() {
@@ -198,7 +182,7 @@ impl State {
         // poll stream instead of replaying the last 10 minutes of prompts.
         // Corrupt values back up like jobs.state; unparseable → 0 (the
         // router's stale filter bounds the replay).
-        let offset = match std::fs::read_to_string(Self::offset_file()) {
+        let offset = match std::fs::read_to_string(persist_paths::offset_file()) {
             Err(_) => 0,
             Ok(txt) if txt.trim().is_empty() => 0,
             Ok(txt) => match txt.trim().parse::<u64>() {
@@ -210,10 +194,10 @@ impl State {
                         .unwrap_or(0);
                     let bak = PathBuf::from(format!(
                         "{}.corrupt-{}.bak",
-                        Self::offset_file().display(),
+                        persist_paths::offset_file().display(),
                         secs
                     ));
-                    let _ = std::fs::copy(Self::offset_file(), &bak);
+                    let _ = std::fs::copy(persist_paths::offset_file(), &bak);
                     eprintln!("[main] corrupt offset.state backed up to {}", crate::home_masked(&bak));
                     0
                 }
@@ -277,7 +261,7 @@ impl State {
             let mut focus = self.focus.lock().await;
             if focus.as_deref() == Some(pane) {
                 *focus = None;
-                let _ = std::fs::remove_file(Self::focus_file());
+                let _ = std::fs::remove_file(persist_paths::focus_file());
             }
         }
         self.status.lock().await.remove(pane);

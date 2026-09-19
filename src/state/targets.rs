@@ -38,7 +38,7 @@ impl State {
         // Memory first, disk second: concurrent focuses must converge
         // disk vs RAM on the same winner (disk-first can resurrect loser).
         *self.focus.lock().await = Some(pane.to_string());
-        let file = Self::focus_file();
+        let file = super::persist_paths::focus_file();
         let mut tmp = file.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);

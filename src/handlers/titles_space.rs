@@ -7,6 +7,7 @@
 //! immediately so the topic stays 1:1 with space + pane names.
 use crate::{
     handlers::title_rules::{space_label_taken, space_rename_core, stored_covers_label, title_core_for},
+    handlers::titles_adopt::STATE_READ_ERR,
     herdr::{
         client::rename_workspace,
         labels::{PaneFacts, rename_pane, rename_tab, tab_labels},
@@ -56,7 +57,20 @@ pub async fn try_adopt_space_rename(
     // tab — never a bare tag that the next tick would rewrite.
     let wanted = space_rename_core(&rest, space, &new_space, kind);
     let tag = s.topics.tag_for(pane, kind);
-    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
+    // Fail-closed: an unreadable tab list must not feed a defaulted map
+    // into the write below (wrong title / wrong rename). Tab-less panes
+    // need no read at all.
+    let tabs = if tab_id.is_empty() {
+        HashMap::new()
+    } else {
+        match tab_labels(&s.cfg.socket).await {
+            Ok(t) => t,
+            Err(_) => {
+                s.tg.send_msg(chat, Some(th), STATE_READ_ERR, None).await;
+                return true;
+            }
+        }
+    };
     let pane_label = facts.get(pane).and_then(|f| f.label.as_deref());
     let tab_name = if tab_id.is_empty() {
         None
@@ -80,7 +94,7 @@ pub async fn try_adopt_space_rename(
         return true;
     }
     if let Err(e) = rename_workspace(&s.cfg.socket, ws_id, &new_space).await {
-        s.tg.send_msg(chat, Some(th), &format!("⚠️ space rename failed: {e}"), None).await;
+        s.tg.send_msg(chat, Some(th), &format!("⚠️ space rename failed: {}", crate::types::mask_home(&e.to_string())), None).await;
         return true;
     }
     // Remainder decides the pane half: blank keeps the herdr core,
@@ -91,19 +105,26 @@ pub async fn try_adopt_space_rename(
         && !wc.trim().is_empty()
         && norm_title(&wc) != final_core.as_deref().map(norm_title).unwrap_or_default()
     {
-        let ok = if !multi {
+        let res = if !multi {
             if tab_id.is_empty() {
-                false
+                Err("pane has no tab".to_string())
             } else {
-                rename_tab(&s.cfg.socket, tab_id, &wc).await.is_ok()
+                rename_tab(&s.cfg.socket, tab_id, &wc)
+                    .await
+                    .map_err(|e| crate::types::mask_home(&e.to_string()))
             }
         } else {
-            rename_pane(&s.cfg.socket, pane, Some(wc.as_str())).await.is_ok()
+            rename_pane(&s.cfg.socket, pane, Some(wc.as_str()))
+                .await
+                .map_err(|e| crate::types::mask_home(&e.to_string()))
         };
-        if ok {
-            final_core = Some(wc);
-        } else {
-            s.tg.send_msg(chat, Some(th), "⚠️ space renamed, pane rename failed — retry", None).await;
+        match res {
+            Ok(()) => {
+                final_core = Some(wc);
+            }
+            Err(reason) => {
+                s.tg.send_msg(chat, Some(th), &format!("⚠️ space renamed, pane rename failed — retry: {reason}"), None).await;
+            }
         }
     }
     if crate::handlers::reset::is_resetting() {

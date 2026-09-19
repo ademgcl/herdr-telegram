@@ -62,7 +62,7 @@ pub(crate) async fn handle_new_space(s: &AppState, chat: i64, msg_id: i64, threa
             s.tg.edit_msg(
                 chat,
                 msg_id,
-                &format!("⚠️ failed to create space: {e}"),
+                &format!("⚠️ failed to create space: {}", crate::types::mask_home(&e.to_string())),
                 None,
             )
             .await;
@@ -135,7 +135,7 @@ pub(crate) async fn handle_spawn(
             true
         }
         Err(e) => {
-            s.tg.edit_msg(chat, msg_id, &format!("⚠️ spawn failed: {e}"), None)
+            s.tg.edit_msg(chat, msg_id, &format!("⚠️ spawn failed: {}", crate::types::mask_home(&e.to_string())), None)
                 .await;
             false
         }

@@ -199,6 +199,15 @@ pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pan
     send_with(s, chat, thread, pane, &screen).await
 }
 
+/// Retire a pane's dialog generation (topic remint/reset): the old
+/// topic is gone, so drop the content sig (else refresh stays silent
+/// on a stale match in the new, card-less topic) and its dead card
+/// locations. The next observation reposts fresh via the live mapping.
+pub async fn retire_dialog(s: &AppState, pane: &str) {
+    s.blocked_sig.lock().await.remove(pane);
+    s.blocked_card.lock().await.remove(pane);
+}
+
 /// Content-addressed blocked post for status observations: repeats of
 /// the same dialog stay silent, a NEW dialog posts even with no status
 /// transition. Skips while a tap is in flight (it owns the update) and

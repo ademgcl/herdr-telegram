@@ -249,7 +249,7 @@ pub async fn handle_esc_shell(s: &AppState, chat: i64, thread: Option<i64>, pane
                 .await;
         }
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+            s.tg.send_msg(chat, thread, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
         }
     }
 }

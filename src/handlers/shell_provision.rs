@@ -148,7 +148,7 @@ async fn open_shell_inner(
             }
             Ok((id, false)) => (id, None),
             Err(e) => {
-                s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+                s.tg.send_msg(chat, thread, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
                 return;
             }
         },
@@ -190,7 +190,7 @@ async fn create_tab_and_attach(s: &AppState, chat: i64, thread: Option<i64>, ws_
             return;
         }
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ {e}"), None).await;
+            s.tg.send_msg(chat, thread, &format!("⚠️ {}", crate::types::mask_home(&e.to_string())), None).await;
             return;
         }
     };
@@ -246,7 +246,7 @@ pub async fn open_split(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
     let new = match crate::herdr::client::split_pane(&s.cfg.socket, pane, &dir).await {
         Ok(p) => p,
         Err(e) => {
-            s.tg.send_msg(chat, thread, &format!("⚠️ split failed: {e}"), None)
+            s.tg.send_msg(chat, thread, &format!("⚠️ split failed: {}", crate::types::mask_home(&e.to_string())), None)
                 .await;
             return;
         }
