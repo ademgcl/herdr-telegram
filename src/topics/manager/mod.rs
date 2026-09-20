@@ -121,9 +121,11 @@ impl TopicManager {
         };
         // A paced reset is rebuilding the map: reuse only, never mint —
         // anything created now is wiped mid-reset into an orphan (later
-        // re-minted as a double). Deferred panes mint on post-reset ticks.
+        // re-minted as a double). Return nothing (the pre-reset thread is
+        // deleted — callers would post into an orphan); deferred panes
+        // mint on post-reset ticks.
         if crate::handlers::reset::is_resetting() {
-            return (self.storage.get_thread(pane), false);
+            return (None, false);
         }
         // Unknown kind (agent vanished mid-flight): never mint topics —
         // just route to the existing thread, if any.
@@ -143,10 +145,10 @@ impl TopicManager {
         {
             for _ in 0..200 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                // A reset starting mid-wait wipes the map: a pre-reset
-                // thread returned here posts into an orphan/deleted topic.
+                // A reset starting mid-wait deletes the pre-reset thread:
+                // return nothing (post-reset mint serves it), never an orphan.
                 if crate::handlers::reset::is_resetting() {
-                    return (self.storage.get_thread(pane), false);
+                    return (None, false);
                 }
                 if let Some(t) = self.storage.get_thread(pane) {
                     return (Some(t), false);
@@ -166,10 +168,10 @@ impl TopicManager {
             pane: pane.to_string(),
         };
         // Re-check after claiming single-flight: a reset that started
-        // between our first gate and now would wipe this mint into an
-        // orphan → later double. Defer to post-reset ticks instead.
+        // between our first gate and now orphans this mint (later double)
+        // — return nothing, defer to post-reset ticks.
         if crate::handlers::reset::is_resetting() {
-            return (self.storage.get_thread(pane), false);
+            return (None, false);
         }
         // Tag inside the guard: a cancel before the guard must not leak
         // a persisted tag gap.

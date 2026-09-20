@@ -5,6 +5,7 @@ mod ctl;
 mod ctl_auth;
 mod ctl_cmd;
 mod ctl_inspect;
+mod fsutil;
 mod handlers;
 mod herdr;
 mod jobs;

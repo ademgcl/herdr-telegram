@@ -31,11 +31,8 @@ fn strip_echo_framing(line: &str) -> &str {
 /// required so an answer line that merely repeats the prompt is NOT
 /// mistaken for an echo.
 pub fn is_prompt_echo(line: &str, want: &str) -> bool {
-    if !(line.contains('┃')
-        || line.contains('│')
-        || line.contains('|')
-        || line.trim_start().starts_with('>'))
-    {
+    let t = line.trim_start();
+    if !(t.starts_with('┃') || t.starts_with('│') || t.starts_with('|') || t.starts_with('>')) {
         return false;
     }
     strip_echo_framing(line) == want
@@ -98,6 +95,9 @@ mod tests {
         assert!(is_prompt_echo("  ┃  hi", "hi"));
         assert!(is_prompt_echo("> hi", "hi"));
         assert!(!is_prompt_echo("     hi", "hi"));
+        // A pipe/table char buried mid-line is content, not framing.
+        assert!(!is_prompt_echo("a | b", "a | b"));
+        assert!(!is_prompt_echo("col ┃ val", "col ┃ val"));
     }
 
     #[test]

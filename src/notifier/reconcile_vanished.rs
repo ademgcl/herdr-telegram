@@ -92,12 +92,6 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
         format!("agent quit to shell — last output:\n{tail}")
     };
     if report(s, pp.chat, pp.thread, pane, &msg).await {
-        // CAS: an observation landing during the RPCs wins — never
-        // clobber it.
-        let mut st = s.status.lock().await;
-        if st.get(pane).map(|v| v == "shell").unwrap_or(false) {
-            st.insert(pane.to_string(), "shell".to_string());
-        }
         return;
     }
     // Intent was already cancelled above: keep it so boot-recover

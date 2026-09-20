@@ -18,10 +18,9 @@ pub async fn transfer_live(
     thread_id: Option<i64>,
     text: &str,
 ) {
-    // Atomic bump (enqueue parity — see bump_generation): a finalize
-    // snapshotting between epoch and count would skew the entry share.
-    *target.dest.lock().await = (chat_id, thread_id);
-    *target.prompt.lock().await = text.to_string();
-    target.bump_generation().await;
+    // Atomic publish (enqueue parity — see publish_submit): dest +
+    // prompt + generation move together, or a finalize snapshotting
+    // between split writes skews the entry share.
+    target.publish_submit(chat_id, thread_id, text).await;
     s.remember_pending(pane, chat_id, thread_id, text).await;
 }

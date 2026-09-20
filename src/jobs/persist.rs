@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingPrompt {
     pub chat: i64,
     pub thread: Option<i64>,
@@ -76,9 +76,9 @@ pub fn load_file(path: &Path) -> HashMap<String, PendingPrompt> {
 
 pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {
     if let Ok(json) = serde_json::to_string_pretty(map) {
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
+        // Unique tmp (never shared `<path>.tmp`): concurrent saves from
+        // two settling panes must not interleave into one torn file.
+        let tmp = crate::types::unique_tmp(path);
         if crate::types::write_private(&tmp, json.as_bytes()).is_ok() {
             if let Ok(f) = std::fs::File::open(&tmp) {
                 let _ = f.sync_all();
@@ -94,9 +94,7 @@ pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {
             }
             // Atomic last-good backup, never a torn copy (topics parity).
             let prev = prev_path(path);
-            let mut ptmp = prev.as_os_str().to_owned();
-            ptmp.push(".tmp");
-            let ptmp = PathBuf::from(ptmp);
+            let ptmp = crate::types::unique_tmp(&prev);
             if crate::types::write_private(&ptmp, json.as_bytes()).is_ok() {
                 if let Ok(f) = std::fs::File::open(&ptmp) {
                     let _ = f.sync_all();
@@ -113,16 +111,21 @@ pub fn save_file(path: &Path, map: &HashMap<String, PendingPrompt>) {
 mod tests {
     use super::*;
 
-    fn tmp() -> PathBuf {
+    // Unique per call (pid + counter, test_tag parity): pid alone
+    // collides across runs on pid recycle — a leftover file breaks the
+    // `load_file(&p).is_empty()` openers below.
+    fn tmp_path(tag: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         PathBuf::from(format!(
-            "/tmp/herdr-tg-test-jobs-{}.json",
+            "/tmp/herdr-tg-test-jobs-{tag}-{}-{n}.json",
             std::process::id()
         ))
     }
 
     #[test]
     fn test_roundtrip_and_corrupt() {
-        let p = tmp();
+        let p = tmp_path("roundtrip");
         assert!(load_file(&p).is_empty());
         let mut m = HashMap::new();
         m.insert(
@@ -161,10 +164,7 @@ mod tests {
 
     #[test]
     fn test_empty_main_restores_prev() {
-        let p = PathBuf::from(format!(
-            "/tmp/herdr-tg-test-jobs-prev-{}.json",
-            std::process::id()
-        ));
+        let p = tmp_path("prev");
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(prev_path(&p));
         let mut m = HashMap::new();

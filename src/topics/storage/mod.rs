@@ -5,6 +5,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 mod disk;
 mod meta;
+mod tags;
 #[cfg(test)]
 mod tests;
 
@@ -41,6 +42,9 @@ impl TopicStorage {
     /// One-time heal for orphans: `last_msgs` without a mapping
     /// is write-only (only topic resets read it). Called at boot in
     /// every mode — DM→forum switches orphan the same way.
+    /// Threadless aux maps (tags/titles/pins/icons) leak the same way
+    /// via failed creates — prune them here too (state grows by split:
+    /// every map needs expiry + prune).
     pub fn prune_orphan_msgs(&self) {
         let mut s = self.lock();
         let orphans: Vec<String> = s
@@ -49,10 +53,37 @@ impl TopicStorage {
             .filter(|p| !s.topics.contains_key(*p))
             .cloned()
             .collect();
-        if !orphans.is_empty() {
-            for p in orphans {
-                s.last_msgs.remove(&p);
+        let mut dirty = false;
+        for p in orphans {
+            s.last_msgs.remove(&p);
+            dirty = true;
+        }
+        for key in ["tags", "titles", "pins", "icons"] {
+            let dead: Vec<String> = match key {
+                "tags" => s.tags.keys().filter(|p| !s.topics.contains_key(*p)).cloned().collect(),
+                "titles" => s.titles.keys().filter(|p| !s.topics.contains_key(*p)).cloned().collect(),
+                "pins" => s.pins.keys().filter(|p| !s.topics.contains_key(*p)).cloned().collect(),
+                _ => s.icons.keys().filter(|p| !s.topics.contains_key(*p)).cloned().collect(),
+            };
+            for p in dead {
+                match key {
+                    "tags" => {
+                        s.tags.remove(&p);
+                    }
+                    "titles" => {
+                        s.titles.remove(&p);
+                    }
+                    "pins" => {
+                        s.pins.remove(&p);
+                    }
+                    _ => {
+                        s.icons.remove(&p);
+                    }
+                };
+                dirty = true;
             }
+        }
+        if dirty {
             self.save(&s);
         }
     }
@@ -141,21 +172,6 @@ impl TopicStorage {
         true
     }
 
-    /// Roll back a tag leaked by a failed create (no thread ever minted).
-    pub fn remove_tag_if_threadless(&self, pane: &str) {
-        let mut s = self.lock();
-        if s.topics.contains_key(pane) {
-            return;
-        }
-        if s.tags.remove(pane).is_some() {
-            self.save(&s);
-        }
-    }
-
-    pub fn get_tag(&self, pane: &str) -> Option<String> {
-        self.lock().tags.get(pane).cloned()
-    }
-
     pub fn get_title(&self, pane: &str) -> Option<String> {
         self.lock().titles.get(pane).cloned()
     }
@@ -184,20 +200,6 @@ impl TopicStorage {
         s.titles.insert(pane.to_string(), title.to_string());
         self.save(&s);
         true
-    }
-
-    /// Get-or-assign stable tag atomically: concurrent creates never
-    /// hand out the same tag twice.
-    pub fn assign_tag(&self, pane: &str, kind: &str) -> String {
-        let mut s = self.lock();
-        if let Some(t) = s.tags.get(pane) {
-            return t.clone();
-        }
-        let taken: Vec<String> = s.tags.values().cloned().collect();
-        let tag = super::names::assign(&taken, kind);
-        s.tags.insert(pane.to_string(), tag.clone());
-        self.save(&s);
-        tag
     }
 
     /// Identity-card message id per pane (tracked for status edits —
@@ -253,3 +255,18 @@ impl TopicStorage {
 }
 
 // Re-export for tests using prev-path convention.
+
+/// Unique scratch tag for the suite (single source): pid alone collides
+/// across parallel tests in one process (two `clear` tests share it) and
+/// across runs on pid recycle — a leftover file once mis-assigned tags
+/// (`o3` vs `o1`). The counter makes every path unique (unique_tmp
+/// parity); files are still removed on success, leftovers never collide.
+#[cfg(test)]
+pub(crate) fn test_tag() -> String {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}

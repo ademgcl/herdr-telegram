@@ -1,5 +1,5 @@
 use crate::{
-    handlers::dialog::{dialog_sig, send_blocked_card},
+    handlers::dialog::{DIALOG_READ_LINES, dialog_sig, send_blocked_card},
     herdr::client::read_screen_visible,
     jobs::finalize::report,
     state::{AppState, OpGuard},
@@ -18,7 +18,7 @@ pub async fn report_blocked_submit(
     pane: &str,
     err: &str,
 ) {
-    let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
+    let screen = read_screen_visible(&s.cfg.socket, pane, DIALOG_READ_LINES).await;
     if screen.is_empty() {
         report(
             s,

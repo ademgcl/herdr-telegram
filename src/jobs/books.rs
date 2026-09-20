@@ -17,7 +17,7 @@ pub async fn settle_books(
     entry_pending: usize,
 ) {
     // Remove ONLY our entry share, never zero blindly: the snapshot
-    // and the submit bump share the pending lock (see bump_generation),
+    // and the submit publish share the pending lock (see publish_submit),
     // so the entry pair is always consistent — but a submit landing
     // between the epoch check and this write still grows the count, and
     // a blind zero would eat the new prompt's cover (a later failed

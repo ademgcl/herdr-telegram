@@ -4,16 +4,19 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 pub async fn get_updates(tg: &TelegramClient, offset: u64, poll_secs: i64) -> Res<Vec<Value>> {
+    // edited_message updates are always dropped by the router
+    // (resend-as-new by design) — don't subscribe to the payload.
+    let secs = poll_secs.max(0) as u64;
     let r = tg
         .call(
             "getUpdates",
             json!({
                 "offset": offset,
-                "timeout": poll_secs,
+                "timeout": secs,
                 "limit": 100,
-                "allowed_updates": ["message", "edited_message", "callback_query", "my_chat_member"],
+                "allowed_updates": ["message", "callback_query", "my_chat_member"],
             }),
-            Duration::from_secs(poll_secs as u64 + 10),
+            Duration::from_secs(secs + 10),
         )
         .await?;
     Ok(r.as_array().cloned().unwrap_or_default())

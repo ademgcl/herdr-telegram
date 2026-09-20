@@ -108,6 +108,16 @@ pub(crate) async fn handle_model_tap(
         ),
     };
     if !gen_ok {
+        // Visible, never silent: the spinner already stopped and the
+        // card keeps live buttons — without feedback the tap reads as
+        // wedged. A message (never a card edit) so the picker survives
+        // for a retry after the reset / in the live topic.
+        let notice = if crate::handlers::reset::is_resetting() {
+            crate::ui::RESET_BUSY
+        } else {
+            crate::ui::UNKNOWN_BUTTON
+        };
+        s.tg.send_msg(chat, thread, notice, None).await;
         return;
     }
     // Strip the buttons while switching: mid-switch taps can only collide.

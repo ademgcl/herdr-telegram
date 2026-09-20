@@ -8,6 +8,10 @@ pub const SHELL_CMD_MAX_WORDS: usize = 256;
 /// Max keys per send (one message is a handful of keys, never ~2000
 /// args into one `send_keys` — refuse, never silently truncate).
 pub const KEYS_MAX: usize = 32;
+/// Max chars per shell/keys input: the word/key caps count tokens, so
+/// a single 4000-char blob (base64, no spaces) would else bypass them
+/// into one RPC + Telegram echo. Refuse, never partially run.
+pub const INPUT_MAX_CHARS: usize = 4096;
 
 /// Fail-closed shell validation (pure): trims, then refuses empty and
 /// over-cap. Returns the trimmed command on success.
@@ -15,6 +19,9 @@ pub fn validate_shell_cmd(cmd: &str) -> Result<&str, &'static str> {
     let t = cmd.trim();
     if t.is_empty() {
         return Err("empty command — nothing to run");
+    }
+    if t.chars().count() > INPUT_MAX_CHARS {
+        return Err("command too long — shorten it");
     }
     if t.split_whitespace().count() > SHELL_CMD_MAX_WORDS {
         return Err("command too long — shorten it");
@@ -32,6 +39,19 @@ pub fn validate_keys_len(n: usize) -> Result<(), String> {
         return Err(format!("too many keys — shorten it (max {KEYS_MAX})"));
     }
     Ok(())
+}
+
+/// Fail-closed keys-text validation (pure, single source with the
+/// len gate above): refuses empty, over-count, and over-char inputs.
+/// Callers with the raw text should use this; callers holding only a
+/// count keep `validate_keys_len`.
+pub fn validate_keys_text(text: &str) -> Result<Vec<&str>, String> {
+    if text.chars().count() > INPUT_MAX_CHARS {
+        return Err(format!("too many keys — shorten it (max {INPUT_MAX_CHARS} chars)"));
+    }
+    let keys: Vec<&str> = text.split_whitespace().collect();
+    validate_keys_len(keys.len())?;
+    Ok(keys)
 }
 
 #[cfg(test)]
@@ -54,5 +74,9 @@ mod tests {
         assert!(validate_keys_len(1).is_ok());
         assert!(validate_keys_len(KEYS_MAX).is_ok());
         assert!(validate_keys_len(KEYS_MAX + 1).is_err());
+        // Single huge token bypasses word/key counts — char cap stops it.
+        assert!(validate_shell_cmd(&"x".repeat(INPUT_MAX_CHARS + 1)).is_err());
+        assert!(validate_keys_text(&"x".repeat(INPUT_MAX_CHARS + 1)).is_err());
+        assert!(validate_keys_text("y enter").is_ok());
     }
 }

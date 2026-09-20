@@ -203,8 +203,11 @@ pub(crate) async fn scan_limits(s: &AppState) {
         // silent one for quota, and single-owner deployments (the norm)
         // never hit this branch partially. Dest fallback: a stale prompt
         // chat (pruned thread) falls back to the live topic; owners hear
-        // it only when no forum mapping exists at all (forum sends that
-        // fail transiently retry next tick instead of DM-spamming).
+        // it only when no forum exists at all (DM-mode deployments — in
+        // forum mode an unmapped pane is a paced-reset remint in flight,
+        // and DM-fallback would buzz the wrong surface instead of the new
+        // topic; stall.rs parity is silence + retry next tick; forum sends
+        // that fail transiently retry next tick instead of DM-spamming).
         let mut delivered = false;
         if let Some((chat, th)) = owned_dest {
             delivered = send_one(s, chat, th, &text, &pane).await;
@@ -212,7 +215,7 @@ pub(crate) async fn scan_limits(s: &AppState) {
         if !delivered && let Some((fchat, fth)) = forum_dest {
             delivered = send_one(s, fchat, Some(fth), &text, &pane).await;
         }
-        if !delivered && forum_dest.is_none() && !s.cfg.owners.is_empty() {
+        if !delivered && forum_dest.is_none() && s.cfg.forum.is_none() && !s.cfg.owners.is_empty() {
             // Per-owner (not product): one blocked owner must not hold the
             // healthy ones hostage for retries + every future tick, nor
             // spam the healthy with duplicates on retry. Complete when at

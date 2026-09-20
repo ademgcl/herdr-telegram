@@ -135,11 +135,22 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         };
         send_with(s, forum, Some(thread), pane, &screen).await
     } else {
-        let mut posted = false;
+        // All-or-nothing sig (per-chat tracking would need a map
+        // reshape): a partial fan-out stamps nothing, so the next
+        // observation retries the missing owner instead of going
+        // silent on a pane-global match. Duplicates-over-silence: the
+        // already-served owner may get the card twice (both stay live
+        // — taps on either work), which beats starving one owner
+        // until the dialog turns over.
+        let mut sent = 0;
         for id in &s.cfg.owners {
             if send_with(s, *id, None, pane, &screen).await {
-                posted = true;
+                sent += 1;
             }
+        }
+        let posted = sent > 0;
+        if posted && sent < s.cfg.owners.len() {
+            s.blocked_sig.lock().await.remove(pane);
         }
         posted
     };

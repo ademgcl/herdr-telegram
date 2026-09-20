@@ -36,6 +36,16 @@ pub const USAGE_RESET_TOPIC: &str =
 /// (`USAGE_KEYS_TOPIC`) covers pane-shaped first tokens.
 pub const USAGE_KEYS_BARE: &str = "usage: `/keys y enter`";
 
+/// DM `/keys` usage (addressing surface): single source with the bare
+/// form above so the two wordings never re-drift.
+pub const USAGE_KEYS_DM: &str = "usage: /keys <pane|kind> <key> [key...]  e.g. /keys w8:p1 y enter";
+
+/// "who?" target usage for DM lifecycle commands (single source:
+/// dup'd literals re-drift).
+pub fn who_usage(cmd: &str) -> String {
+    format!("who? `/{cmd} <pane>` or tap an agent in /agents")
+}
+
 /// Strict line-count parse: bare → default, single integer → clamped,
 /// anything else → None (caller posts usage). i64-wide like DM so
 /// huge/negative clamp instead of erroring; extra tokens never silently

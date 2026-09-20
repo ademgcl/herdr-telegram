@@ -9,7 +9,8 @@ use std::time::Duration;
 /// fatals and would mask them behind a doomed retry. Single source for
 /// the strip gate below.
 pub fn is_color_rejection(msg: &str) -> bool {
-    msg.contains("COLOR_INVALID") || msg.to_lowercase().contains("icon_color")
+    let low = msg.to_lowercase();
+    msg.contains("COLOR_INVALID") || low.contains("icon_color") || low.contains("icon color")
 }
 
 pub fn build_create_forum_topic_params(
@@ -170,7 +171,7 @@ impl TelegramClient {
                 return Ok(());
             }
             eprintln!("set_topic_icon #{thread_id} failed: {}", self.redact(&msg));
-            return Err(msg.into());
+            return Err(self.redact(&msg).into());
         }
         Ok(())
     }
@@ -252,6 +253,7 @@ mod tests {
         for m in [
             "Bad Request: COLOR_INVALID",
             "Bad Request: Icon_color_invalid",
+            "Bad Request: icon color invalid",
         ] {
             assert!(is_color_rejection(m), "must strip: {m}");
         }

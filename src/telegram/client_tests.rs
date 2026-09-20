@@ -48,6 +48,14 @@ fn test_is_unauthorized_matches_token_death_only() {
     assert!(!TelegramClient::is_unauthorized(
         "Bad Request: chat not found"
     ));
+    // Wrapped non-JSON 404: `call` maps decode failures to
+    // `telegram http 404 Not Found: service unavailable (…)` — the
+    // colon sits after `Not Found`, so only the http-404 arm fires.
+    assert!(TelegramClient::is_unauthorized(
+        "telegram http 404 Not Found: service unavailable ((Not Found error)"
+    ));
+    // But a bare 404-ish number elsewhere is not token death.
+    assert!(!TelegramClient::is_unauthorized("retry after 404s"));
 }
 
 #[test]
@@ -61,6 +69,10 @@ fn test_is_transient_msg_matches_server_strings() {
         "Gateway Timeout",
         "connection reset",
         "request timed out",
+        "connection refused",
+        "connection closed",
+        "network is unreachable",
+        "temporary failure",
     ] {
         assert!(TelegramClient::is_transient_msg(s), "missed: {s}");
     }
@@ -68,7 +80,6 @@ fn test_is_transient_msg_matches_server_strings() {
     assert!(!TelegramClient::is_transient_msg(
         "message to edit not found"
     ));
-    assert!(!TelegramClient::is_transient_msg("connection refused"));
 }
 
 #[test]
@@ -88,9 +99,12 @@ fn test_retry_after_parsing() {
         TelegramClient::retry_after("Too Many Requests: retry after: 30"),
         Some(Duration::from_secs(31))
     );
+    // Non-adjacent digits are not a flood-wait (false positive: would
+    // sleep ~60s on an unrelated code).
+    assert_eq!(TelegramClient::retry_after("retry after in 30s"), None);
     assert_eq!(
-        TelegramClient::retry_after("retry after in 30s"),
-        Some(Duration::from_secs(31))
+        TelegramClient::retry_after("retry after many (code 123)"),
+        None
     );
     assert_eq!(TelegramClient::retry_after("connection reset"), None);
     assert_eq!(TelegramClient::retry_after("retry after many"), None);

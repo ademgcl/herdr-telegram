@@ -1,3 +1,4 @@
+use super::router_guards::{log_safe, setup_note_due, stale_notice_due};
 use crate::{
     handlers::{handle_callback, handle_dm_message, handle_forum_message},
     state::AppState,
@@ -5,30 +6,6 @@ use crate::{
 };
 use serde_json::Value;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-
-/// Stale-notice burst guard: a boot burst queues N stale messages and
-/// each must not send its own "please resend" (serial and slow — fresh
-/// updates stall behind the spam). One notice per (chat, thread) per
-/// STALE_SECS; a later genuine stall still notifies. Pure for tests.
-fn stale_notice_due(last: Option<Instant>, now: Instant) -> bool {
-    last.map(|t| now.duration_since(t).as_secs() >= STALE_SECS)
-        .unwrap_or(true)
-}
-
-/// Setup-note guard: same shape, daily window — an unconfigured group
-/// reminds once a day, never spams, never mutes forever. Pure for tests.
-fn setup_note_due(last: Option<Instant>, now: Instant) -> bool {
-    last.map(|t| now.duration_since(t).as_secs() >= NAGGED_SECS)
-        .unwrap_or(true)
-}
-
-/// Strip newlines from user-controlled titles before logging: logged
-/// titles must never forge log lines.
-fn log_safe(s: &str) -> String {
-    s.chars()
-        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
-        .collect()
-}
 
 pub async fn handle_update(s: AppState, u: &Value) {
     let kind = if u.get("callback_query").is_some() {
@@ -100,8 +77,12 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // User customized topic icon in Telegram: persist so bot never overwrites it.
     // Same forum gate as renames below: thread ids are small ints that
     // collide across chats — an icon edit elsewhere must never poison a
-    // mapped pane (customs stick, so the glyph would wedge).
-    if let Some((thread, icon)) = crate::handlers::topic_edit::parse_topic_icon_edit(msg)
+    // mapped pane (customs stick, so the glyph would wedge). Reset-gated
+    // like renames (adopt_topic_title): reset_topic preserves customs via
+    // icon_needs_update, so a mid-reset custom wedges the mint on the
+    // wrong glyph / blocks kind-heal.
+    if !crate::handlers::reset::is_resetting()
+        && let Some((thread, icon)) = crate::handlers::topic_edit::parse_topic_icon_edit(msg)
         && (chat_type == "supergroup" || chat_type == "group")
         && s.cfg.forum == Some(chat_id)
         && let Some(pane) = s.topics.pane_of_thread(thread)
@@ -111,7 +92,9 @@ pub async fn handle_update(s: AppState, u: &Value) {
     }
     // User cleared the custom icon: drop the stored id so the watchdog
     // heals the live kind glyph (a stale custom wedges kind flips).
-    if let Some(thread) = crate::handlers::topic_edit::parse_topic_icon_cleared(msg)
+    // Reset-gated like the custom arm above.
+    if !crate::handlers::reset::is_resetting()
+        && let Some(thread) = crate::handlers::topic_edit::parse_topic_icon_cleared(msg)
         && (chat_type == "supergroup" || chat_type == "group")
         && s.cfg.forum == Some(chat_id)
         && let Some(pane) = s.topics.pane_of_thread(thread)
@@ -140,7 +123,11 @@ pub async fn handle_update(s: AppState, u: &Value) {
         return;
     }
 
-    let date = msg["date"].as_u64().unwrap_or(0);
+    // Fail-closed: a message with no date is ambiguous — drop silently
+    // instead of treating it as always-stale (loud) or always-fresh.
+    let Some(date) = msg["date"].as_u64() else {
+        return;
+    };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -196,6 +183,34 @@ pub async fn handle_update(s: AppState, u: &Value) {
         if let Some(forum_id) = s.cfg.forum {
             if chat_id == forum_id {
                 handle_forum_message(s, chat_id, msg).await;
+            } else {
+                // Owner typing in a non-forum group: same daily-bounded
+                // guidance as the unconfigured arm below, never a dead
+                // silent drop (a mistyped/moved group looks like a dead
+                // bot otherwise).
+                println!(
+                    "[telegram] message in non-forum group '{}' (see guidance)",
+                    log_safe(msg["chat"]["title"].as_str().unwrap_or(""))
+                );
+                let due = {
+                    let at = Instant::now();
+                    let mut nagged = s.nagged.lock().await;
+                    nagged.retain(|_, t| at.duration_since(*t).as_secs() < NAGGED_SECS);
+                    let due = setup_note_due(nagged.get(&chat_id).copied(), at);
+                    if due {
+                        nagged.insert(chat_id, at);
+                    }
+                    due
+                };
+                if !due {
+                    return;
+                }
+                let th_send = msg["message_thread_id"].as_i64().filter(|t| *t != 1);
+                let note = "🤖 I only serve the configured forum group from here — please use the forum topics or DM me.";
+                let tg = s.tg.clone();
+                tokio::spawn(async move {
+                    tg.send_msg(chat_id, th_send, note, None).await;
+                });
             }
         } else {
             println!(
@@ -217,7 +232,10 @@ pub async fn handle_update(s: AppState, u: &Value) {
             if !due {
                 return;
             }
-            let th = msg["message_thread_id"].as_i64();
+            // Normalized send (waiter_key parity with the stale notice):
+            // General arrives as None on messages but Some(1) on
+            // callbacks — both are the same conversation.
+            let th = msg["message_thread_id"].as_i64().filter(|t| *t != 1);
             let note = format!(
                 "🤖 Connected to Herdr!\n\nTo enable per-agent forum topics, add this group to `.env`:\n`TELEGRAM_FORUM_CHAT_ID={chat_id}`"
             );
@@ -228,39 +246,5 @@ pub async fn handle_update(s: AppState, u: &Value) {
                 tg.send_msg(chat_id, th, &note, None).await;
             });
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_log_safe_strips_newlines() {
-        assert_eq!(log_safe("plain"), "plain");
-        assert_eq!(log_safe("a\nb\rc"), "a b c");
-        assert_eq!(log_safe("[x]\nFAKE LOG"), "[x] FAKE LOG");
-    }
-
-    #[test]
-    fn test_stale_notice_due_first_then_quiet_then_due() {
-        let now = Instant::now();
-        assert!(stale_notice_due(None, now));
-        assert!(!stale_notice_due(Some(now), now));
-        let recent = now - std::time::Duration::from_secs(10);
-        assert!(!stale_notice_due(Some(recent), now));
-        let old = now - std::time::Duration::from_secs(STALE_SECS + 1);
-        assert!(stale_notice_due(Some(old), now));
-    }
-
-    #[test]
-    fn test_setup_note_due_daily_window() {
-        let now = Instant::now();
-        assert!(setup_note_due(None, now));
-        assert!(!setup_note_due(Some(now), now));
-        let hour = now - std::time::Duration::from_secs(3600);
-        assert!(!setup_note_due(Some(hour), now));
-        let old = now - std::time::Duration::from_secs(NAGGED_SECS + 1);
-        assert!(setup_note_due(Some(old), now));
     }
 }

@@ -9,6 +9,10 @@ use std::time::Duration;
 /// `jobs::report`): only a definitely-gone card earns a fresh post —
 /// a transient failure keeps the pin and retries next tick.
 pub async fn sync_identity_pin(s: &AppState, pane: &str, forum: i64, card: &str) {
+    // Snapshot (thread, mid) together: a reset migrating the mapping
+    // mid-window must not edit the corpse topic successfully and then
+    // skip the mint in the new one.
+    let thread_at_read = s.topics.all_mappings().get(pane).copied();
     let mut mid_opt = s.topics.get_pin(pane);
     if let Some(mid) = mid_opt {
         let edit = tokio::time::timeout(
@@ -17,7 +21,14 @@ pub async fn sync_identity_pin(s: &AppState, pane: &str, forum: i64, card: &str)
         )
         .await;
         match edit {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                // Remint raced the edit: the corpse edit landed but the
+                // mapping moved — treat as gone so the mint branch below
+                // posts in the new topic.
+                if s.topics.all_mappings().get(pane).copied() != thread_at_read {
+                    mid_opt = None;
+                }
+            }
             Ok(Err(e)) if crate::telegram::messages::edit_gone(&e.to_string()) => {
                 mid_opt = None;
             }

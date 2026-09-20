@@ -148,6 +148,42 @@ pub(crate) async fn consume_typewait(
     }
 }
 
+/// Serve a resumed-prompt waiter outcome (split from `forum_topic`,
+/// 300-line file limit): re-read the WAITER pane (the routing snapshot
+/// may point elsewhere after a re-arm) and enqueue as a prompt, or
+/// restore the waiter on an unreadable read.
+pub(crate) async fn serve_resumed_prompt(
+    s: crate::state::AppState,
+    chat: i64,
+    thread_id: i64,
+    text: String,
+    wpane: String,
+    armed_at: std::time::Instant,
+) {
+    // Raced resume: answer text never becomes control (DM
+    // parity: re-read the WAITER pane — the routing snapshot
+    // may point elsewhere after a re-arm; `pane` prompts wrong).
+    // Unreadable re-read restores the ORIGINAL instant, never drops.
+    match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
+        Ok(fresh) => {
+            crate::jobs::enqueue_prompt(s, chat, Some(thread_id), fresh.into(), text).await;
+        }
+        Err(_) => {
+            // Restore-only (never overwrite): a B:type re-arm
+            // landing between the consume and this re-read owns
+            // the waiter now — a blind insert would clobber it
+            // and mistype the next message into the dead pane.
+            s.typewait
+                .lock()
+                .await
+                .entry((chat, Some(thread_id)))
+                .or_insert((wpane, armed_at));
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

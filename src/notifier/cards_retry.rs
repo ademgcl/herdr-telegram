@@ -5,7 +5,7 @@
 //! lasting outage leaves the arm for the next transition). Fail-closed
 //! throughout: never anchor, never mint, never post.
 use crate::{
-    herdr::client::{list_panes, read_agent_output},
+    herdr::client::{list_panes, read_agent_output, read_agent_visible},
     notifier::spontaneous::{Liveness, liveness},
     state::AppState,
 };
@@ -37,6 +37,29 @@ const RETRY_SECS: u64 = 5;
 /// Extra passes after the first ambiguous read.
 const RETRIES: u32 = 2;
 
+/// Spontaneous screen read (single source for `cards` + the retry below):
+/// `recent_unwrapped` first (80-line settle window), visible-viewport
+/// fallback for busy alt-screen TUIs (finalize parity — `read_screen`
+/// alone errors there and the reply would be lost with no new transition
+/// to re-fire the arm). Empty means outage/unknown on both sources.
+pub(crate) async fn read_screen_spontaneous(s: &AppState, pane: &str) -> Vec<String> {
+    let recent: Vec<String> = read_agent_output(&s.cfg.socket, pane, 80)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    if !recent.is_empty() {
+        return recent;
+    }
+    read_agent_visible(&s.cfg.socket, pane, 60)
+        .await
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect()
+}
+
 /// Re-read an empty screen. `None` = caller returns at once (raced with
 /// a job/final, reset started, or the outage lasts — the arm stays for
 /// the next transition); `Some` is always non-empty.
@@ -63,12 +86,7 @@ pub(crate) async fn read_screen_retry(
         {
             return None;
         }
-        let screen: Vec<String> = read_agent_output(&s.cfg.socket, pane, 80)
-            .await
-            .unwrap_or_default()
-            .lines()
-            .map(|l| l.trim_end().to_string())
-            .collect();
+        let screen = read_screen_spontaneous(s, pane).await;
         if !screen.is_empty() {
             return Some(screen);
         }

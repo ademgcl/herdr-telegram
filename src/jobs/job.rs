@@ -60,23 +60,31 @@ impl Job {
         self.stopped.load(Ordering::Relaxed)
     }
 
-    /// Bump epoch + pending atomically under the pending lock (no await
-    /// inside): finalize snapshots both under the same lock, so the
-    /// entry share never skews across a racing submit. Single source
-    /// with `snapshot_generation` below.
-    pub async fn bump_generation(&self) {
+    /// Atomic last-wins publish (single source for enqueue/transfer):
+    /// dest + prompt + generation move together under the pending lock
+    /// (lock order pending→prompt→dest, never inverted anywhere — every
+    /// other user takes these one at a time), so a settle snapshotting
+    /// mid-submit can never pair the old epoch with the new prompt text
+    /// (wrong echo boundary) or the new epoch with the old dest (stale
+    /// thread delivery + leaked durable intent).
+    pub async fn publish_submit(&self, chat_id: i64, thread_id: Option<i64>, text: &str) {
         let mut p = self.pending.lock().await;
+        let mut prompt = self.prompt.lock().await;
+        let mut dest = self.dest.lock().await;
+        *dest = (chat_id, thread_id);
+        *prompt = text.to_string();
         self.epoch.fetch_add(1, Ordering::Relaxed);
         *p += 1;
     }
 
-    /// Snapshot epoch + pending under the pending lock (no await
-    /// inside): pairs with `bump_generation` above — a submit landing
-    /// between two detached reads would else over/under-count the
-    /// entry share into the newcomer's cover.
-    pub async fn snapshot_generation(&self) -> (u64, usize) {
+    /// Atomic routing snapshot for settle entry (single source with
+    /// `publish_submit` above — same lock order): epoch + pending +
+    /// prompt read as one generation, never a split pair across a racing
+    /// submit. Dest rides separately (repoint owns it mid-settle).
+    pub async fn snapshot_entry(&self) -> (u64, usize, String) {
         let p = self.pending.lock().await;
-        (self.epoch.load(Ordering::Relaxed), *p)
+        let prompt = self.prompt.lock().await;
+        (self.epoch.load(Ordering::Relaxed), *p, prompt.clone())
     }
 
     pub fn mark_stopped(&self) {

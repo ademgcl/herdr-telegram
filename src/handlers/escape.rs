@@ -110,10 +110,17 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         crate::handlers::dialog::DIALOG_READ_LINES,
     )
     .await;
-    let still_blocked = get_agent(&s.cfg.socket, pane)
-        .await
-        .map(|a| a.status == "blocked")
-        .unwrap_or(true);
+    let still_blocked = match get_agent(&s.cfg.socket, pane).await {
+        Ok(a) => a.status == "blocked",
+        Err(e) => {
+            // Fail-closed: an ambiguous post-Esc read must not feed a
+            // guessed bool into classify_tap (repost/follow/heal on a
+            // lie). Heal the optimistic strip and report visibly.
+            get_err_msg(s, chat, thread, pane, &e.to_string()).await;
+            heal_stripped(s, pane);
+            return;
+        }
+    };
     match classify_tap(&before, &after, still_blocked) {
         TapResult::Resumed => {
             // The dialog is gone — strip posted buttons (topic + DM

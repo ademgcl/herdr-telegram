@@ -20,7 +20,10 @@ pub(crate) mod history;
 mod jobs;
 mod pending_cas;
 mod persist_paths;
+mod retire;
 mod targets;
+#[cfg(test)]
+mod test_state;
 mod typing;
 
 pub use self::guard::OpGuard;
@@ -163,9 +166,9 @@ impl State {
     pub async fn save_offset(&self) {
         let off = *self.offset.lock().await;
         let file = persist_paths::offset_file();
-        let mut tmp = file.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
+        // Unique tmp (never shared `<file>.tmp`): a concurrent save must
+        // not interleave into one torn offset.
+        let tmp = crate::types::unique_tmp(&file);
         if crate::types::write_private(&tmp, off.to_string().as_bytes()).is_ok() {
             if std::fs::rename(&tmp, &file).is_err() {
                 eprintln!("[state] offset rename failed (disk full?)");

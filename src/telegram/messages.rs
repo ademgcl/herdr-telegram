@@ -28,6 +28,8 @@ pub fn is_effect_rejection(msg: &str) -> bool {
 pub fn edit_gone(msg: &str) -> bool {
     super::errors::topic_gone(msg)
         || msg.contains("message to edit not found")
+        || msg.contains("Message to edit not found")
+        || msg.contains("MESSAGE_TO_EDIT_NOT_FOUND")
         || msg.contains("message can't be edited")
         || msg.contains(super::errors::NO_RIGHTS)
         || msg.contains(super::errors::BOT_BLOCKED)
@@ -117,8 +119,9 @@ impl TelegramClient {
     ) -> Option<i64> {
         let mut params =
             build_send_msg_params(chat_id, thread_id, text, keyboard, effect_id, false);
-        let mut sends = 0;
-        let mut waits = 0;
+        // Single shared budget across flood-waits, effect-strip and
+        // transient retries (≤6 retries total).
+        let mut used = 0;
         loop {
             match self
                 .call("sendMessage", params.clone(), Duration::from_secs(15))
@@ -127,19 +130,11 @@ impl TelegramClient {
                 Ok(v) => return v["message_id"].as_i64(),
                 Err(e) => {
                     let msg = e.to_string();
-                    eprintln!("sendMessage failed: {}", self.redact(&msg));
-                    // If effect is rejected, strip message_effect_id and retry immediately.
-                    // Fail-closed shape: params is locally built as an object —
-                    // a non-object here breaks the retry instead of panicking.
-                    // Effect-shaped only: a bare "not allowed" also matches
-                    // unrelated fatals (rights/kicked) that must fail fast
-                    // below instead of burning a second send that fails too.
-                    // Flood-wait always wins: a 429 whose text mentions
-                    // "effect" must still sleep before the strip retry, or
-                    // the immediate re-fire extends the flood.
+                    // Flood-wait always wins over the effect strip below.
                     if let Some(wait) = Self::retry_after(&msg) {
-                        waits += 1;
-                        if waits > 3 {
+                        used += 1;
+                        if used > 6 {
+                            eprintln!("sendMessage failed: {}", self.redact(&msg));
                             break;
                         }
                         tokio::time::sleep(wait).await;
@@ -147,18 +142,25 @@ impl TelegramClient {
                     }
                     if params.get("message_effect_id").is_some() && is_effect_rejection(&msg) {
                         let Some(obj) = params.as_object_mut() else {
+                            eprintln!("sendMessage failed: {}", self.redact(&msg));
                             break;
                         };
                         obj.remove("message_effect_id");
+                        used += 1;
+                        if used > 6 {
+                            eprintln!("sendMessage failed: {}", self.redact(&msg));
+                            break;
+                        }
                         continue;
                     }
-                    sends += 1;
                     // Telegram 5xx arrives as plain strings via `call`
                     // (never a reqwest downcast match): same transient
                     // set as `call_retrying` or buzz alerts drop silently.
                     let retryable =
                         Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
-                    if !retryable || sends >= 3 {
+                    used += 1;
+                    if !retryable || used > 6 {
+                        eprintln!("sendMessage failed: {}", self.redact(&msg));
                         break;
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -211,12 +213,12 @@ impl TelegramClient {
                     }
                     if edit_gone(&msg) {
                         eprintln!("editMessageText fatal: {}", self.redact(&msg));
-                        return Err(msg.into());
+                        return Err(self.redact(&msg).into());
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
                         waits += 1;
                         if waits > 3 {
-                            return Err(msg.into());
+                            return Err(self.redact(&msg).into());
                         }
                         tokio::time::sleep(wait).await;
                         continue;
@@ -229,7 +231,7 @@ impl TelegramClient {
                         Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
                     if !retryable || sends >= 3 {
                         eprintln!("editMessageText failed: {}", self.redact(&msg));
-                        return Err(msg.into());
+                        return Err(self.redact(&msg).into());
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }

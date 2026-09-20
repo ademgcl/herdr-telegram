@@ -110,13 +110,17 @@ pub async fn settle_step(
     // remap, or the cross-thread gap before finalize's first line)
     // bumps the epoch, and every gate below compares against entry_epoch,
     // so the old acc/screen can never post as the new generation.
-    // Prompt/enqueue skew: enqueue writes prompt BEFORE bumping, so a
-    // submit interleaving between the two snapshots could pair old-gen
-    // with new-prompt (or vice versa) — re-check the epoch after both
-    // and abort on any move.
-    let (entry_epoch, entry_pending) = job.snapshot_generation().await;
-    let entry_prompt = job.prompt.lock().await.clone();
-    if job.epoch.load(Ordering::Relaxed) != entry_epoch || job.is_stopped() {
+    // Prompt/enqueue skew: the atomic `snapshot_entry` (same lock order
+    // as `publish_submit`) pairs the generation with the prompt text —
+    // a split read could else pair old-gen with new-prompt (or vice
+    // versa). The pre-epoch check below still aborts on any move across
+    // the snapshot itself.
+    let pre_epoch = job.epoch.load(Ordering::Relaxed);
+    let (entry_epoch, entry_pending, entry_prompt) = job.snapshot_entry().await;
+    if pre_epoch != entry_epoch
+        || job.epoch.load(Ordering::Relaxed) != entry_epoch
+        || job.is_stopped()
+    {
         *settled_since = None;
         return SettleStep::Continue;
     }

@@ -30,6 +30,11 @@ pub fn should_start_follow(has_live_job: bool, status: &str) -> bool {
 /// Stands down when a live job owns the pane or the pane is still
 /// blocked/unreadable (the card path owns those).
 pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i64>, hint: &str) {
+    // Baseline BEFORE the resume poll below: answer output produced
+    // during the ~6s wait would else land inside the baseline and the
+    // delta would come back empty (reply never lands, and the empty arm
+    // anchors `seen` over it, suppressing the spontaneous debounce too).
+    let pre_baseline = read_screen(&s.cfg.socket, pane, 400).await;
     // A tap/type answer resumes with status lag: herdr still samples
     // `blocked` for seconds after the resume, and RPC blips read the
     // same. Poll up to ~6s instead of abandoning the resumed turn
@@ -62,7 +67,14 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
         Ok(a) if should_start_follow(false, &a.status) => {}
         _ => return,
     }
-    let baseline = read_screen(&s.cfg.socket, pane, 400).await;
+    // Prefer the pre-poll baseline (answer output above); only re-read
+    // when it came back empty (outage — `anchor_baseline` never anchors
+    // empties, so the stream adopts the first real screen instead).
+    let baseline = if pre_baseline.is_empty() {
+        read_screen(&s.cfg.socket, pane, 400).await
+    } else {
+        pre_baseline
+    };
     let job = Job::new(baseline, chat, thread);
     *job.prompt.lock().await = hint.to_string();
     *job.pending.lock().await = 1;

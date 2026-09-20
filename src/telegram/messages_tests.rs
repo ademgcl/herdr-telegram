@@ -58,6 +58,14 @@ fn test_edit_fatal_errors_fail_fast_not_retried() {
     for t in ["Internal Server Error", "Bad Gateway", "timed out"] {
         assert!(TelegramClient::is_transient_msg(t), "must retry: {t}");
     }
+    // Edit-gone matches both cases + the constant form.
+    for gone in [
+        "Bad Request: message to edit not found",
+        "Bad Request: Message to edit not found",
+        "Bad Request: MESSAGE_TO_EDIT_NOT_FOUND",
+    ] {
+        assert!(super::edit_gone(gone), "gone must retire: {gone}");
+    }
 }
 
 #[test]

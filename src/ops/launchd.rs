@@ -149,6 +149,9 @@ pub async fn install(home: &str) -> Res<()> {
         }
         return Err("guard busy — dev stop/cleanup first, then dev install".into());
     }
+    // Backup the old plist before overwriting: a failed bootstrap
+    // below must restore file + job, never leave prod DOWN.
+    let old_plist = std::fs::read(&path).ok();
     if let Err(e) = std::fs::write(&path, render_plist(&exe, &dir)) {
         let (ok, rerr) =
             launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
@@ -159,7 +162,17 @@ pub async fn install(home: &str) -> Res<()> {
     }
     let (ok, err) = launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
     if !ok {
-        return Err(format!("bootstrap failed: {err}").into());
+        if let Some(bytes) = old_plist {
+            let _ = std::fs::write(&path, &bytes);
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
+        let (rok, rerr) =
+            launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
+        if !rok {
+            return Err(format!("bootstrap failed: {err} (previous job restore FAILED: {rerr})").into());
+        }
+        return Err(format!("bootstrap failed: {err} (previous plist restored)").into());
     }
     say(
         home,

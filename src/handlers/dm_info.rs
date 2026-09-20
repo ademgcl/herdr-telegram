@@ -37,13 +37,9 @@ pub(crate) async fn handle_keys(
         _ => (None, keys),
     };
     let Some(pane) = pane else {
-        s.tg.send_msg(
-            chat,
-            None,
-            "usage: /keys <pane|kind> <key> [key...]  e.g. /keys w8:p1 y enter",
-            None,
-        )
-        .await;
+        s.tg
+            .send_msg(chat, None, crate::ui::scope_text::USAGE_KEYS_DM, None)
+            .await;
         return;
     };
     send_keys(s, chat, &pane, keys).await;
@@ -57,12 +53,13 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
             .await;
         return;
     }
-    let key_list: Vec<&str> = keys.split_whitespace().collect();
-    // Bounded like every keys arm (single source): refuse, never truncate.
-    if let Err(msg) = super::shell_validate::validate_keys_len(key_list.len()) {
-        s.tg.send_msg(chat, None, &msg, None).await;
-        return;
-    }
+    let key_list = match super::shell_validate::validate_keys_text(keys) {
+        Ok(k) => k,
+        Err(msg) => {
+            s.tg.send_msg(chat, None, &msg, None).await;
+            return;
+        }
+    };
     // Classify without guessing (tap_input parity): get_agent-ok means
     // an agent owns the pane (agent keys); a confirmed live pane with
     // no agent is a shell (pane keys). Unreadable refuses visibly.

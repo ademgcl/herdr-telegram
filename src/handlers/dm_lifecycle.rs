@@ -9,13 +9,9 @@ pub(crate) async fn handle_quit(
     reply_pane: &Option<String>,
 ) {
     let Some(pane) = dm_pane(s, rows, arg, reply_pane).await else {
-        s.tg.send_msg(
-            chat,
-            None,
-            "who? `/quit <pane>` or tap an agent in /agents",
-            None,
-        )
-        .await;
+        s.tg
+            .send_msg(chat, None, &crate::ui::scope_text::who_usage("quit"), None)
+            .await;
         return;
     };
     super::shell::quit_to_shell(s, chat, None, &pane).await;
@@ -29,13 +25,9 @@ pub(crate) async fn handle_kill(
     reply_pane: &Option<String>,
 ) {
     let Some(pane) = dm_pane(s, rows, arg, reply_pane).await else {
-        s.tg.send_msg(
-            chat,
-            None,
-            "who? `/kill <pane>` or tap an agent in /agents",
-            None,
-        )
-        .await;
+        s.tg
+            .send_msg(chat, None, &crate::ui::scope_text::who_usage("kill"), None)
+            .await;
         return;
     };
     super::kill::ask_kill(s, chat, None, &pane).await;
@@ -86,13 +78,9 @@ pub(crate) async fn handle_split(
         },
     };
     let Some(pane) = super::target::dm_pane(s, rows, pane_arg, reply_pane).await else {
-        s.tg.send_msg(
-            chat,
-            None,
-            "who? `/split <pane>` or tap an agent in /agents",
-            None,
-        )
-        .await;
+        s.tg
+            .send_msg(chat, None, &crate::ui::scope_text::who_usage("split"), None)
+            .await;
         return;
     };
     super::shell::open_split(s, chat, None, &pane, dir).await;

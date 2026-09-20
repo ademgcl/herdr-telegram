@@ -131,7 +131,11 @@ pub(crate) async fn watch_stall(
         // screen into the new prompt's thread. Delete best-effort,
         // never remember, release our claim.
         if job.epoch.load(Ordering::Relaxed) != epoch_before {
-            s.tg.delete_msg(chat, m).await;
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
+                s.tg.delete_msg(chat, m),
+            )
+            .await;
             release_claim(s, pane, hit.kind, now).await;
             episode.unfire();
             return screen;

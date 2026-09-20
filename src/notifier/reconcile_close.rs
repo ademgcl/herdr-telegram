@@ -60,9 +60,11 @@ pub(crate) async fn close_dead_pane(s: &AppState, pane: &str) -> bool {
     s.cancel_jobs_for_quiet(pane).await;
     // Final generation gate: a remint slipping in during the cancel
     // awaits above keeps its waiters/guards/debounce — clear only the
-    // corpse's (a live foreign mapping bails; our absence proceeds).
+    // corpse's (any mapping change, including a concurrent prune to
+    // None, bails: restoring the corpse over the vacancy resurrects
+    // intent for a dead slot).
     let cur = s.topics.all_mappings().get(pane).copied();
-    if cur != thread && cur.is_some() {
+    if cur != thread {
         return true;
     }
     s.clear_pane(pane).await;

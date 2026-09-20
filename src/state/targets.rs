@@ -3,7 +3,6 @@
 //! unchanged (torder → targets, memory-before-disk focus).
 use super::State;
 use crate::types::write_private;
-use std::path::PathBuf;
 
 impl State {
     pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
@@ -47,9 +46,9 @@ impl State {
         // disk vs RAM on the same winner (disk-first can resurrect loser).
         *self.focus.lock().await = Some(pane.to_string());
         let file = super::persist_paths::focus_file();
-        let mut tmp = file.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
+        // Unique tmp (never shared `<file>.tmp`): concurrent focuses
+        // must not interleave into one torn file.
+        let tmp = crate::types::unique_tmp(&file);
         if write_private(&tmp, pane.as_bytes()).is_ok() {
             if std::fs::rename(&tmp, &file).is_err() {
                 eprintln!("[state] focus rename failed (disk full?)");

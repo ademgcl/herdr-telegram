@@ -20,7 +20,8 @@ pub fn build_reaction_body(chat_id: i64, message_id: i64, emoji: Option<&str>) -
 impl TelegramClient {
     /// F7: Set an emoji reaction on a message (e.g. ❗ for blocked/stalled, ✅ for done/resumed).
     /// Pass None to clear reactions. Ignores unsupported chats / reaction errors gracefully.
-    /// Honors one flood-wait (then one retry): a tap burst must not silently drop ✅/❗.
+    /// Retries transients + up to 3 flood-waits (send/edit parity): a tap
+    /// burst must not silently drop ✅/❗ on a blip.
     pub async fn set_reaction(
         &self,
         chat_id: i64,
@@ -29,6 +30,7 @@ impl TelegramClient {
     ) -> Res<()> {
         let body = build_reaction_body(chat_id, message_id, emoji);
         let mut waits = 0;
+        let mut sends = 0;
         loop {
             match self
                 .call("setMessageReaction", body.clone(), Duration::from_secs(10))
@@ -40,6 +42,7 @@ impl TelegramClient {
                     if msg.contains("REACTIONS_NOT_ALLOWED")
                         || msg.contains("REACTIONS_DISABLED")
                         || msg.contains("REACTION_INVALID")
+                        || msg.contains("CHAT_ADMIN_REQUIRED")
                         || msg.contains("not modified")
                         || msg.contains("message not found")
                         || msg.contains("message to forward not found")
@@ -53,13 +56,19 @@ impl TelegramClient {
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
                         waits += 1;
-                        if waits > 1 {
+                        if waits > 3 {
                             return Err(e);
                         }
                         tokio::time::sleep(wait).await;
                         continue;
                     }
-                    return Err(e);
+                    sends += 1;
+                    let retryable = Self::is_transport_transient(e.as_ref())
+                        || Self::is_transient_msg(&msg);
+                    if !retryable || sends >= 3 {
+                        return Err(e);
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
         }

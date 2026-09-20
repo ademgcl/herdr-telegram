@@ -11,12 +11,19 @@ pub const CANCELLED: &str = "✋ cancelled";
 
 /// Cancel ownership verdict (pure, tested): a superseding enqueue owns
 /// the intent — a stale watcher's retire clears it only when the jobs
-/// map still points here. Single source for `runner::cancel_watch`.
+/// map still points here AT the entry epoch. Same-Arc reuse bumps the
+/// epoch in place (`ptr_eq` alone cannot tell a successor apart — see
+/// books.rs), so the epoch pins the generation. Single source for
+/// `runner::cancel_watch`.
 pub(crate) fn cancel_owns_intent(
     current: Option<&std::sync::Arc<super::job::Job>>,
     job: &std::sync::Arc<super::job::Job>,
+    epoch_at_entry: u64,
 ) -> bool {
-    current.is_some_and(|j| std::sync::Arc::ptr_eq(j, job))
+    current.is_some_and(|j| {
+        std::sync::Arc::ptr_eq(j, job)
+            && job.epoch.load(std::sync::atomic::Ordering::Relaxed) == epoch_at_entry
+    })
 }
 
 /// Cancel edit: retires the live card where it lives (live_dest), never
@@ -146,9 +153,10 @@ pub async fn retire_live(
             // Bounded like every other live-card op above: delete_msg
             // (10s) + try_edit_msg (flood-wait sleeps) would else park
             // the watcher inside finalize past the 2s tick, stalling
-            // settle retire + /cancel handoff. One bounded attempt total
-            // — a transient failure just leaves the fold for the next
-            // turn's adopt, never a parked finalize.
+            // settle retire + /cancel handoff. One bounded attempt total.
+            // The watcher retires right after this call, so a transient
+            // failure leaves the working card frozen beside the delivered
+            // finals (the reply itself is never at risk) — never a park.
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
                 async {

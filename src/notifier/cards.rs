@@ -4,7 +4,7 @@
 use super::cards_retry::{SETTLE_DEBOUNCE_SECS, consume_reset_arm};
 use super::spontaneous::post_spontaneous_card;
 use crate::{
-    herdr::client::{get_agent, list_panes, list_workspaces, read_agent_output},
+    herdr::client::{get_agent, list_panes, list_workspaces},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
     state::AppState,
@@ -67,16 +67,12 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     {
         return;
     }
-    // Outage/unknown (Err collapsed above): never anchor an empty
-    // screen — it would wipe a good baseline and repost scrollback.
-    // Bounded retry (split: `cards_retry`): a one-shot return here loses
-    // the reply forever — no new transition re-fires this arm.
-    let mut screen: Vec<String> = read_agent_output(&s.cfg.socket, &pane, 80)
-        .await
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim_end().to_string())
-        .collect();
+    // Outage/unknown (empty on both sources): never anchor — it would
+    // wipe a good baseline and repost scrollback. Bounded retry (split:
+    // `cards_retry`): a one-shot return here loses the reply forever —
+    // no new transition re-fires this arm.
+    let mut screen: Vec<String> =
+        super::cards_retry::read_screen_spontaneous(&s, &pane).await;
     if screen.is_empty() {
         let Some(retry) = super::cards_retry::read_screen_retry(&s, &pane, armed_at).await else {
             return;
@@ -250,7 +246,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         if i > 0 && super::retry_guard::moved_on_now(&s, &pane, &settled).await {
             break;
         }
-        if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at)).await
+        if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at), spaces_ok).await
         {
             delivered = true;
             break;

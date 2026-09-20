@@ -47,6 +47,7 @@ pub(crate) async fn push_dm_alert(
             new_status,
             &fresh_body,
             Some(observed_at),
+            true,
         )
         .await
         {

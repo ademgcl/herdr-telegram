@@ -17,17 +17,18 @@ use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
-    // Answer the spinner FIRST, even for rejected taps (split to
-    // `callback_stale`: spawned, never awaited — see there).
-    super::callback_stale::answer_spinner(&s, cbq);
     let Some(from) = cbq["from"]["id"].as_i64() else {
         return;
     };
     if !s.cfg.owners.contains(&from) {
         // Intrusion attempts log the event, never the sender id.
+        // Checked before the spinner ack: rejected taps cost no API call.
         println!("[callback] ignoring non-owner tap");
         return;
     }
+    // Answer the spinner AFTER auth (split to `callback_stale`:
+    // spawned, never awaited — see there).
+    super::callback_stale::answer_spinner(&s, cbq);
     let chat = cbq["message"]["chat"]["id"].as_i64();
     let msg_id = cbq["message"]["message_id"].as_i64();
     let data = cbq["data"].as_str().unwrap_or("");

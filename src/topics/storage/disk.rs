@@ -134,6 +134,12 @@ pub(crate) fn read_store(path: &Path) -> Store {
         {
             return merge_flat_with_prev(topics, path);
         }
+        // Truncated `{}` parses as an empty Store but carries no state:
+        // prefer last-good over a mass re-mint (same as empty/corrupt).
+        if let Some(s) = load_prev(path) {
+            eprintln!("[topics] main empty-object, restored previous-good backup");
+            return s;
+        }
         return s;
     }
     if let Ok(topics) = serde_json::from_str::<HashMap<String, i64>>(&txt) {
@@ -166,9 +172,9 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
     };
     // Durable tmp+rename: fsync file before rename + dir after, so a
     // power loss can't leave a torn main (best effort, never panics).
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    // Unique tmp (never shared `<path>.tmp`): concurrent saves must not
+    // interleave into one torn file.
+    let tmp = crate::types::unique_tmp(path);
     if crate::types::write_private(&tmp, json.as_bytes()).is_err() {
         eprintln!("[topics] state tmp write failed (disk full?) — in-memory/disk diverging");
         return;
@@ -189,9 +195,7 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
                 }
                 // Atomic backup, never a torn copy.
                 let prev = prev_path(path);
-                let mut ptmp = prev.as_os_str().to_owned();
-                ptmp.push(".tmp");
-                let ptmp = PathBuf::from(ptmp);
+                let ptmp = crate::types::unique_tmp(&prev);
                 let pretty = serde_json::to_string_pretty(s).unwrap_or_default();
                 if crate::types::write_private(&ptmp, pretty.as_bytes()).is_ok() {
                     if let Ok(f) = fs::File::open(&ptmp) {

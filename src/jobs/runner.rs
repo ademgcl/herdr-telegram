@@ -10,7 +10,7 @@ use crate::{
     herdr::client::get_agent,
     jobs::job::Job,
     jobs::settle::{SettleStep, SettledArm, settle_step, sleep_or_superseded},
-    jobs::stream::{EvStream, WatchEvent},
+    jobs::stream::WatchEvent,
     state::AppState,
 };
 use std::sync::Arc;
@@ -139,23 +139,22 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // /cancel (or a supersede, via the epoch check next iteration)
         // must not wait behind up to 10s of dial.
         if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
-            let opened = tokio::select! {
-                _ = job.cancel.notified() => None,
-                r = EvStream::open_bounded(&s.cfg.socket, &pane, 10) => Some(r),
-            };
-            // Count the dial toward the cooldown (a 10s hung dial must
-            // not retry immediately — next attempt 5s after it ends).
-            last_open = Instant::now();
-            match opened {
-                None => {
-                    cancel_watch(&s, &pane, &job, &mut live).await;
-                    break;
-                }
-                Some(Ok(stream)) => ev = Some(stream),
-                Some(Err(e)) => eprintln!(
-                    "[watcher] {pane} event stream open failed: {}",
-                    crate::types::mask_home(&e.to_string())
-                ),
+            // Split to `runner_cancel::reopen_events` (300-line file limit).
+            match super::runner_cancel::reopen_events(
+                &s,
+                &pane,
+                &job,
+                &mut live,
+                &mut ev,
+                &mut last_open,
+            )
+            .await
+            {
+                super::runner_cancel::Reopen::Break => break,
+                // Epoch moved (or stopped): skip the dial entirely —
+                // the loop-top epoch arm picks the new turn up.
+                super::runner_cancel::Reopen::Cooled => continue,
+                super::runner_cancel::Reopen::Ready => {}
             }
         }
 
@@ -254,7 +253,10 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
         }
         // Sampled working: any armed report timer was a transient.
+        // Progress also decays the delivery-retry backoff: consecutive
+        // outages escalate, healthy output in between resets.
         settled_since = None;
+        retry_wait = RETRY_BACKOFF_SECS;
 
         // Rate-limit stall watch (see stall.rs): opencode retries
         // internally with no settle and no buzz — one NEW card per

@@ -58,33 +58,6 @@ impl State {
         true
     }
 
-    /// Atomic owner-checked clear for cancel retire (single source):
-    /// the jobs-map ownership check and the intent removal share ONE
-    /// jobs-lock hold with the pending removal inside — a superseding
-    /// enqueue landing between a detached check and the clear would else
-    /// wipe its intent (check-then-clear across awaits). Lock order
-    /// jobs→pending (never inverted anywhere: pending holders never
-    /// take jobs). The verdict reuses `cancel_owns_intent`.
-    pub async fn clear_pending_if_owner(
-        &self,
-        pane: &str,
-        job: &Arc<crate::jobs::job::Job>,
-    ) -> bool {
-        let snap = {
-            let jobs = self.jobs.lock().await;
-            if !crate::jobs::report::cancel_owns_intent(jobs.get(pane), job) {
-                return false;
-            }
-            let mut pending = self.pending.lock().await;
-            if pending.remove(pane).is_none() {
-                return false;
-            }
-            pending.clone()
-        };
-        persist::save_file(&persist::store_path(), &snap);
-        true
-    }
-
     /// Clear only when the slot still holds this exact submit AND the
     /// generation still matches (single critical section: pending lock
     /// held across the atomic epoch load, no await inside). An identical
@@ -119,18 +92,6 @@ impl State {
         };
         persist::save_file(&persist::store_path(), &snap);
         true
-    }
-
-    pub async fn clear_all_pending(&self) {
-        let empty = {
-            let mut map = self.pending.lock().await;
-            if map.is_empty() {
-                return;
-            }
-            map.clear();
-            map.clone()
-        };
-        persist::save_file(&persist::store_path(), &empty);
     }
 
     /// Scoped /cancel for General/DM (topic /cancel already names its

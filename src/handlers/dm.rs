@@ -3,6 +3,14 @@ use crate::{herdr::client::list_agents, state::AppState, ui::help_text};
 use serde_json::Value;
 
 pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
+    // Defense-in-depth owner gate (router parity): direct callers must
+    // not bypass auth silently — the router is not the only entry point.
+    if let Some(from) = msg["from"]["id"].as_i64()
+        && !s.cfg.owners.contains(&from)
+    {
+        println!("[dm] ignoring non-owner message");
+        return;
+    }
     let text = msg["text"]
         .as_str()
         .or_else(|| msg["caption"].as_str())

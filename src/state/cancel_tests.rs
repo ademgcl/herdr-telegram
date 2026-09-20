@@ -30,17 +30,37 @@ async fn test_remove_if_same_is_last_writer_wins() {
     let (s, _dir) = isolated_state();
     let old = Job::new(vec![], 1, None);
     s.jobs.lock().await.insert("t:p1".into(), old.clone());
-    assert!(State::remove_if_same(&s.jobs, "t:p1", &old).await);
+    assert!(s.remove_job_if_epoch("t:p1", &old, 0).await);
     // Successor inserted after the snapshot survives.
     let a = Job::new(vec![], 1, None);
     let b = Job::new(vec![], 1, None);
     s.jobs.lock().await.insert("t:p1".into(), a.clone());
     s.jobs.lock().await.insert("t:p1".into(), b.clone());
-    assert!(!State::remove_if_same(&s.jobs, "t:p1", &a).await);
+    assert!(!s.remove_job_if_epoch("t:p1", &a, 0).await);
     assert!(Arc::ptr_eq(
         &s.jobs.lock().await.get("t:p1").unwrap().clone(),
         &b
     ));
+    // Same-Arc reuse bumps the epoch in place: ptr_eq alone would eat
+    // the successor's entry — the epoch pins the generation.
+    b.epoch.fetch_add(1, Ordering::Relaxed);
+    assert!(!s.remove_job_if_epoch("t:p1", &b, 0).await);
+    assert!(s.jobs.lock().await.contains_key("t:p1"));
+    assert!(s.remove_job_if_epoch("t:p1", &b, 1).await);
+    assert!(!s.jobs.lock().await.contains_key("t:p1"));
+}
+
+#[tokio::test]
+async fn test_cancel_no_job_branch_keeps_racing_intent() {
+    // A submit racing a no-job cancel owns the changed slot.
+    let (s, _dir) = isolated_state();
+    s.pending.lock().await.insert("t:p1".into(), prompt(1));
+    let seen: Option<PendingPrompt> = None;
+    assert!(!s.clear_pending_if_unchanged("t:p1", seen).await);
+    assert!(s.pending.lock().await.contains_key("t:p1"));
+    let seen = s.pending.lock().await.get("t:p1").cloned();
+    assert!(s.clear_pending_if_unchanged("t:p1", seen).await);
+    assert!(!s.pending.lock().await.contains_key("t:p1"));
 }
 
 #[tokio::test]
@@ -230,13 +250,13 @@ async fn test_cas_with_time_keeps_original_stamp() {
     assert_eq!(s.pending.lock().await["t:p1"].started_unix, 42);
     // Same-triple re-restore without a stamp keeps it too.
     assert!(
-        s.remember_pending_cas("t:p1", (1, None, "hi"), (1, None, "hi"))
+        s.remember_pending_cas_with_time("t:p1", (1, None, "hi"), (1, None, "hi"), None)
             .await
     );
     assert_eq!(s.pending.lock().await["t:p1"].started_unix, 42);
     // Foreign triple never clobbers.
     assert!(
-        !s.remember_pending_cas("t:p1", (1, None, "no"), (1, None, "no"))
+        !s.remember_pending_cas_with_time("t:p1", (1, None, "no"), (1, None, "no"), None)
             .await
     );
     assert_eq!(s.pending.lock().await["t:p1"].prompt, "hi");

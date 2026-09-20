@@ -18,6 +18,10 @@ impl State {
     /// live successor keeps its task.
     pub async fn cancel_jobs_for(self: &Arc<Self>, pane: &str) -> bool {
         let cur = self.jobs.lock().await.get(pane).cloned();
+        // Entry pins for the LWW guards below: a submit racing the
+        // snapshot owns the slot (same-Arc reuse bumps the epoch).
+        let epoch_at_entry = cur.as_ref().map(|j| j.epoch.load(Ordering::Relaxed));
+        let pending_at_entry = self.pending.lock().await.get(pane).cloned();
         // Typing: shell-aware ownership check (a live agent successor
         // or a pending shell keeps its task; an orphan stops here —
         // the Some branch relies on this for the no-job case too).
@@ -28,9 +32,11 @@ impl State {
             if self.jobs.lock().await.contains_key(pane) {
                 return false;
             }
-            // A cleared shell pending is a real cancel (callers ack on bool).
-            // Single atomic take: no check-then-clear window for a racer.
-            let had_pending = self.clear_pending(pane).await;
+            // LWW: only clear the intent we actually saw — a submit
+            // racing the snapshot owns the changed slot.
+            let had_pending = self
+                .clear_pending_if_unchanged(pane, pending_at_entry)
+                .await;
             // No job: disarm waiters/debounce/episode (stale arms stay dead).
             self.clear_waiters(pane).await;
             self.clear_limit_episode(pane).await;
@@ -44,12 +50,15 @@ impl State {
                 .insert(pane.to_string(), std::time::Instant::now());
             return had_pending;
         };
-        let removed = Self::remove_if_same(&self.jobs, pane, &job).await;
-        if !removed {
+        // Epoch-guarded atomic retire (map entry + intent): a submit
+        // racing the snapshot owns the pane on bump (same Arc or new).
+        if !self
+            .cancel_retire_if_epoch(pane, &job, epoch_at_entry.unwrap_or(0))
+            .await
+        {
             // A successor won the race: leave its intent/waiters alone.
             return false;
         }
-        self.clear_pending(pane).await;
         self.clear_waiters(pane).await;
         // Fresh stall episode after cancel (no 30-min inherit).
         self.clear_limit_episode(pane).await;
@@ -84,11 +93,15 @@ impl State {
     /// relies on the watcher's own footer).
     pub async fn cancel_jobs_for_quiet(self: &Arc<Self>, pane: &str) -> bool {
         let cur = self.jobs.lock().await.get(pane).cloned();
+        let epoch_at_entry = cur.as_ref().map(|j| j.epoch.load(Ordering::Relaxed));
+        let pending_at_entry = self.pending.lock().await.get(pane).cloned();
         let Some(job) = cur else {
             if self.jobs.lock().await.contains_key(pane) {
                 return false;
             }
-            self.clear_pending(pane).await;
+            // LWW (loud parity): a submit racing the snapshot owns it.
+            self.clear_pending_if_unchanged(pane, pending_at_entry)
+                .await;
             self.clear_waiters(pane).await;
             self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
@@ -98,10 +111,14 @@ impl State {
             self.stop_shell_typing(pane).await;
             return false;
         };
-        if !Self::remove_if_same(&self.jobs, pane, &job).await {
+        // Epoch-guarded atomic retire (loud parity): a racing submit
+        // keeps its entry + intent.
+        if !self
+            .cancel_retire_if_epoch(pane, &job, epoch_at_entry.unwrap_or(0))
+            .await
+        {
             return false;
         }
-        self.clear_pending(pane).await;
         self.clear_waiters(pane).await;
         // Fresh stall episode after quiet retire (loud parity): a
         // same-name remint must not inherit limit_alert/seen/miss/cool.
@@ -128,6 +145,7 @@ impl State {
     /// the ownership check, same as the quiet path).
     pub async fn cancel_job_only_for(self: &Arc<Self>, pane: &str) -> bool {
         let cur = self.jobs.lock().await.get(pane).cloned();
+        let epoch_at_entry = cur.as_ref().map(|j| j.epoch.load(Ordering::Relaxed));
         let Some(job) = cur else {
             // Lost-race guard (loud/quiet parity): a successor inserted
             // after the snapshot owns the fresh debounce — leave it alone.
@@ -137,7 +155,12 @@ impl State {
             self.debounce.lock().await.remove(pane);
             return false;
         };
-        if !Self::remove_if_same(&self.jobs, pane, &job).await {
+        // Epoch-guarded remove (intent preserved): a racing submit keeps
+        // its entry — a same-Arc bump is invisible to ptr_eq alone.
+        if !self
+            .remove_job_if_epoch(pane, &job, epoch_at_entry.unwrap_or(0))
+            .await
+        {
             return false;
         }
         self.debounce.lock().await.remove(pane);
@@ -172,8 +195,47 @@ impl State {
         for handle in doomed {
             handle.abort();
         }
-        let jobs: HashMap<String, Arc<Job>> = std::mem::take(&mut *self.jobs.lock().await);
-        self.clear_all_pending().await;
+        // Last-writer-wins (per-pane parity): an enqueue landing between
+        // the snapshots above and the clears below owns its intent — a
+        // blind take-all + clear-all would wipe a successfully submitted
+        // prompt with no reply ever arriving. Same-Arc reuse bumps the
+        // epoch in place, so the snapshot pairs each Arc with its epoch.
+        let live_jobs: HashMap<String, (Arc<Job>, u64)> = {
+            let map = self.jobs.lock().await;
+            map.iter()
+                .map(|(p, j)| (p.clone(), (j.clone(), j.epoch.load(Ordering::Relaxed))))
+                .collect()
+        };
+        let live_pending = self.pending.lock().await.clone();
+        let jobs: HashMap<String, Arc<Job>> = {
+            let mut map = self.jobs.lock().await;
+            let mut taken = HashMap::new();
+            for (p, (j, epoch)) in &live_jobs {
+                let same = map
+                    .get(p)
+                    .map(|c| Arc::ptr_eq(c, j) && c.epoch.load(Ordering::Relaxed) == *epoch)
+                    .unwrap_or(false);
+                if same && let Some(removed) = map.remove(p) {
+                    taken.insert(p.clone(), removed);
+                }
+            }
+            taken
+        };
+        {
+            let mut map = self.pending.lock().await;
+            let mut snap = live_pending.clone();
+            snap.retain(|p, pp| {
+                map.get(p)
+                    .map(|c| c.chat == pp.chat && c.thread == pp.thread && c.prompt == pp.prompt)
+                    .unwrap_or(false)
+            });
+            for p in snap.keys() {
+                map.remove(p);
+            }
+            let remaining = map.clone();
+            drop(map);
+            crate::jobs::persist::save_file(&crate::jobs::persist::store_path(), &remaining);
+        }
         // Global cancel retires everything: armed input waiters and
         // settle debounces die with the jobs, or the next message/card
         // would serve a cancelled world.
@@ -203,96 +265,13 @@ impl State {
         }
         count
     }
-
-    /// Remove-if-same-Arc: the shared last-writer-wins primitive. Never
-    /// holds the guard across anything — check and remove under one lock.
-    async fn remove_if_same(
-        jobs: &tokio::sync::Mutex<HashMap<String, Arc<Job>>>,
-        pane: &str,
-        job: &Arc<Job>,
-    ) -> bool {
-        let mut map = jobs.lock().await;
-        if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
-            map.remove(pane);
-            true
-        } else {
-            false
-        }
-    }
 }
 
-/// Isolated AppState for tests (shared by cancel/hygiene/ctl suites).
-/// Cancel + reap paths persist jobs.state, so tests must never touch the
-/// repo's live files: each call mints a fresh temp state dir. Serialized
-/// via a static mutex: `set_var`/`var` is UB under parallel `cargo test`
-/// (Edition 2024 marks it unsafe), so holders keep the guard for the
-/// whole test (`_dir` alive) and restore the prior value on drop.
+/// Re-exported test helper (split to `test_state`, 300-line file
+/// limit): existing `state::cancel::isolated_state` call sites keep
+/// working unchanged.
 #[cfg(test)]
-static TEST_ENV_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(test)]
-pub(crate) struct TestStateDir {
-    path: std::path::PathBuf,
-    _guard: std::sync::MutexGuard<'static, ()>,
-    old: Option<std::ffi::OsString>,
-    old_home: Option<std::ffi::OsString>,
-}
-#[cfg(test)]
-impl Drop for TestStateDir {
-    fn drop(&mut self) {
-        if let Some(old) = self.old.take() {
-            unsafe { std::env::set_var("HERDR_STATE_DIR", old) };
-        } else {
-            unsafe { std::env::remove_var("HERDR_STATE_DIR") };
-        }
-        if let Some(old) = self.old_home.take() {
-            unsafe { std::env::set_var("HOME", old) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
-        }
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-#[cfg(test)]
-static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-#[cfg(test)]
-pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
-    let guard = TEST_ENV_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let old = std::env::var_os("HERDR_STATE_DIR");
-    let old_home = std::env::var_os("HOME");
-    let n = TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("ht-{n}-{nanos}"));
-    std::fs::create_dir_all(&path).expect("test tempdir");
-    unsafe { std::env::set_var("HERDR_STATE_DIR", &path) };
-    // Hermetic HOME: State::new + TopicStorage migrate legacy
-    // `~/.local/share/herdr-telegram/{focus,topics.json}` when the fresh
-    // dir is empty. Without this the dev machine's real focus (e.g.
-    // `w8:p1`) leaks into every isolated state and stale focus shadows
-    // the sole-agent fallback (see handlers::target dm_pane).
-    unsafe { std::env::set_var("HOME", &path) };
-    let cfg = crate::config::Cfg {
-        token: "test-token".to_string(),
-        socket: "nonexistent-test.sock".to_string(),
-        owners: vec![],
-        forum: None,
-    };
-    let s = super::State::new(cfg).expect("test state");
-    (
-        s,
-        TestStateDir {
-            path,
-            _guard: guard,
-            old,
-            old_home,
-        },
-    )
-}
+pub(crate) use super::test_state::isolated_state;
 
 #[cfg(test)]
 #[path = "cancel_tests.rs"]

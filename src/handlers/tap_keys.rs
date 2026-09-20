@@ -56,6 +56,11 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
     // blip passes; sends would fail visibly below anyway).
     match get_agent(socket, pane).await {
         Ok(a) if a.status != "blocked" => return TapCall::Unknown,
+        // Classified death (quit-to-shell race, closed pane) is a stale
+        // tap — "already moved on", never "keys failed". Any other read
+        // error is an outage/blip: sending blind risks wrong-option
+        // injection, so fail closed like the screen gate above.
+        Err(e) if crate::herdr::rpc::is_not_found(&e.to_string()) => return TapCall::Unknown,
         Err(_) => return TapCall::KeysFailed,
         _ => {}
     }
@@ -128,10 +133,15 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
     // Ground truth for "resumed": fresh status beats screen heuristics
     // (a working screen full of prose is not a dialog, and a lagging
     // status flip is covered by the observation layer's sig check).
-    let still_blocked = get_agent(socket, pane)
-        .await
-        .map(|a| a.status == "blocked")
-        .unwrap_or(true);
+    // Fail-closed like the pre-send gate above and `type_text`'s
+    // post-send gate: an unreadable status must not read as "still
+    // blocked" (a ghost NewDialog card with live buttons into live
+    // work when the tap actually resumed). The KeysFailed arm
+    // converges (strip + heal) and the retry re-validates live.
+    let still_blocked = match get_agent(socket, pane).await {
+        Ok(a) => a.status == "blocked",
+        Err(_) => return TapCall::KeysFailed,
+    };
     TapCall::Landed(
         TapSend {
             nav,

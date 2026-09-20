@@ -83,11 +83,13 @@ pub async fn repoint_dest_if_remapped(
     }
     // Migrate the durable only when it still holds the pre-migration
     // intent (or nothing): a racing submit's newer text wins — atomic
-    // check-and-set, never check-then-remember across awaits.
+    // check-and-set, never check-then-remember across awaits. Occupied-
+    // only: a vacant slot means cancelled/settled, and minting the corpse
+    // text there would resurrect dead work with a fresh 24h clock.
     let prompt = job.prompt.lock().await.clone();
     if job.epoch.load(Ordering::Relaxed) != epoch_before {
         return;
     }
-    s.remember_pending_cas(pane, (chat, Some(old), &prompt), (chat, Some(cur), &prompt))
+    s.migrate_pending_cas(pane, (chat, Some(old), &prompt), (chat, Some(cur), &prompt))
         .await;
 }

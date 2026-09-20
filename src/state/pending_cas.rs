@@ -5,6 +5,10 @@ use super::State;
 use crate::jobs::persist::{self, PendingPrompt};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+#[path = "pending_cas_tests.rs"]
+mod tests;
+
 impl State {
     /// True when the durable intent still belongs to this exact submit.
     /// One slot per pane is shared by agent prompts and shell commands —
@@ -26,38 +30,48 @@ impl State {
             .unwrap_or(false)
     }
 
-    /// Atomic check-and-remember for race-prone restores (remap
-    /// migration, reconcile owed-intent restores): under ONE `pending`
-    /// guard with no await inside, remember `set` only when the slot is
-    /// vacant or still holds the `check` triple. A separate check-then-
-    /// remember across awaits lets a submit landing between them be
-    /// overwritten by corpse text (lost reply) — and holding the guard
-    /// across `pending_matches` deadlocks (non-reentrant tokio Mutex).
-    /// A restore keeps the ORIGINAL timestamp (never re-stamps now):
-    /// fresh stamps on every restore would defeat the 24h stale bound
-    /// and keep corpse intents immortal. Timestamp + clone inside the
-    /// guard (no await), disk write after (never hold `pending` across
-    /// serde + blocking fs). True when anything was written.
-    pub async fn remember_pending_cas(
-        &self,
-        pane: &str,
-        check: (i64, Option<i64>, &str),
-        set: (i64, Option<i64>, &str),
-    ) -> bool {
-        self.remember_pending_cas_with_time(pane, check, set, None)
-            .await
-    }
-
-    /// Same atomic check-and-remember, but a restore passes the ORIGINAL
-    /// `started_unix`: the vacant-slot branch stamps now, which would
-    /// defeat the 24h stale bound and keep a corpse intent immortal
-    /// (reconcile's failed-notice restore). Fresh intents pass None.
+    /// Atomic check-and-remember for race-prone restores (reconcile
+    /// owed-intent restores): under ONE `pending` guard with no await
+    /// inside, remember `set` only when the slot is vacant or still holds
+    /// the `check` triple (a separate check-then-remember across awaits
+    /// lets a submit landing between them be overwritten by corpse text;
+    /// holding the guard across `pending_matches` deadlocks). A restore
+    /// passes the ORIGINAL `started_unix`: the vacant-slot branch stamps
+    /// now, which would defeat the 24h stale bound and keep a corpse
+    /// intent immortal (reconcile's failed-notice restore).
     pub async fn remember_pending_cas_with_time(
         &self,
         pane: &str,
         check: (i64, Option<i64>, &str),
         set: (i64, Option<i64>, &str),
         started_unix: Option<u64>,
+    ) -> bool {
+        self.remember_pending_cas_inner(pane, check, set, started_unix, true)
+            .await
+    }
+
+    /// Migration-only strict variant (repoint): occupied-match only, never
+    /// vacant-insert. A vacant slot means cancelled/settled — minting the
+    /// corpse text there with a fresh stamp resurrects dead work with a
+    /// fresh 24h clock. Close/vanish restores keep the lenient entry
+    /// above (vacant slots there are owed retries, not corpses).
+    pub async fn migrate_pending_cas(
+        &self,
+        pane: &str,
+        check: (i64, Option<i64>, &str),
+        set: (i64, Option<i64>, &str),
+    ) -> bool {
+        self.remember_pending_cas_inner(pane, check, set, None, false)
+            .await
+    }
+
+    async fn remember_pending_cas_inner(
+        &self,
+        pane: &str,
+        check: (i64, Option<i64>, &str),
+        set: (i64, Option<i64>, &str),
+        started_unix: Option<u64>,
+        allow_vacant: bool,
     ) -> bool {
         let now = || {
             SystemTime::now()
@@ -68,7 +82,8 @@ impl State {
         let snap = {
             let mut map = self.pending.lock().await;
             let started = match map.get(pane) {
-                None => started_unix.unwrap_or_else(now),
+                None if allow_vacant => started_unix.unwrap_or_else(now),
+                None => return false,
                 // Occupied-match keeps the LIVE slot's stamp: the passed
                 // stamp is the corpse's, and an identical re-prompt racing
                 // the close/vanish RPCs holds a fresh stamp here —

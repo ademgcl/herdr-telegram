@@ -92,14 +92,9 @@ pub async fn finalize(
             // Fold the live slot (retiring with it set orphans a frozen
             // card); address from the slot itself, never job.dest.
             fold_live(s, live_dest, live_mid, RUN_ENDED).await;
-            // Gated like every stamp path: a submit racing the fold owns
-            // the pane — anchoring our empty snapshot would eat the fresh
-            // baseline its reply needs. Empty never anchors (anchor
-            // parity with Job::anchor_baseline): a blank read would wipe
-            // a good baseline and repost scrollback as fresh on reuse.
-            if !snapshot.is_empty() && job.epoch.load(Ordering::Relaxed) == entry_epoch {
-                s.seen.lock().await.insert(pane.to_string(), snapshot);
-            }
+            // Empty never anchors (anchor parity with
+            // Job::anchor_baseline): a blank read would wipe a good
+            // baseline and repost scrollback as fresh on reuse.
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -140,67 +135,23 @@ pub async fn finalize(
     // Empty non-blocked settle: post nothing, but anchor the screen so
     // the span never resurfaces as a stale "fresh" delta. A live card
     // is retired, not orphaned frozen on "working…".
-    if body.is_empty() {
-        // Gate before observing: a submit racing the RPCs above owns
-        // the pane — observe nothing, consume nothing (its handoff
-        // retires the live slot; consuming here would land a stale edit
-        // the cancel arm then double-posts).
-        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-            settle_books(s, pane, job, entry_epoch, entry_pending).await;
-            acc.clear();
-            return false;
-        }
-        observe_status(s, pane, settled, true, "job").await;
-        // Address from the slot (remap-safe); mid without dest drops
-        // without editing (fail-closed, never wrong thread).
-        // Bounded like the blocked-path retire: a slow Telegram must not
-        // stall settle past the tick — take the slot only on landed/gone
-        // (finalize_blocked parity): a timeout keeps the slot for the
-        // next tick instead of orphaning a frozen card.
-        // No next tick exists here (settle_books below retires the
-        // watcher): a transient failure returns retry with backoff
-        // (delivery-failure parity below) instead of retiring into an
-        // orphaned frozen card.
-        let mut transient = false;
-        if let Some(mid) = *live_mid {
-            if let Some((lchat, _)) = *live_dest {
-                let retire = tokio::time::timeout(
-                    std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
-                    s.tg.try_edit_msg(lchat, mid, "✅ settled — no fresh output", None),
-                )
-                .await;
-                let done = match retire {
-                    Ok(Ok(())) => true,
-                    Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
-                    Err(_) => false,
-                };
-                if done {
-                    live_mid.take();
-                    live_dest.take();
-                    let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
-                } else {
-                    transient = true;
-                }
-            } else {
-                live_mid.take();
-            }
-        } else {
-            live_dest.take();
-        }
-        if transient {
-            // Superseded during the RPCs above: stamp nothing (blocked-path rule).
-            if job.epoch.load(Ordering::Relaxed) == entry_epoch {
-                s.seen.lock().await.insert(pane.to_string(), snapshot);
-            }
-            println!("[prompt] finalize {pane}: live retire transient, retrying");
-            return true;
-        }
-        // Superseded during the RPCs above: stamp nothing (blocked-path rule).
-        if job.epoch.load(Ordering::Relaxed) == entry_epoch {
-            s.seen.lock().await.insert(pane.to_string(), snapshot);
-        }
-        settle_books(s, pane, job, entry_epoch, entry_pending).await;
-        return false;
+    // Split to `finalize_blocked::try_finalize_empty` (300-line file limit).
+    if body.is_empty()
+        && let Some(r) = super::finalize_blocked::try_finalize_empty(
+            s,
+            pane,
+            job,
+            settled,
+            live_mid,
+            live_dest,
+            snapshot.clone(),
+            entry_epoch,
+            entry_pending,
+            acc,
+        )
+        .await
+    {
+        return r;
     }
     let parts = chunks(&body, MAX_MSG_UNITS);
 
@@ -216,6 +167,15 @@ pub async fn finalize(
     // episode stamping mid-window must survive below (generation-checked
     // remove — a blind remove would wipe it and repost a ghost card).
     let pre_sig = s.blocked_sig.lock().await.get(pane).cloned();
+    // Re-gate after the snapshot await: a submit during it owns the pane
+    // — the observe below would stamp the old settled kind over the new
+    // turn's live status (backwards transition + stale debounce arm).
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        println!("[prompt] finalize {pane}: superseded before post, dropping");
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
+        acc.clear();
+        return false;
+    }
     observe_status(s, pane, settled, true, "job").await;
     let (chat, th) = *job.dest.lock().await;
     // And after: a submit during the observe RPCs above retargets.
@@ -290,7 +250,12 @@ pub async fn finalize(
             .lock()
             .await
             .insert(pane.to_string(), std::time::Instant::now());
-        s.seen.lock().await.insert(pane.to_string(), snapshot);
+        // Empty never anchors (anchor_baseline parity): a blank settled
+        // read over a streamed `acc` body would wipe a good baseline and
+        // repost scrollback as fresh on reuse.
+        if !snapshot.is_empty() {
+            s.seen.lock().await.insert(pane.to_string(), snapshot);
+        }
     }
     settle_books(s, pane, job, entry_epoch, entry_pending).await;
     false

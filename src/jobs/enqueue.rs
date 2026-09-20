@@ -2,7 +2,7 @@
 //! watcher. Split from `runner` (300-line file limit).
 use super::runner::watch_job;
 use crate::{
-    herdr::client::{read_screen, rpc_t},
+    herdr::client::{read_screen_adaptive, rpc_t},
     jobs::finalize::report,
     jobs::job::Job,
     state::AppState,
@@ -37,7 +37,11 @@ pub async fn enqueue_prompt(
     let job = match existing {
         Some(j) => j,
         None => {
-            let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+            // Adaptive read (finalize parity): blocked/working alt-screen
+            // panes reject the `recent_unwrapped` source, so a plain read
+            // baselines `[]` and the full scrollback arrives as "fresh"
+            // (echo/dupe reply). The visible fallback keeps the baseline.
+            let baseline = read_screen_adaptive(&s.cfg.socket, &pane).await;
             let j = Job::new(baseline, chat_id, thread_id);
             // Atomic re-check + claim under ONE lock hold (recover
             // parity): a concurrent enqueue claiming during the baseline
@@ -156,12 +160,12 @@ pub async fn enqueue_prompt(
     if job.is_stopped() {
         println!("[jobs] submit landed on stopped job for {pane} — re-covering");
     }
-    // Delivered: last-wins books + durable intent. Atomic bump (epoch
-    // + pending under one lock, no await — see bump_generation): a
-    // finalize snapshotting between them would skew the entry share.
-    *job.dest.lock().await = (req.chat_id, req.message_thread_id);
-    *job.prompt.lock().await = req.text.clone();
-    job.bump_generation().await;
+    // Delivered: last-wins books + durable intent. Atomic publish
+    // (dest + prompt + epoch + pending under one order — see
+    // publish_submit): a finalize snapshotting between split writes
+    // would skew the entry share.
+    job.publish_submit(req.chat_id, req.message_thread_id, &req.text)
+        .await;
     s.set_focus(&pane).await;
     s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
         .await;

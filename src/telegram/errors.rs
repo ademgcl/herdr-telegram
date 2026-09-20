@@ -45,7 +45,12 @@ pub fn topic_gone(err: &str) -> bool {
 /// forever. Single source for `close_forum_topic` (corpse errors still
 /// propagate so callers prune by thread).
 pub fn is_close_converged(err: &str) -> bool {
-    topic_not_modified(err) || err.contains("not closed") || err.contains("already closed")
+    let low = err.to_lowercase();
+    topic_not_modified(err)
+        || low.contains("not closed")
+        || low.contains("already closed")
+        || low.contains("not open")
+        || low.contains("already open")
 }
 
 #[cfg(test)]
@@ -74,6 +79,9 @@ mod tests {
         assert!(is_close_converged("Bad Request: message is not modified"));
         assert!(is_close_converged("Bad Request: topic already closed"));
         assert!(is_close_converged("Bad Request: topic is not closed"));
+        // Already-open converges too (reopen parity).
+        assert!(is_close_converged("Bad Request: topic already open"));
+        assert!(is_close_converged("Bad Request: topic is not open"));
         // Corpses still propagate so callers prune by thread; blips retry.
         assert!(!is_close_converged("Bad Request: TOPIC_ID_INVALID"));
         assert!(!is_close_converged("Bad Request: THREAD_NOT_FOUND"));

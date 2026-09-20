@@ -51,12 +51,13 @@ pub(crate) async fn handle_topic_keys_agent(
         s.tg.send_msg(chat, Some(thread_id), &usage, None).await;
         return;
     }
-    let keys: Vec<&str> = arg.split_whitespace().collect();
-    // Bounded like every keys arm (single source): refuse, never truncate.
-    if let Err(msg) = super::shell_validate::validate_keys_len(keys.len()) {
-        s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
-        return;
-    }
+    let keys = match super::shell_validate::validate_keys_text(arg) {
+        Ok(k) => k,
+        Err(msg) => {
+            s.tg.send_msg(chat, Some(thread_id), &msg, None).await;
+            return;
+        }
+    };
     // Never interleave with an owned key sequence: a tap answer
     // (blockop) or model switch (modelop) in flight owns the pane's
     // input until it lands. Self-healing peeks: stale evicts.

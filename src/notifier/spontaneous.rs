@@ -45,6 +45,7 @@ pub(crate) fn liveness(live: Option<&Vec<String>>, pane: &str) -> Liveness {
 /// would suppress the next settle) nor consume the caller's baseline.
 /// `armed_at`: settle instant (Some) or None (DM immediate) — re-checked
 /// AFTER the sync RPC, right before the first send (window = send only).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn post_spontaneous_card(
     s: &AppState,
     pane: &str,
@@ -53,6 +54,7 @@ pub(crate) async fn post_spontaneous_card(
     settled: &str,
     body: &str,
     armed_at: Option<std::time::Instant>,
+    spaces_ok: bool,
 ) -> bool {
     // NOTE: deliberately NOT touching focus here — background pushes must
     // never hijack where the owner's next plain-text message gets delivered.
@@ -82,6 +84,10 @@ pub(crate) async fn post_spontaneous_card(
         }
         // Pruned (human-deleted) topics retire the dialog — including
         // a delete raced create (thread None), where nothing posts yet.
+        // Skipped on degraded spaces: never mint a stub on outage.
+        if !spaces_ok {
+            return false;
+        }
         let (thread_opt, pruned) = s.topics.sync_topic_prune(pane, kind, space).await;
         if pruned {
             crate::handlers::dialog::retire_dialog(s, pane).await;

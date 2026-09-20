@@ -40,14 +40,18 @@ fn wrap(text: String) -> Vec<String> {
     text.lines().map(|l| l.trim_end().to_string()).collect()
 }
 
-pub const LIVE_TAIL_LINES: u32 = 40;
+/// Visible-tail width for blocked panes. Kept equal to
+/// `handlers::dialog::DIALOG_READ_LINES` (single source would be a
+/// layer inversion): blocked-card stamp and sig-compare windows must
+/// match or tall dialogs double-buzz.
+pub const LIVE_TAIL_LINES: u32 = 60;
 
 /// Wide-window read for limit/stall scans: quota banners scroll far above
 /// the live tail during hours-long auto-retry loops that print every
 /// second (500 lines ≈ minutes of spam). Try the biggest window first,
-/// degrade gracefully on busy alternate-screen TUIs (the 40-line visible
-/// fallback matches the historic streaming window there). Busy TUIs pay
-/// up to 3 RPCs per scan (500 + 200 fail, 40 lands) — accepted: limit
+/// degrade gracefully on busy alternate-screen TUIs (the 60-line visible
+/// fallback matches the dialog window there). Busy TUIs pay
+/// up to 3 RPCs per scan (500 + 200 fail, 60 lands) — accepted: limit
 /// scans run at most every 5s per prompt pane, 60s per idle pane.
 pub async fn read_screen_for_limits(socket: &str, pane: &str) -> Vec<String> {
     // Total budget: a sick herdr must not stall the 5s watcher / 60s

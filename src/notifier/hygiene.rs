@@ -131,20 +131,22 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // the just-cleared dead panes, so ∪ would keep
             // everything clear_pane missed.
             if reaping {
-                // Double-confirm suspected deaths: a single `list_panes`
-                // miss retires the job + clears the pane, leaving the
-                // intent watcherless until restart. Re-fetch fresh (cache
-                // bypass) and retire only panes missing twice. A transient
-                // empty confirm AND a failed confirm both fail OPEN (keep
-                // all); only panes missing from BOTH reads retire. Falling
-                // back to the first read on confirm-Err would retire a
-                // live pane the first read transiently missed.
+                // Double-confirm before ANY live-only retain, even when
+                // dying is empty: the retains below prune idle-only maps
+                // (seen/history/status) for panes outside `known`, so a
+                // single transient miss wipes a live baseline and reposts
+                // scrollback as fresh. Both reads must miss to retire.
                 let dying: Vec<String> = known
                     .iter()
                     .filter(|p| !live.contains(*p))
                     .cloned()
                     .collect();
-                let dying = if dying.is_empty() || injected {
+                // Double-confirm before ANY live-only retain, even when
+                // dying is empty: the retains below prune idle-only maps
+                // (seen/history/status) for panes that never enter known,
+                // so a single transient `list_panes` miss wipes a live
+                // session's baseline and reposts scrollback as fresh.
+                let dying = if injected {
                     dying
                 } else {
                     let first = live.clone();
