@@ -189,6 +189,12 @@ pub(crate) fn is_blank_card(screen: &[String]) -> bool {
     opts.is_empty() && q == "(waiting for input)"
 }
 
+/// Single source for dialog read width: tap before/after screens, the
+/// heal, and explicit `/card` all stamp and compare content sigs, so
+/// every reader must see the same window or one dialog mints two sigs
+/// (duplicate question cards). Dup'd literals re-drift.
+pub(crate) const DIALOG_READ_LINES: u32 = 60;
+
 /// Post the interactive card: what the agent asks + one-tap answers
 /// mirroring the dialog's own options. Explicit "show me" contexts use
 /// this (always posts); status observations use [`refresh_blocked_card`].
@@ -196,7 +202,7 @@ pub(crate) fn is_blank_card(screen: &[String]) -> bool {
 /// post nothing (parity with refresh — an explicit `/card` must not
 /// buzz `(waiting for input)` + ❗ on outage).
 pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) -> bool {
-    let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
+    let screen = read_screen_visible(&s.cfg.socket, pane, DIALOG_READ_LINES).await;
     if screen.is_empty() || is_blank_card(&screen) {
         return false;
     }

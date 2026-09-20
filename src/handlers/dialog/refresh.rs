@@ -69,6 +69,14 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     if s.block_held(pane).await {
         return false;
     }
+    // A prompt/follow watcher owns the pane: its settle path posts the
+    // blocked card itself (finalize_blocked, claim + double sig-check),
+    // so a lag-`blocked` heal must not ghost-post working prose with
+    // live buttons beside the coming final. Mirrors observe_status's
+    // job_owned early return and settle_check's jobs guards.
+    if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
+        return false;
+    }
     // Fail fast before slow RPCs: a missing mapping (human-deleted, mint
     // failure) stays silent until the next sync recreates the topic —
     // never burn herdr reads that can only return false below.
@@ -82,15 +90,20 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         super::surfaces::resolve_cards(s, pane).await;
         return false;
     }
-    let screen = read_screen_visible(&s.cfg.socket, pane, 60).await;
+    let screen = read_screen_visible(&s.cfg.socket, pane, super::DIALOG_READ_LINES).await;
     if screen.is_empty() || is_blank_card(&screen) {
         return false;
     }
     // Post-read re-validation: a resume during the slow read owns the
     // pane now — never post a blocked card with live buttons into live
     // work. Blips fall through (outage must not brick real dialogs).
+    // A watcher that started during the read owns the card too (pre-read
+    // jobs gate above, re-checked: same reason, second window).
     if refresh_gate(s, pane).await == RefreshGate::Resolve {
         super::surfaces::resolve_cards(s, pane).await;
+        return false;
+    }
+    if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
         return false;
     }
     let sig = dialog_sig(&screen);

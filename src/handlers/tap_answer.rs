@@ -111,7 +111,9 @@ pub async fn answer_tap(
                 delayed_refresh(s, pane).await;
                 return;
             }
-            let screen = read_screen_visible(&s.cfg.socket, pane, 30).await;
+            let screen =
+                read_screen_visible(&s.cfg.socket, pane, crate::handlers::dialog::DIALOG_READ_LINES)
+                    .await;
             if screen.is_empty() {
                 // Edit in place (no fresh-message accumulation): every
                 // other tap arm converges the tapped card via edit first.

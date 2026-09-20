@@ -42,7 +42,7 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
     // narrower turned-over dialog. Unreadable screens stay permissive
     // (outage must not brick real buttons); unreadable status fails
     // closed at the gate below, like `type_text`.
-    let before = read_screen_visible(socket, pane, 30).await;
+    let before = read_screen_visible(socket, pane, crate::handlers::dialog::DIALOG_READ_LINES).await;
     // Stale-tap ground truth: buttons only exist on blocked panes. A tap
     // racing a resume — or landing days later on a history card — must
     // refuse instead of driving keys into live work (shape heuristics
@@ -119,7 +119,7 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
         return TapCall::KeysFailed;
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    let after = read_screen_visible(socket, pane, 30).await;
+    let after = read_screen_visible(socket, pane, crate::handlers::dialog::DIALOG_READ_LINES).await;
     // Ground truth for "resumed": fresh status beats screen heuristics
     // (a working screen full of prose is not a dialog, and a lagging
     // status flip is covered by the observation layer's sig check).

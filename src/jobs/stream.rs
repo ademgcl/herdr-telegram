@@ -121,6 +121,21 @@ pub fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     if base.is_empty() {
         return new;
     }
+    // Narrower-window re-read: anchors and readers use different widths
+    // (finals anchor wide, the notifier reads a short tail), so `new` can
+    // be a strict tail of `base`. The contiguous search below can never
+    // match then (base is longer than new) and the fallback misfires on
+    // footer drift, reposting the whole answer as "fresh" (duplicate
+    // final). Longest base-suffix == new-prefix overlap is exact here:
+    // same source, tail window, no new output means full overlap.
+    if new.len() < base.len() {
+        for k in (0..=new.len()).rev() {
+            if new[..k] == base[base.len() - k..] {
+                return &new[k..];
+            }
+        }
+        return new;
+    }
     for i in 0..new.len() {
         if new[i..].len() >= base.len() && new[i..i + base.len()] == *base {
             return &new[i + base.len()..];
@@ -188,6 +203,31 @@ mod tests {
         let base = v(&["same"]);
         let new = v(&["same"]);
         assert!(delta(&new, &base).is_empty());
+    }
+
+    #[test]
+    fn test_delta_narrower_tail_of_wide_base_is_empty() {
+        // Final anchors 200 lines, notifier re-reads an 80-line tail of
+        // the same screen: no new output must read as empty, never as
+        // a "fresh" duplicate of the just-delivered final.
+        let base = v(&["a", "b", "c", "d"]);
+        let new = v(&["c", "d"]);
+        assert!(delta(&new, &base).is_empty());
+    }
+
+    #[test]
+    fn test_delta_narrower_tail_returns_only_fresh() {
+        let base = v(&["a", "b", "c"]);
+        let new = v(&["b", "c", "fresh"]);
+        assert_eq!(delta(&new, &base), v(&["fresh"]));
+    }
+
+    #[test]
+    fn test_delta_narrower_without_overlap_returns_all() {
+        // Reminted screen sharing nothing: whole window is fresh.
+        let base = v(&["a", "b", "c"]);
+        let new = v(&["x", "y"]);
+        assert_eq!(delta(&new, &base), v(&["x", "y"]));
     }
 
     #[test]
