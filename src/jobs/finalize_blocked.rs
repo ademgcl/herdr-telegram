@@ -40,6 +40,7 @@ pub async fn try_finalize_blocked(
     {
         // Superseded mid-RPCs: observe nothing stale.
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
             acc.clear();
             return Some(false);
         }
@@ -55,6 +56,7 @@ pub async fn try_finalize_blocked(
     // Superseded mid-RPCs: post/consume nothing (the handoff retires
     // the live slot; consuming it strands a stale ❗ with no owner).
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
         return Some(false);
     }
@@ -101,6 +103,7 @@ pub async fn try_finalize_blocked(
     // Re-check after the retire edit: a submit during it owns the
     // pane — the ❗ card below would buzz stale beside its prompt.
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
         return Some(false);
     }
@@ -124,6 +127,7 @@ pub async fn try_finalize_blocked(
         .unwrap_or(false)
     {
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
             acc.clear();
             return Some(false);
         }

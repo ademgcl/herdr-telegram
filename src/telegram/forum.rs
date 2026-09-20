@@ -71,7 +71,10 @@ impl TelegramClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
-                if super::errors::topic_missing(&msg) {
+                // Converged like every sibling prune site (probe,
+                // reopen/close): kicked/chat-gone deletes nothing, so
+                // they succeed instead of logging orphan noise.
+                if super::errors::topic_gone(&msg) {
                     return Ok(());
                 }
                 Err(e)

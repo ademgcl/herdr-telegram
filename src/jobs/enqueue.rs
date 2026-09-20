@@ -10,7 +10,6 @@ use crate::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 pub async fn enqueue_prompt(
     s: AppState,
@@ -156,13 +155,12 @@ pub async fn enqueue_prompt(
     if job.is_stopped() {
         return;
     }
-    // Delivered: last-wins books + durable intent. Epoch BEFORE the
-    // pending bump (settle_books captures epoch-then-count: count-first
-    // overcounts into the newcomer's cover, epoch-first only undercounts).
+    // Delivered: last-wins books + durable intent. Atomic bump (epoch
+    // + pending under one lock, no await — see bump_generation): a
+    // finalize snapshotting between them would skew the entry share.
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
     *job.prompt.lock().await = req.text.clone();
-    job.epoch.fetch_add(1, Ordering::Relaxed);
-    *job.pending.lock().await += 1;
+    job.bump_generation().await;
     s.set_focus(&pane).await;
     s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
         .await;

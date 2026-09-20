@@ -133,13 +133,17 @@ pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::Unbounded
                         print!("{}", mask::mask_line(&String::from_utf8_lossy(&bytes[..end]), home));
                         pos += end as u64;
                     } else {
-                        // Newline-free window: never re-read the same bytes
-                        // every 500ms forever (CPU spin when the file rests
-                        // on a partial line). Advance past the window; the
-                        // fragment is follow-mode live output only (history
-                        // stays in `tail`), and the next append re-reads
-                        // from the new end.
-                        pos = at + bytes.len() as u64;
+                        // Newline-free window: hold small fragments for
+                        // the next poll (pos stays — the next append
+                        // completes the line); skip only capped windows
+                        // (a 256KB lineless burst must not re-read every
+                        // 500ms forever). History stays in `tail` either
+                        // way — this is follow-mode live output only.
+                        if (bytes.len() as u64) < POLL_CAP {
+                            pos = at;
+                        } else {
+                            pos = at + bytes.len() as u64;
+                        }
                     }
                 }
             }

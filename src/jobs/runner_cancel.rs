@@ -4,8 +4,7 @@
 //! the live card quiet. Single source for the select arm, the backoff
 //! arm, and the reconnect race.
 use crate::{
-    jobs::finalize::edit_live, jobs::job::Job, jobs::live::LiveSlot,
-    jobs::report::{CANCELLED, cancel_owns_intent},
+    jobs::finalize::edit_live, jobs::job::Job, jobs::live::LiveSlot, jobs::report::CANCELLED,
     state::AppState,
 };
 use std::sync::Arc;
@@ -29,9 +28,9 @@ pub(crate) async fn cancel_watch_parts(
     live_dest: &mut Option<(i64, Option<i64>)>,
 ) {
     job.mark_stopped();
-    if cancel_owns_intent(s.jobs.lock().await.get(pane), job) {
-        s.clear_pending(pane).await;
-    }
+    // Atomic owner-checked clear (no detached check-then-clear across
+    // awaits): a superseding enqueue landing mid-retire owns the slot.
+    s.clear_pending_if_owner(pane, job).await;
     let (chat, th) = *job.dest.lock().await;
     edit_live(s, chat, th, pane, live_mid, live_dest, CANCELLED).await;
 }

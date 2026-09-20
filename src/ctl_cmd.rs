@@ -75,7 +75,9 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
         }
         "trigger" => {
             let parts: Vec<&str> = args.split_whitespace().collect();
-            if parts.len() < 2 {
+            // Exact arity: trailing junk must not silently pass (fail-closed
+            // parity with junk statuses below).
+            if parts.len() != 2 {
                 USAGE_TRIGGER.to_string()
             } else {
                 let (pane, status) = (parts[0], parts[1]);
@@ -182,6 +184,11 @@ mod tests {
         assert_eq!(
             handle_cmd(&s, "trigger w1:p1 frobnicate").await,
             USAGE_TRIGGER_STATUS
+        );
+        // Trailing junk refuses too (exact arity, never silent OK).
+        assert_eq!(
+            handle_cmd(&s, "trigger w1:p1 blocked junk").await,
+            USAGE_TRIGGER
         );
         assert_eq!(handle_cmd(&s, "inspect").await, USAGE_INSPECT);
         // Status shape (count varies with live data — assert the frame).

@@ -88,6 +88,29 @@ pub(crate) async fn handle_model_tap(
         s.tg.edit_msg(chat, msg_id, &text, kb).await;
         return;
     };
+    // Single-flight BEFORE the progress edit (tap_answer parity): two
+    // queued taps must not both paint progress with last-writer-wins on
+    // the terminal card.
+    if s.model_held(pane).await {
+        s.tg
+            .send_msg(chat, thread, crate::ui::TAP_MODEL_IN_FLIGHT, None)
+            .await;
+        return;
+    }
+    // Reset/remint guard (`/model <filter>` parity): a reset landing
+    // between card render and tap must not drive picker keys into the
+    // new generation's live work. DM has no thread mapping to check.
+    let gen_ok = match thread {
+        None => !crate::handlers::reset::is_resetting(),
+        Some(t) => super::forum_topic_status::model_switch_allowed(
+            crate::handlers::reset::is_resetting(),
+            s.topics.all_mappings().get(pane).copied(),
+            t,
+        ),
+    };
+    if !gen_ok {
+        return;
+    }
     // Strip the buttons while switching: mid-switch taps can only collide.
     let no_kb = Some(Value::Array(Vec::new()));
     s.tg.edit_msg(
@@ -102,18 +125,27 @@ pub(crate) async fn handle_model_tap(
         // follows success only — a failed switch must not stick focus
         // to a pane that can't switch.
         Ok(footer) => {
-            // DM-only focus (M:list parity above): a forum switch is
-            // thread-routed and must not reroute global DM traffic.
-            if thread.is_none() {
-                s.set_focus(pane).await;
+            // Routing follows delivery (M:list parity above): a deleted
+            // card (edit_gone) must not pin DM focus/routing to a dead
+            // msg_id.
+            if s
+                .tg
+                .try_edit_msg(
+                    chat,
+                    msg_id,
+                    &super::model::switch_done(pane, &footer),
+                    Some(Value::Array(Vec::new())),
+                )
+                .await
+                .is_ok()
+            {
+                // DM-only focus (M:list parity above): a forum switch is
+                // thread-routed and must not reroute global DM traffic.
+                if thread.is_none() {
+                    s.set_focus(pane).await;
+                }
+                s.remember(chat, Some(msg_id), pane).await;
             }
-            s.tg.edit_msg(
-                chat,
-                msg_id,
-                &super::model::switch_done(pane, &footer),
-                Some(Value::Array(Vec::new())),
-            )
-            .await;
         }
         Err(e) => {
             if e.to_string().starts_with("no model matches") {
@@ -136,6 +168,8 @@ pub(crate) async fn handle_model_tap(
                 s.tg.edit_msg(chat, msg_id, &text, kb).await;
             } else {
                 // Keep the picker on screen so a retry is one tap.
+                // Fail-closed like the success arm: a deleted card pins
+                // no routing (no remember — the next tap re-renders).
                 let cur = super::model::current_model(s, pane).await;
                 let cur_line = cur.as_deref().unwrap_or("(unreadable)");
                 s.tg.edit_msg(
@@ -151,9 +185,6 @@ pub(crate) async fn handle_model_tap(
             }
         }
     }
-    // Card edits happen in place (same thread), so only routing memory
-    // needs updating here.
-    s.remember(chat, Some(msg_id), pane).await;
 }
 
 #[cfg(test)]

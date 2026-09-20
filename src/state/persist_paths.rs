@@ -15,10 +15,15 @@ pub fn state_dir() -> PathBuf {
     };
     // `~/` expansion parity with `HERDR_SOCKET`: a literal `~/x` dir
     // splits state from the daemon (replayed prompts, orphaned intents).
+    // Bare `~` or `~/` is a directory, never a state dir — fall back to
+    // the launch CWD instead of minting a literal `~` folder.
+    if v == "~" {
+        return PathBuf::from(".");
+    }
     if let Some(rest) = v.strip_prefix("~/") {
         let home = crate::types::home_dir();
         if home.is_empty() || rest.is_empty() {
-            return PathBuf::from(v);
+            return PathBuf::from(".");
         }
         return PathBuf::from(format!("{home}/{rest}"));
     }

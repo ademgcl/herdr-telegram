@@ -38,8 +38,7 @@ pub async fn finalize(
     // headers and the prompt echo — earlier turns and intermediate work
     // are dropped. Falls back to the settled screen for fast tasks where
     // nothing streamed.
-    let entry_epoch = job.epoch.load(Ordering::Relaxed);
-    let entry_pending = *job.pending.lock().await;
+    let (entry_epoch, entry_pending) = job.snapshot_generation().await;
     let prompt = job.prompt.lock().await.clone();
     // One settled read, arbitrated against the stream (see
     // select_final_body): alt-screen TUIs starve the delta stream, so a
@@ -62,6 +61,7 @@ pub async fn finalize(
             // retire that reused the epoch without bumping it.
             if job.epoch.load(Ordering::Relaxed) != entry_epoch || job.is_stopped() {
                 println!("[prompt] finalize {pane}: superseded in grace wait, dropping");
+                settle_books(s, pane, job, entry_epoch, entry_pending).await;
                 acc.clear();
                 return false;
             }
@@ -85,6 +85,7 @@ pub async fn finalize(
             // epoch handoff below owns the live slot then, so fold only
             // for the prompt that is still current.
             if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+                settle_books(s, pane, job, entry_epoch, entry_pending).await;
                 acc.clear();
                 return false;
             }
@@ -110,6 +111,7 @@ pub async fn finalize(
     // the new prompt, and settle_books preserves its books below.
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         println!("[prompt] finalize {pane}: superseded, dropping stale body");
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
         return false;
     }
@@ -142,6 +144,7 @@ pub async fn finalize(
         // retires the live slot; consuming here would land a stale edit
         // the cancel arm then double-posts).
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
             acc.clear();
             return false;
         }
@@ -188,6 +191,7 @@ pub async fn finalize(
     // retarget the card and corrupt the status reflection.
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         println!("[prompt] finalize {pane}: superseded before post, dropping");
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
         return false;
     }
@@ -231,6 +235,7 @@ pub async fn finalize(
         // Retarget check per part: a slow flood-wait can span a submit.
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
             println!("[prompt] finalize {pane}: superseded mid-post, stopping");
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
             acc.clear();
             return false;
         }

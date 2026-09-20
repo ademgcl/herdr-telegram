@@ -72,7 +72,11 @@ pub async fn answer_tap(
     // and can never strand live buttons on a dead end.
     s.tg.strip_buttons(chat, msg_id).await;
     println!("[tap] {pane} action={action}");
-    let call = if stale_card {
+    // A model switch owns the TUI picker sequence (`/models`/filter/
+    // Enter): a concurrent option tap must not inject nav/confirm keys
+    // into it. Stand down to the Unknown refresh (no keys sent).
+    let model_busy = s.model_held(pane).await;
+    let call = if stale_card || model_busy {
         TapCall::Unknown
     } else {
         tap_keys(&s.cfg.socket, pane, action).await

@@ -148,6 +148,13 @@ pub(crate) async fn handle_pane_output(
     let Some(out) = read_output_or_gate(s, chat, msg_id, pane, false).await else {
         return;
     };
+    // A read can succeed for a just-deleted pane: tracking it would
+    // poison routing (next reply misroutes via `targets`). Retire the
+    // stale card instead, like the B/M/X arms.
+    if !pane_live(s, pane).await {
+        gone_card(s, chat, msg_id, pane).await;
+        return;
+    }
     let body = if out.is_empty() {
         crate::ui::NO_OUTPUT.into()
     } else {
@@ -170,6 +177,10 @@ pub(crate) async fn handle_agent_output(
     let Some(out) = read_output_or_gate(s, chat, msg_id, pane, true).await else {
         return;
     };
+    if !pane_live(s, pane).await {
+        gone_card(s, chat, msg_id, pane).await;
+        return;
+    }
     let body = if out.is_empty() {
         crate::ui::NO_OUTPUT.into()
     } else {

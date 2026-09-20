@@ -97,27 +97,8 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             let card = crate::ui::build_identity_card_text(
                 &kind, pane, raw_space, new_status, title_opt, branch,
             );
-            let mut mid_opt = s.topics.get_pin(pane);
-            if let Some(mid) = mid_opt {
-                // Fallible pin edit with a converging rule (report.rs
-                // parity): only a definitely-gone card earns a fresh post
-                // (and orphans the pin) — a transient failure keeps the
-                // pin and retries next tick instead of duplicating.
-                match s.tg.try_edit_msg(forum, mid, &card, None).await {
-                    Ok(()) => {}
-                    Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
-                        mid_opt = None;
-                    }
-                    Err(_) => {}
-                }
-            }
-            if mid_opt.is_none()
-                && let Some(thread) = s.topics.all_mappings().get(pane).copied()
-                && let Some(new_mid) = s.tg.send_msg(forum, Some(thread), &card, None).await
-                && !s.topics.set_pin_if_thread(pane, thread, new_mid)
-            {
-                println!("[alert] pin reminted during send for {pane} — dropping stale mid");
-            }
+            // Pin edit/mint lives in `pin_sync` (300-line file limit).
+            super::pin_sync::sync_identity_pin(s, pane, forum, &card).await;
         }
     }
 

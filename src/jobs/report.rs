@@ -99,6 +99,12 @@ pub async fn report_done(
     }
 }
 
+/// Bound for final-card sends: `send_msg` sleeps through flood-waits
+/// (minutes) — a parked finalize stalls settle + /cancel past the tick.
+/// A timeout reads as undelivered (the existing retry path keeps the
+/// intent), never as loss. Live edits use the shorter shared bound.
+const FINAL_SEND_TIMEOUT_SECS: u64 = 90;
+
 /// Send + delivery-track, without any reaction: `report` (plain cards)
 /// and `report_done` (✅ finals) share it so failure logging and intent
 /// tracking can never drift between the two.
@@ -109,7 +115,13 @@ async fn send_remembered(
     pane: &str,
     msg: &str,
 ) -> Option<i64> {
-    let mid = s.tg.send_msg(chat_id, thread_id, msg, None).await;
+    let mid = tokio::time::timeout(
+        std::time::Duration::from_secs(FINAL_SEND_TIMEOUT_SECS),
+        s.tg.send_msg(chat_id, thread_id, msg, None),
+    )
+    .await
+    .ok()
+    .flatten();
     if mid.is_none() {
         eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
         return None;

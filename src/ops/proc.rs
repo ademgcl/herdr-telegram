@@ -72,8 +72,11 @@ pub fn port_busy(port: u16) -> bool {
 /// pid as a running bot.
 pub(crate) fn bot_pids() -> Vec<u32> {
     let me = std::process::id();
+    // Broad pre-filter: installed/launchd prod binaries never live under
+    // `target/` — `looks_like_bot` below re-validates the bare daemon
+    // argv, so one-shot `ctl`/`dev` invocations never count.
     let out = std::process::Command::new("pgrep")
-        .args(["-f", "target/(debug|release)/herdr-telegram"])
+        .args(["-f", "herdr-telegram"])
         .output();
     let Ok(out) = out else { return Vec::new() };
     String::from_utf8_lossy(&out.stdout)

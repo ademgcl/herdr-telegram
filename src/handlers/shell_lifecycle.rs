@@ -63,25 +63,31 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
                     }
                 }
             } else {
-                let dead = match list_panes(&s.cfg.socket).await {
-                    Ok(l) => !l.contains(&pane.to_string()),
-                    Err(_) => {
-                        s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                // `list_agents` can drop a row transiently: re-probe the
+                // agent once before claiming a shell, or a blip mints a
+                // false shell card + steals focus over a live agent.
+                let Ok(a) = get_agent(&s.cfg.socket, pane).await else {
+                    let dead = match list_panes(&s.cfg.socket).await {
+                        Ok(l) => !l.contains(&pane.to_string()),
+                        Err(_) => {
+                            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                                .await;
+                            return;
+                        }
+                    };
+                    if dead {
+                        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
                             .await;
                         return;
                     }
-                };
-                if dead {
-                    s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
-                        .await;
+                    let mid =
+                        s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
+                            .await;
+                    s.remember(chat, mid, pane).await;
+                    s.set_focus(pane).await;
                     return;
-                }
-                let mid =
-                    s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
-                        .await;
-                s.remember(chat, mid, pane).await;
-                s.set_focus(pane).await;
-                return;
+                };
+                a
             }
         }
     };
@@ -246,12 +252,9 @@ async fn do_quit(
 }
 
 /// Shell→agent flip watcher: after shell input the pane may have become
-/// an agent (`opencode`, `claude`, … typed at the prompt). The watchdog
-/// would re-icon up to 60s later — poll briefly and badge immediately
-/// instead (mirror of `do_quit`'s instant shell badge above). Spawned,
-/// never awaited, so the reply path never blocks; reads only plus a
-/// conditional bot-owned icon write (customs kept, `?`/errors write
-/// nothing — the watchdog retries).
+/// an agent. Polls briefly and badges immediately (mirror of `do_quit`
+/// above). Spawned, never awaited; reads plus a conditional bot-owned
+/// icon write (customs kept, `?`/errors write nothing).
 pub(crate) fn spawn_flip_watch(s: &AppState, pane: &str) {
     let s = s.clone();
     let pane = pane.to_string();

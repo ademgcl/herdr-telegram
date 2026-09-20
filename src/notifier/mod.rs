@@ -4,6 +4,7 @@ pub mod hygiene;
 pub mod hygiene_flip;
 pub mod limit_decide;
 pub mod limits;
+pub mod pin_sync;
 pub mod reconcile;
 pub mod reconcile_close;
 pub mod reconcile_tail;

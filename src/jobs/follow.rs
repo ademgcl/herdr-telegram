@@ -67,11 +67,13 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
     *job.prompt.lock().await = hint.to_string();
     *job.pending.lock().await = 1;
     {
+        // Single source for the atomic claim (enqueue/recover parity):
+        // a live watcher winning the poll gap stands — never two
+        // watchers on one pane.
         let mut map = s.jobs.lock().await;
-        if map.get(pane).is_some_and(|j| !j.is_stopped()) {
+        if !super::recover::claim_watcher(&mut map, pane, job.clone()) {
             return;
         }
-        map.insert(pane.to_string(), job.clone());
     }
     println!("[jobs] follow-answer watcher for {pane}");
     tokio::spawn(super::runner::watch_job(s.clone(), pane.to_string(), job));

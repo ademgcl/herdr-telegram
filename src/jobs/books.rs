@@ -16,10 +16,11 @@ pub async fn settle_books(
     entry_epoch: u64,
     entry_pending: usize,
 ) {
-    // Remove ONLY our entry share, never zero blindly: a submit landing
-    // between the epoch check and this write runs pending+=1 BEFORE its
-    // epoch bump — a moved epoch with a grown count is its signature,
-    // and a blind zero would eat the new prompt's cover (a later failed
+    // Remove ONLY our entry share, never zero blindly: the snapshot
+    // and the submit bump share the pending lock (see bump_generation),
+    // so the entry pair is always consistent — but a submit landing
+    // between the epoch check and this write still grows the count, and
+    // a blind zero would eat the new prompt's cover (a later failed
     // submit would read owed==0 and retire the live watcher + wipe the
     // durable intent — silent prompt loss). Saturating-sub keeps a
     // concurrent +1 alive on both paths.

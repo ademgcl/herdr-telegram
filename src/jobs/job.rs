@@ -55,6 +55,25 @@ impl Job {
         self.stopped.load(Ordering::Relaxed)
     }
 
+    /// Bump epoch + pending atomically under the pending lock (no await
+    /// inside): finalize snapshots both under the same lock, so the
+    /// entry share never skews across a racing submit. Single source
+    /// with `snapshot_generation` below.
+    pub async fn bump_generation(&self) {
+        let mut p = self.pending.lock().await;
+        self.epoch.fetch_add(1, Ordering::Relaxed);
+        *p += 1;
+    }
+
+    /// Snapshot epoch + pending under the pending lock (no await
+    /// inside): pairs with `bump_generation` above — a submit landing
+    /// between two detached reads would else over/under-count the
+    /// entry share into the newcomer's cover.
+    pub async fn snapshot_generation(&self) -> (u64, usize) {
+        let p = self.pending.lock().await;
+        (self.epoch.load(Ordering::Relaxed), *p)
+    }
+
     pub fn mark_stopped(&self) {
         self.stopped.store(true, Ordering::Relaxed);
     }

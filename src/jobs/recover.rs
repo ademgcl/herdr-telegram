@@ -218,6 +218,15 @@ pub async fn recover_pending(s: &AppState) {
         // in-memory count or the next failed submit reads owed==0 and
         // retires the watcher + wipes this intent.
         *job.pending.lock().await = 1;
+        // Ownership check BEFORE the claim (shell-path parity above): a
+        // live resubmit racing boot owns the slot — re-arming our stale
+        // copy would serve the wrong dest/prompt and contend books.
+        if !s
+            .pending_matches(&pane, pp.chat, pp.thread, &pp.prompt)
+            .await
+        {
+            continue;
+        }
         // Single acquisition: check + insert under ONE jobs-lock hold.
         // The awaits above released every lock, so a concurrent re-arm
         // could have inserted this pane meanwhile — never run two

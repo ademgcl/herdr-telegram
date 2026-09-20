@@ -226,13 +226,16 @@ impl TopicManager {
         self.storage
             .insert_with_title(pane.to_string(), new_thread, &name);
 
-        // Icon: preserve user-customized icon if one was set, else kind
-        // icon — stored only on success so a failed write retries next
-        // tick instead of freezing a stale glyph.
-        let icon = self
-            .storage
-            .get_icon(pane)
-            .unwrap_or_else(|| names::context_icon_emoji_id(kind).to_string());
+        // Icon: preserve user-customized icons, but heal a stale
+        // bot-owned glyph (kind flip not yet converged) — watchdog
+        // `icon_needs_update` parity, so a shell↔agent flip + reset
+        // never mints the old glyph until the next tick. Stored only on
+        // success so a failed write retries next tick.
+        let stored = self.storage.get_icon(pane);
+        let icon = match names::icon_needs_update(stored.as_deref(), kind) {
+            Some(want) => want.to_string(),
+            None => stored.unwrap_or_else(|| names::context_icon_emoji_id(kind).to_string()),
+        };
         if self
             .tg
             .set_topic_icon(forum, new_thread, &icon)
