@@ -86,10 +86,12 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
                         .map(|a| a.status.as_str())
                         .collect();
                     let emo = worst_status(mine);
-                    // Space labels are user-controlled (/space): cap them
-                    // like titles below or long names fail sendMessage.
-                    let label = btn_label(&s.label);
-                    btn(format!("{emo} {label}"), &format!("w:{}", s.id))
+                    // Space labels are user-controlled (/space): cap the
+                    // FINAL text (prefix + label), never components — a
+                    // capped label plus emoji still exceeds Telegram's 64B
+                    // BUTTON_TEXT_INVALID.
+                    let label = btn_label(&format!("{emo} {}", s.label));
+                    btn(label, &format!("w:{}", s.id))
                 })
                 .collect(),
         );
@@ -98,13 +100,11 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
     kb.push(vec![btn("➕ spawn agent", "n"), btn("🆕 new space", "N")]);
 
     for a in agents {
-        // Space names are user-controlled: cap like titles, or long names
-        // fail sendMessage with BUTTON_TEXT_INVALID.
-        let ws = btn_label(ws_label(spaces, &a.ws));
-        kb.push(vec![btn(
-            format!("{} {} @ {}", emoji(&a.status), a.kind, ws),
-            &format!("a:{}", a.pane),
-        )]);
+        // Space names are user-controlled: cap the FINAL text like the
+        // menu arms above, or long names fail sendMessage with
+        // BUTTON_TEXT_INVALID (kind is herdr-fed, capped the same way).
+        let label = btn_label(&format!("{} {} @ {}", emoji(&a.status), a.kind, ws_label(spaces, &a.ws)));
+        kb.push(vec![btn(label, &format!("a:{}", a.pane))]);
     }
 
     json!(kb)
@@ -113,11 +113,13 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
 pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
     let mut kb = Vec::new();
     for a in agents {
-        let title = btn_label(&a.title);
-        let label = if title.is_empty() {
-            format!("{} {}", emoji(&a.status), a.kind)
+        // Titles are user-controlled (terminal/task): cap the FINAL text
+        // (emoji + kind + title), never components — capped parts plus a
+        // raw kind still exceed Telegram's 64B BUTTON_TEXT_INVALID.
+        let label = if a.title.is_empty() {
+            btn_label(&format!("{} {}", emoji(&a.status), a.kind))
         } else {
-            format!("{} {} · {title}", emoji(&a.status), a.kind)
+            btn_label(&format!("{} {} · {}", emoji(&a.status), a.kind, a.title))
         };
         kb.push(vec![btn(label, &format!("a:{}", a.pane))]);
     }
@@ -130,9 +132,9 @@ pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
 }
 
 pub fn agent_card_kb(pane: &str, ws_id: &str, ws_label: &str) -> Value {
-    // Space labels are user-controlled (/space): cap like the menu arms
-    // or long names fail sendMessage with BUTTON_TEXT_INVALID.
-    let ws_label = btn_label(ws_label);
+    // Space labels are user-controlled (/space): cap the FINAL text —
+    // the "← " prefix on an already-capped label still exceeds the cap.
+    let back = btn_label(&format!("← {ws_label}"));
     json!([
         [
             btn("📄 output", &format!("o:{pane}")),
@@ -142,7 +144,7 @@ pub fn agent_card_kb(pane: &str, ws_id: &str, ws_label: &str) -> Value {
             btn("🤖 model", &format!("M:list:{pane}")),
             btn("🔄 refresh", &format!("a:{pane}")),
         ],
-        [btn(format!("← {ws_label}"), &format!("w:{ws_id}")),],
+        [btn(back, &format!("w:{ws_id}")),],
     ])
 }
 
@@ -171,6 +173,38 @@ mod tests {
         assert!(out.chars().count() <= 28);
         // ASCII still caps at 28 chars.
         assert_eq!(super::btn_label(&"x".repeat(100)).chars().count(), 28);
+    }
+
+    #[test]
+    fn test_final_button_texts_fit_64_bytes() {
+        // Adversarial user-controlled inputs: emoji-long space labels,
+        // kinds and titles. The 64B cap applies to FINAL text (prefixes
+        // included), or sendMessage fails with BUTTON_TEXT_INVALID.
+        let spaces = vec![WorkspaceInfo {
+            id: "w1".to_string(),
+            label: "🔥".repeat(28),
+            number: 1,
+        }];
+        let agents = vec![AgentRow {
+            kind: "🔥".repeat(20),
+            pane: "w1:p1".into(),
+            title: "🔥".repeat(20),
+            status: "working".into(),
+            ws: "w1".into(),
+        }];
+        let kbs = vec![
+            main_menu_kb(&spaces, &agents),
+            workspace_kb("w1", &agents),
+            agent_card_kb("w1:p1", "w1", &"🔥".repeat(28)),
+        ];
+        for kb in &kbs {
+            for row in kb.as_array().unwrap() {
+                for b in row.as_array().unwrap() {
+                    let t = b["text"].as_str().unwrap();
+                    assert!(t.len() <= 64, "button overflow ({}B): {t:?}", t.len());
+                }
+            }
+        }
     }
 
     #[test]

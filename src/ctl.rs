@@ -137,15 +137,25 @@ pub async fn run_ctl_client(port: u16, args: &[String]) -> Res<()> {
     // never hang it forever (server caps are 10s/4KB per line). A reply
     // timeout is a failure, never a silent success: falling through to
     // Ok(()) would report a truncated `topics`/`reset`/`trigger` as good.
+    // Fail-closed exit: any `ERR:` line (incl. UNAUTH) fails the CLI —
+    // callers key success off the exit status, so printing the line and
+    // returning Ok would report an auth failure as good.
+    let mut saw_err = false;
     loop {
         match tokio::time::timeout(std::time::Duration::from_secs(30), lines.next_line()).await {
             Err(_) => return Err("control reply timed out".into()),
             Ok(Err(e)) => return Err(e.into()),
             Ok(Ok(None)) => break,
             Ok(Ok(Some(line))) => {
+                if line.starts_with("ERR:") {
+                    saw_err = true;
+                }
                 println!("{}", crate::ops::mask_display_line(&line, &home));
             }
         }
+    }
+    if saw_err {
+        return Err("control command failed".into());
     }
     Ok(())
 }

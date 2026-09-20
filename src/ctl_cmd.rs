@@ -3,14 +3,13 @@
 //! Pure-dispatch branches (ping/unknown/usage) are unit-tested; success
 //! paths need a live herdr socket.
 use crate::{
-    handlers::{reset::run_single_topic_reset, title_rules::title_core_for},
+    handlers::reset::run_single_topic_reset,
     herdr::{
-        client::{get_agent, list_panes, list_workspaces},
+        client::{list_panes, list_workspaces},
         labels::{pane_facts, tab_labels},
     },
     notifier::status::observe_status,
     state::AppState,
-    topics::names::format_title,
     ui::ws_label,
 };
 use std::collections::HashSet;
@@ -92,7 +91,7 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
             if args.is_empty() {
                 USAGE_INSPECT.to_string()
             } else {
-                inspect_pane(s, args).await
+                crate::ctl_inspect::inspect_pane(s, args).await
             }
         }
         _ => UNKNOWN_CTL.to_string(),
@@ -162,76 +161,6 @@ async fn report_topics(s: &AppState) -> String {
         }
     }
     out
-}
-
-async fn inspect_pane(s: &AppState, pane: &str) -> String {
-    let facts = pane_facts(&s.cfg.socket).await.unwrap_or_default();
-    let tabs = tab_labels(&s.cfg.socket).await.unwrap_or_default();
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let pf = facts.get(pane);
-    let th = s.topics.storage.get_thread(pane);
-    let title = s.topics.storage.get_title(pane);
-    let tag = s.topics.storage.get_tag(pane);
-    let recent = s.topics.get_recent_msgs(pane);
-    let agent = get_agent(&s.cfg.socket, pane).await.ok();
-
-    let tab_id = pf.map(|f| f.tab_id.as_str()).unwrap_or("-");
-    let tab_label = pf
-        .and_then(|f| tabs.get(&f.tab_id))
-        .map(|t| t.as_str())
-        .unwrap_or("-");
-    let ws_id = pf.map(|f| f.ws.as_str()).unwrap_or("-");
-    let ws_name = spaces
-        .iter()
-        .find(|w| w.id == ws_id)
-        .map(|w| format!("#{} {} ({})", w.number, w.label, w.id))
-        .unwrap_or_else(|| ws_id.to_string());
-    let term_title = agent
-        .as_ref()
-        .map(|a| a.title.as_str())
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or("-");
-    // Desired topic title under current rules (tab else tag; terminal never).
-    let kind = agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("shell");
-    let space = pf.map(|f| ws_label(&spaces, &f.ws)).unwrap_or("?");
-    let multi = !tab_id.is_empty()
-        && tab_id != "-"
-        && facts.values().filter(|f| f.tab_id == tab_id).count() > 1;
-    let tag_str = tag.as_deref().unwrap_or("?");
-    let core = title_core_for(
-        if tab_label == "-" {
-            None
-        } else {
-            Some(tab_label)
-        },
-        tag_str,
-        multi,
-        pf.and_then(|f| f.label.as_deref()),
-    )
-    .unwrap_or_else(|| tag_str.to_string());
-    let desired = format_title(space, &core, kind);
-
-    format!(
-        "=== PANE INSPECTION: {pane} ===\n\
-         Thread ID:   {}\n\
-         Topic Title: {} (stored)\n\
-         Desired:     {desired} (tab wins, terminal→card only)\n\
-         Tag:         {}\n\
-         Tab:         {tab_label} ({tab_id})\n\
-         Pane Label:  {}\n\
-         Workspace:   {ws_name}\n\
-         Agent Kind:  {kind} (icon only)\n\
-         Term Title:  {term_title} (identity card only)\n\
-         Status:      {}\n\
-         Recent Msgs: {:?}\n\
-         ==============================\n",
-        th.map(|t| format!("#{t}")).unwrap_or_else(|| "none".into()),
-        title.as_deref().unwrap_or("-"),
-        tag.as_deref().unwrap_or("-"),
-        pf.and_then(|f| f.label.as_deref()).unwrap_or("-"),
-        agent.as_ref().map(|a| a.status.as_str()).unwrap_or("ready"),
-        recent
-    )
 }
 
 #[cfg(test)]

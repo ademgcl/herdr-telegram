@@ -57,6 +57,9 @@ pub fn fit_msg(text: &str) -> String {
 
 /// Split text into Telegram-sized chunks (line-aligned where possible).
 pub fn chunks(text: &str, max_units: usize) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut cur_units = 0;

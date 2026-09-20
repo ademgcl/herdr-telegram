@@ -10,6 +10,15 @@ use std::time::Duration;
 /// Telegram animated message effect ID for fire/flame (urgent alerts: blocked, limit stall).
 pub const EFFECT_FIRE: &str = "5104841245755180586";
 
+/// True when a send error rejects the message effect (unsupported chat,
+/// bad effect id) — strip `message_effect_id` and retry once.
+/// Effect-shaped only: a bare "not allowed" also matches unrelated fatals
+/// (rights/kicked) that must fail fast below instead of burning a second
+/// send that fails the same way. Single source for the strip gate.
+pub fn is_effect_rejection(msg: &str) -> bool {
+    msg.to_lowercase().contains("effect")
+}
+
 /// True when an edit error means the card is definitely gone or
 /// uneditable (deleted topic/thread, removed message, lost rights) —
 /// callers may post a fresh card without duplicating a live one.
@@ -122,10 +131,11 @@ impl TelegramClient {
                     // If effect is rejected, strip message_effect_id and retry immediately.
                     // Fail-closed shape: params is locally built as an object —
                     // a non-object here breaks the retry instead of panicking.
+                    // Effect-shaped only: a bare "not allowed" also matches
+                    // unrelated fatals (rights/kicked) that must fail fast
+                    // below instead of burning a second send that fails too.
                     if params.get("message_effect_id").is_some()
-                        && (msg.contains("EFFECT")
-                            || msg.contains("effect")
-                            || msg.contains("not allowed"))
+                        && is_effect_rejection(&msg)
                     {
                         let Some(obj) = params.as_object_mut() else {
                             break;
@@ -145,15 +155,8 @@ impl TelegramClient {
                     // Telegram 5xx arrives as plain strings via `call`
                     // (never a reqwest downcast match): same transient
                     // set as `call_retrying` or buzz alerts drop silently.
-                    let retryable = e
-                        .downcast_ref::<reqwest::Error>()
-                        .map(|re| {
-                            re.is_connect()
-                                || re.is_timeout()
-                                || re.status().map(|s| s.is_server_error()).unwrap_or(false)
-                        })
-                        .unwrap_or(false)
-                        || Self::is_transient_msg(&msg);
+                    let retryable =
+                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
                     if !retryable || sends >= 3 {
                         break;
                     }
@@ -202,7 +205,7 @@ impl TelegramClient {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.contains("message is not modified") {
+                    if super::errors::topic_not_modified(&msg) {
                         return Ok(());
                     }
                     if edit_gone(&msg) {
@@ -218,7 +221,12 @@ impl TelegramClient {
                         continue;
                     }
                     sends += 1;
-                    if sends >= 3 {
+                    // Send-path parity: fatals (revoked token, kicked,
+                    // rights loss) fail fast — retrying them burns 3 calls
+                    // + 2s per card per tick fleet-wide.
+                    let retryable =
+                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
+                    if !retryable || sends >= 3 {
                         eprintln!("editMessageText failed: {}", self.redact(&msg));
                         return Err(msg.into());
                     }

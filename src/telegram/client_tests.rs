@@ -26,11 +26,17 @@ fn test_is_unauthorized_matches_token_death_only() {
     assert!(TelegramClient::is_unauthorized(
         "Unauthorized: bot was kicked"
     ));
+    // Real deleted-token shape: HTTP 404 "Not Found" (the 401 classifier
+    // alone never fires for it — a dead bot would retry forever).
+    assert!(TelegramClient::is_unauthorized("Not Found"));
     // A bare "401" substring is NOT enough: retry intervals, message
     // text, and chat ids all contain it — must not FATAL-exit.
     assert!(!TelegramClient::is_unauthorized("retry after 401s"));
     assert!(!TelegramClient::is_unauthorized("message 401 ok"));
     assert!(!TelegramClient::is_unauthorized("connection reset"));
+    // Contextual "not found" inside an otherwise-live error (the title's
+    // text) is not a dead token — only Telegram's bare Not Found body is.
+    assert!(!TelegramClient::is_unauthorized("message to edit not found"));
 }
 
 #[test]
@@ -77,6 +83,16 @@ fn test_retry_after_parsing() {
     );
     assert_eq!(TelegramClient::retry_after("connection reset"), None);
     assert_eq!(TelegramClient::retry_after("retry after many"), None);
+    // Digits without the marker are never a flood-wait (rsplit().next()
+    // is never None, so the old code slept ~60s on any numeric error).
+    assert_eq!(
+        TelegramClient::retry_after("Bad Request: message 123 not found"),
+        None
+    );
+    assert_eq!(
+        TelegramClient::retry_after("error sending request bot123456:ABC/sendMessage"),
+        None
+    );
 }
 
 #[test]

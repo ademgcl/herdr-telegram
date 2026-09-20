@@ -15,16 +15,38 @@ pub fn recoverable(started_unix: u64, now: u64) -> bool {
     now.saturating_sub(started_unix) <= 86400 && started_unix <= now.saturating_add(3600)
 }
 
+/// Stale-drop clear verdict (pure, tested): delivery-gated, but bounded
+/// so a dead Telegram never retries forever. Clear when the notice
+/// landed, or when the intent is older than 7d / further than 7d in the
+/// future (clock-jump corpse) — disk + boot scans stay bounded either
+/// way. Single source for the stale arm below.
+pub const STALE_KEEP_MAX_SECS: u64 = 7 * 86400;
+
+pub fn stale_drop_should_clear(delivered: bool, started_unix: u64, now: u64) -> bool {
+    if delivered {
+        return true;
+    }
+    if now.saturating_sub(started_unix) > STALE_KEEP_MAX_SECS {
+        return true;
+    }
+    if started_unix.saturating_sub(now) > STALE_KEEP_MAX_SECS {
+        return true;
+    }
+    false
+}
+
 /// Atomic watcher claim: check + insert under the caller's single
-/// jobs-lock hold. Returns false when a watcher already owns the pane
+/// jobs-lock hold. Returns false when a LIVE watcher already owns the pane
 /// (a concurrent re-arm won the race) — caller must stand down, never
-/// run two watchers. Pure over the map so tests pin the verdict.
+/// run two watchers. A stopped corpse never blocks a re-arm (enqueue
+/// leaves stopped jobs in the map; they are replaced, never reused).
+/// Pure over the map so tests pin the verdict.
 pub(crate) fn claim_watcher(
     jobs: &mut std::collections::HashMap<String, std::sync::Arc<Job>>,
     pane: &str,
     job: std::sync::Arc<Job>,
 ) -> bool {
-    if jobs.contains_key(pane) {
+    if jobs.get(pane).is_some_and(|j| !j.is_stopped()) {
         return false;
     }
     jobs.insert(pane.to_string(), job);
@@ -46,9 +68,11 @@ pub async fn recover_pending(s: &AppState) {
     for (pane, pp) in entries {
         if !recoverable(pp.started_unix, now) {
             println!("[recover] dropping stale {pane}");
-            // Best-effort notice: otherwise the submitter is never told
-            // their prompt died. Cleared regardless to keep the 24h bound.
-            report(
+            // Delivery-gated clear (gone/shell parity below): wiping the
+            // intent on a Telegram outage loses the reply forever with no
+            // notice. Bounded by `stale_drop_should_clear` (7d cap) so a
+            // dead Telegram never retries forever.
+            let delivered = report(
                 s,
                 pp.chat,
                 pp.thread,
@@ -56,7 +80,9 @@ pub async fn recover_pending(s: &AppState) {
                 "⚠️ dropped: this prompt went stale while the bot was down (>24h) — please resend",
             )
             .await;
-            s.clear_pending(&pane).await;
+            if stale_drop_should_clear(delivered, pp.started_unix, now) {
+                s.clear_pending(&pane).await;
+            }
             continue;
         }
         // A boot-time herdr blip must not misclassify an agent pane as a
@@ -234,5 +260,34 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(map.get("w1:p1").unwrap(), &a));
         // Distinct pane still claims.
         assert!(claim_watcher(&mut map, "w1:p2", b));
+    }
+
+    #[test]
+    fn test_claim_watcher_stopped_corpse_does_not_block() {
+        // A stopped corpse left in the map must not leave durable intent
+        // watcherless: the re-arm replaces it.
+        let mut map = std::collections::HashMap::new();
+        let corpse = Job::new(vec![], 1, None);
+        corpse.mark_stopped();
+        map.insert("w1:p9".to_string(), corpse);
+        let fresh = Job::new(vec![], 2, None);
+        assert!(claim_watcher(&mut map, "w1:p9", fresh.clone()));
+        assert!(std::sync::Arc::ptr_eq(map.get("w1:p9").unwrap(), &fresh));
+    }
+
+    #[test]
+    fn test_stale_drop_should_clear_bounded() {
+        let now = 1_800_000_000;
+        let stale = now - 90000; // >24h, within 7d keep window
+        // Delivered notices always clear.
+        assert!(stale_drop_should_clear(true, stale, now));
+        // Undelivered notices keep the intent for the next boot…
+        assert!(!stale_drop_should_clear(false, stale, now));
+        // …but a 7d+ corpse clears even when Telegram is dead (no
+        // endless retry), both directions of the clock.
+        assert!(stale_drop_should_clear(false, now - STALE_KEEP_MAX_SECS - 1, now));
+        assert!(stale_drop_should_clear(false, now + STALE_KEEP_MAX_SECS + 1, now));
+        // Inside the keep window, future-jump corpses still wait.
+        assert!(!stale_drop_should_clear(false, now + 7200, now));
     }
 }

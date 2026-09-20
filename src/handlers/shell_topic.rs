@@ -65,11 +65,6 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         super::escape::handle_esc_shell(&s, chat, Some(thread_id), pane).await;
         return;
     }
-    if had_typewait {
-        s.tg.send_msg(chat, Some(thread_id), crate::ui::STALE_TYPEWAIT_SHELL, None)
-            .await;
-        return;
-    }
     if super::tap::consume_runkey(&s, chat, Some(thread_id), text).await {
         return;
     }
@@ -224,6 +219,14 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     if cmd.starts_with('/') {
         s.tg.send_msg(chat, Some(thread_id), crate::ui::UNKNOWN_COMMAND, None)
+            .await;
+        return;
+    }
+    // Stranded typewait (agent→shell flip) refuses bare text only: every
+    // leading-`/` arm above already returned, so a command is never a
+    // dialog answer — but bare text typed as one must never run blind.
+    if had_typewait {
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::STALE_TYPEWAIT_SHELL, None)
             .await;
         return;
     }

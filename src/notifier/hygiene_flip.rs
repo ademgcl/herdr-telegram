@@ -1,6 +1,6 @@
 //! DM-mode shell flips: split from `hygiene` (300-line file limit).
 use super::hygiene::panes_once;
-use crate::state::AppState;
+use crate::{herdr::client::get_agent, state::AppState};
 use std::collections::HashSet;
 
 /// DM-mode shell flip: no topics exist, but `status` still drives the
@@ -32,6 +32,18 @@ pub(crate) async fn flip_dm_shells(
         return;
     }
     for pane in missing {
+        // Vanish confirm (reconcile forum parity): a single `list_agents`
+        // dropout (Ok but partial) must not flip a live agent to shell
+        // (limit scanner then skips it + wipes its stall episode).
+        // Only a not-found answer confirms death; blips keep live.
+        match get_agent(&s.cfg.socket, &pane).await {
+            Ok(_) => continue,
+            Err(e) => {
+                if !crate::herdr::rpc::is_not_found(&e.to_string()) {
+                    continue;
+                }
+            }
+        }
         if panes.contains(&pane) {
             s.status
                 .lock()

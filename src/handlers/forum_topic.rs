@@ -1,7 +1,7 @@
 //! Agent-topic message routing: commands + bare-message prompts.
 //! Split from `forum` (300-line file limit).
 use crate::{
-    herdr::client::{get_agent, list_agents, list_panes},
+    herdr::client::{get_agent, list_agents},
     jobs::enqueue_prompt,
     state::AppState,
     ui::{
@@ -35,19 +35,11 @@ pub(crate) async fn handle_topic_agent_message(
 
     let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
         // One failed read must not reroute a live prompt as shell input:
-        // confirm via pane+agent lists (recover's cascade). Only a
-        // confirmed live agent retries visibly; everything else takes the
-        // shell side (which reports gone panes). Fail-closed: an
-        // unreadable list is an outage, never a corpse — a mixed
-        // Ok(dead)+Err would else run the prompt as shell input.
-        let live = match list_panes(&s.cfg.socket).await {
-            Ok(l) => l.contains(&pane.to_string()),
-            Err(_) => {
-                s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
-                    .await;
-                return;
-            }
-        };
+        // confirm via the agent list. Any row for the pane means a blip
+        // (refuse visibly); no row takes the shell side (which reports
+        // gone panes). Fail-closed: an unreadable list is an outage,
+        // never a corpse — and a claiming row is never overruled, so a
+        // partial dropout can't run the prompt as shell input.
         let agent = match list_agents(&s.cfg.socket).await {
             Ok(a) => a.iter().any(|r| r.pane == pane),
             Err(_) => {
@@ -56,7 +48,7 @@ pub(crate) async fn handle_topic_agent_message(
                 return;
             }
         };
-        if live && agent {
+        if agent {
             s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
@@ -124,8 +116,19 @@ pub(crate) async fn handle_topic_agent_message(
         super::forum_typewait::WaitOut::Handled => return,
         super::forum_typewait::WaitOut::ResumedPrompt => {
             // Raced resume: answer text must never become control —
-            // a literal "/kill" becomes a prompt (fail-closed).
-            enqueue_prompt(s, chat, Some(thread_id), agent.into(), text.to_string()).await;
+            // a literal "/kill" becomes a prompt (fail-closed). Re-read
+            // the agent (DM parity): the pre-waiter snapshot may be a
+            // stale kind; an unreadable re-read refuses, never enqueues
+            // stale.
+            match get_agent(&s.cfg.socket, pane).await {
+                Ok(fresh) => {
+                    enqueue_prompt(s, chat, Some(thread_id), fresh.into(), text.to_string()).await;
+                }
+                Err(_) => {
+                    s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                }
+            }
             return;
         }
         super::forum_typewait::WaitOut::Pass => {}
@@ -251,6 +254,8 @@ pub(crate) async fn handle_topic_agent_message(
                 s.set_focus(pane).await;
                 s.tg.send_msg(chat, Some(thread_id), &crate::ui::typed_ack(pane), None)
                     .await;
+                // Resumed work owns no job — follow it to the final reply.
+                crate::jobs::follow::follow_answer(&s, pane, chat, Some(thread_id), text).await;
             }
             Err(super::tap::TypeError::Resumed) => {
                 // Resumed between snapshot and send: the text becomes a

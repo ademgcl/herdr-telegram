@@ -60,7 +60,8 @@ impl TelegramClient {
     pub(crate) const MAX_FLOOD_WAIT_SECS: u64 = 60;
 
     pub(crate) fn retry_after(e: &str) -> Option<Duration> {
-        let tail = e.rsplit("retry after").next()?.trim();
+        let low = e.to_lowercase();
+        let (_, tail) = low.split_once("retry after")?;
         tail.split(|c: char| !c.is_ascii_digit())
             .filter(|p| !p.is_empty())
             .find_map(|p| p.parse::<u64>().ok())
@@ -87,6 +88,18 @@ impl TelegramClient {
         .any(|m| low.contains(m))
     }
 
+    /// Transport half of the retry verdict (single source): only
+    /// reqwest transport/server faults arrive typed — Telegram API
+    /// fatals arrive as plain strings via `call`, gated by
+    /// `is_transient_msg`. Shared by `call_retrying` + the edit path.
+    pub(crate) fn is_transport_transient(e: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+        e.downcast_ref::<reqwest::Error>()
+            .map(|re| {
+                re.is_connect() || re.is_timeout() || re.status().map(|s| s.is_server_error()).unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
     /// Execute a Telegram API call with 429 flood-wait (`retry_after`)
     /// and transient connection/server error retries. Fatal permission/topic
     /// errors fail fast without retry.
@@ -100,7 +113,6 @@ impl TelegramClient {
                     let msg = e.to_string();
                     if crate::telegram::topic_missing(&msg)
                         || crate::telegram::topic_not_modified(&msg)
-                        || msg.contains("message is not modified")
                         || msg.contains(crate::telegram::NO_RIGHTS)
                         || msg.contains(crate::telegram::BOT_BLOCKED)
                         || msg.contains("CHAT_ADMIN_REQUIRED")
@@ -116,15 +128,8 @@ impl TelegramClient {
                         continue;
                     }
                     attempts += 1;
-                    let retryable = e
-                        .downcast_ref::<reqwest::Error>()
-                        .map(|re| {
-                            re.is_connect()
-                                || re.is_timeout()
-                                || re.status().map(|s| s.is_server_error()).unwrap_or(false)
-                        })
-                        .unwrap_or(false)
-                        || Self::is_transient_msg(&msg);
+                    let retryable =
+                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
                     if !retryable || attempts >= 3 {
                         return Err(e);
                     }
@@ -188,20 +193,26 @@ impl TelegramClient {
 
     /// True when a Telegram error means the token is dead (revoked/
     /// invalid), never a transient fault. Matches the `Unauthorized`
-    /// description Telegram sends for bad tokens — never a bare `"401"`
+    /// description Telegram sends for bad tokens and the `Not Found`
+    /// description it sends for any method against a revoked/malformed
+    /// token (HTTP 404 — the revoked path arrives as 401, the deleted
+    /// path as 404, both are certain-death). Never a bare `"401"`
     /// substring, which also appears in retry intervals, message text,
     /// and chat ids and would FATAL-exit a healthy daemon.
     pub(crate) fn is_unauthorized(msg: &str) -> bool {
-        msg.contains("Unauthorized") || msg.contains("unauthorized")
+        msg.contains("Unauthorized")
+            || msg.contains("unauthorized")
+            || msg.contains("Not Found")
     }
     /// Fire-and-forget menu registration: the menu persists server-side
     /// once set, so a blip at boot must not fail the boot (fail-dead =
     /// launchd crash-loop for the whole outage). Boot continues
     /// immediately; this converges in the background with capped backoff.
-    /// A 401/Unauthorized is a dead token, not dead net: log FATAL and
-    /// stop (retrying a certain-401 forever only burns log) — but never
-    /// exit: that would skip the offset flush and replay recent messages
-    /// as duplicate submits on reboot. Fix .env + restart.
+    /// A 401/Unauthorized or 404/Not Found is a dead token, not dead
+    /// net: log FATAL and stop (retrying a certain-death forever only
+    /// burns log) — but never exit: that would skip the offset flush
+    /// and replay recent messages as duplicate submits on reboot.
+    /// Fix .env + restart.
     pub fn spawn_menu_sync(self) {
         tokio::spawn(async move {
             let mut wait = 5u64;
@@ -212,13 +223,19 @@ impl TelegramClient {
                         let msg = self.redact(&e.to_string());
                         if Self::is_unauthorized(&msg) {
                             eprintln!(
-                                "[telegram] FATAL: setMyCommands Unauthorized — token invalid, fix .env + restart ({msg})"
+                                "[telegram] FATAL: setMyCommands unauthorized/not-found — token invalid, fix .env + restart ({msg})"
                             );
                             break;
                         }
                         // Redact: error text can carry the token in URL form.
                         eprintln!("[telegram] setMyCommands failed, retry in {wait}s: {msg}");
-                        tokio::time::sleep(Duration::from_secs(wait)).await;
+                        // Honor flood-wait: Telegram's `retry after N` can
+                        // exceed the fixed backoff — re-hitting early only
+                        // extends the flood.
+                        let pause = Self::retry_after(&msg)
+                            .map(|d| d.max(Duration::from_secs(wait)))
+                            .unwrap_or_else(|| Duration::from_secs(wait));
+                        tokio::time::sleep(pause).await;
                         wait = (wait * 2).min(300);
                     }
                 }

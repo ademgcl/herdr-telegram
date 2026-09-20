@@ -14,6 +14,23 @@ pub struct Status {
     pub log_bytes: u64,
 }
 
+/// Count topics in a topics.state payload: parse the Store envelope
+/// (or the legacy flat pane→thread map), never count `":` lines — the
+/// pretty envelope holds one such line per key across topics/tags/
+/// titles/pins/icons/last_msgs, so line-counting reports ~5× the truth.
+/// Pure for tests. Unparseable → 0.
+pub(crate) fn count_topics_in_text(t: &str) -> usize {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+        if let Some(topics) = v.get("topics").and_then(|x| x.as_object()) {
+            return topics.len();
+        }
+        if let Some(obj) = v.as_object() {
+            return obj.len();
+        }
+    }
+    0
+}
+
 fn snapshot(port: u16) -> Status {
     let socket = proc::herdr_socket();
     // State files live in HERDR_STATE_DIR (or repo cwd), like the daemon
@@ -29,7 +46,7 @@ fn snapshot(port: u16) -> Status {
             .ok()
             .map(|s| s.trim().to_string()),
         topic_titles: std::fs::read_to_string(dir.join("topics.state"))
-            .map(|t| t.lines().filter(|l| l.contains("\":")).count())
+            .map(|t| count_topics_in_text(&t))
             .unwrap_or(0),
         log_bytes: std::fs::metadata("bot.log").map(|m| m.len()).unwrap_or(0),
     }
@@ -113,6 +130,14 @@ pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::Unbounded
                     if end > 0 {
                         print!("{}", mask::mask_line(&String::from_utf8_lossy(&bytes[..end]), home));
                         pos += end as u64;
+                    } else {
+                        // Newline-free window: never re-read the same bytes
+                        // every 500ms forever (CPU spin when the file rests
+                        // on a partial line). Advance past the window; the
+                        // fragment is follow-mode live output only (history
+                        // stays in `tail`), and the next append re-reads
+                        // from the new end.
+                        pos = at + bytes.len() as u64;
                     }
                 }
             }
@@ -259,5 +284,16 @@ mod tests {
         assert_eq!(at, 14);
         assert_eq!(&b[..], b"\ndddd\n");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_count_topics_parses_store_not_lines() {
+        // Envelope with 2 topics + tags/titles/pins/icons/last_msgs keys:
+        // line-counting `":` reports ~10+, the parse reports 2.
+        let t = r#"{"topics":{"w1:p1":1,"w1:p2":2},"tags":{"w1:p1":"a"},"titles":{"w1:p1":"t"},"pins":{},"icons":{},"last_msgs":{}}"#;
+        assert_eq!(count_topics_in_text(t), 2);
+        // Legacy flat map counts panes.
+        assert_eq!(count_topics_in_text(r#"{"w1:p1":1}"#), 1);
+        assert_eq!(count_topics_in_text("not json"), 0);
     }
 }

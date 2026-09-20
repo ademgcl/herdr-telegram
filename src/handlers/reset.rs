@@ -85,13 +85,8 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
     }
 
     let Some(_guard) = try_begin_reset() else {
-        s.tg.send_msg(
-            chat,
-            thread_id,
-            "⚠️ Paced reset is already in progress. Please wait for it to finish.",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, thread_id, crate::ui::RESET_BUSY, None)
+            .await;
         return;
     };
 
@@ -281,5 +276,23 @@ mod tests {
     #[test]
     fn test_is_resetting_flag() {
         assert!(!is_resetting());
+        // Contention: a second claim while held fails — the RESET_BUSY
+        // arm fires, never two resets at once. Same test (no inter-test
+        // race: no other test touches the global lock).
+        let guard = try_begin_reset().expect("first claim holds");
+        assert!(is_resetting());
+        assert!(try_begin_reset().is_none());
+        drop(guard);
+        assert!(!is_resetting());
+    }
+
+    #[test]
+    fn test_reset_busy_single_source() {
+        // Paced (run_paced_reset) + single (run_single_topic_reset) share
+        // RESET_BUSY — dup'd literals re-drift, so pin the shared text.
+        assert_eq!(
+            crate::ui::RESET_BUSY,
+            "⚠️ reset already in progress, try again shortly"
+        );
     }
 }

@@ -101,6 +101,18 @@ pub(crate) async fn handle_status_topic(
     }
 }
 
+/// Pre-switch re-validation verdict (pure, tested): a reset/remint
+/// landing between the guard above and the picker drive must not send
+/// switch keys into the new generation's live work. Single source for
+/// the `/model <filter>` arm below (status-arm parity).
+pub(crate) fn model_switch_allowed(
+    is_resetting: bool,
+    mapped: Option<i64>,
+    thread_id: i64,
+) -> bool {
+    !is_resetting && mapped == Some(thread_id)
+}
+
 /// `/model` in-topic: bare shows, arg switches by filter.
 pub(crate) async fn handle_model_topic(
     s: &AppState,
@@ -125,6 +137,16 @@ pub(crate) async fn handle_model_topic(
     if arg.is_empty() {
         super::model::show_model(s, chat, Some(thread_id), pane).await;
     } else {
+        // Pre-switch re-validation (status-arm parity): a reset/remint
+        // landing between the guard above and the picker drive must not
+        // send switch keys into the new generation's live work.
+        if !model_switch_allowed(
+            crate::handlers::reset::is_resetting(),
+            s.topics.all_mappings().get(pane).copied(),
+            thread_id,
+        ) {
+            return;
+        }
         let filter = super::model::search_filter(arg);
         super::model::switch_by_filter(s, chat, Some(thread_id), pane, &filter, arg).await;
     }
@@ -145,5 +167,18 @@ mod tests {
         // Stale replay (reminted thread) and unmapped pane: never.
         assert!(!topic_guard_allows(Some(1), 1, Some(8), 7));
         assert!(!topic_guard_allows(Some(1), 1, None, 7));
+    }
+
+    #[test]
+    fn test_model_switch_allowed_blocks_reset_and_remint() {
+        // Live mapping, no reset: allowed.
+        assert!(model_switch_allowed(false, Some(7), 7));
+        // Reset landing between guard and drive: blocked.
+        assert!(!model_switch_allowed(true, Some(7), 7));
+        // Remint landing between guard and drive: blocked.
+        assert!(!model_switch_allowed(false, Some(8), 7));
+        assert!(!model_switch_allowed(false, None, 7));
+        // Both at once stays blocked.
+        assert!(!model_switch_allowed(true, None, 7));
     }
 }

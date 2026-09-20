@@ -190,7 +190,11 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         super::shell::handle_run_command(s, chat, thread, &ws, text).await;
         return true;
     }
-    if let Some((pane, at)) = s.keywait.lock().await.get(&(chat, thread)).cloned() {
+    // Upfront consume (runwait parity): a /cancel landing between the
+    // peek and the keys send must win — get-then-remove sent keys after
+    // a cancel. Stay-armed paths below re-insert with the ORIGINAL
+    // instant (never re-stamp now, which would immortalize the waiter).
+    if let Some((pane, at)) = s.keywait.lock().await.remove(&(chat, thread)) {
         // Same corpse bound for keys: stale keys executing into a live
         // session is the dangerous half of waiter staleness.
         if crate::state::guard::claim_stale(
@@ -198,21 +202,20 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
             std::time::Instant::now(),
             crate::state::guard::KEYWAIT_STALE_SECS,
         ) {
-            s.keywait.lock().await.remove(&(chat, thread));
             s.tg.send_msg(chat, thread, crate::ui::ARM_EXPIRED, None)
                 .await;
             return true;
         }
         // Never interleave with an owned key sequence (mirrors /keys):
         // a tap answer or model switch in flight owns the pane's input
-        // until it lands. The waiter stays armed — the retry is just
+        // until it lands. The waiter re-arms — the retry is just
         // sending the message again (a stale corpse self-evicts here).
         if s.block_held(&pane).await || s.model_held(&pane).await {
+            s.keywait.lock().await.insert((chat, thread), (pane, at));
             s.tg.send_msg(chat, thread, crate::ui::TAP_MODEL_IN_FLIGHT, None)
                 .await;
             return true;
         }
-        s.keywait.lock().await.remove(&(chat, thread));
         // Bounded input (single source with every /keys arm): refuse
         // empty/over-cap, never silently truncate a partial write.
         let keys: Vec<&str> = text.split_whitespace().collect();
@@ -235,11 +238,20 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                 match crate::herdr::client::list_panes(&s.cfg.socket).await {
                     Ok(l) if l.contains(&pane.to_string()) => true,
                     Ok(_) => {
+                        // Dead pane: waiter re-arms (pre-upfront-remove
+                        // parity) — the corpse bound above evicts it, and
+                        // consuming here would silently reroute the next
+                        // message instead of repeating the visible error.
+                        s.keywait.lock().await.insert((chat, thread), (pane, at));
                         s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
                             .await;
                         return true;
                     }
                     Err(_) => {
+                        // Double outage: fail-closed — re-arm with the
+                        // original instant, refuse visibly, never consume
+                        // on an ambiguous read.
+                        s.keywait.lock().await.insert((chat, thread), (pane, at));
                         s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                             .await;
                         return true;

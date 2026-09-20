@@ -25,7 +25,7 @@ pub async fn event_task(s: AppState) {
         if start.elapsed() < Duration::from_secs(10) {
             fails += 1;
         } else {
-            fails = 1;
+            fails = 0;
         }
         tokio::time::sleep(Duration::from_secs((5 * fails).min(60))).await;
         reconcile(&s, false, "reconnect").await;
@@ -95,6 +95,12 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
     if ack.trim().is_empty() {
         return Err("event subscribe got empty ack".into());
     }
+    // Truncated ack (take() cap hit mid-line) fails parse below and would
+    // read as "not rejected" → subscribed blind. Reject it so the backoff
+    // loop resubscribes fresh (rpc/stream take-during-read parity).
+    if ack.len() >= 65_536 && !ack.ends_with('\n') {
+        return Err("event subscribe ack oversize".into());
+    }
     // Parsed rejection only (see ack_rejected): success acks may carry
     // `"error": null`, which a substring match misreads as rejection.
     if super::rpc::ack_rejected(&ack) {
@@ -123,7 +129,12 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
         if n == 0 {
             return Ok("connection closed");
         }
-        if line.len() >= 262_144 {
+        // Truncation, not size: a complete line of exactly the cap
+        // (payload + newline) is legal — only a missing trailing newline
+        // proves take() cut mid-line (rpc/stream parity). Without the
+        // guard a full event is misclassified as rogue and the drain eats
+        // the next real event.
+        if line.len() >= 262_144 && !line.ends_with('\n') {
             // `take` stopped mid-line: the remainder would else parse
             // as the next event (spurious status). Drain to the newline
             // first (bounded: a newline-free flood resubscribes fresh).

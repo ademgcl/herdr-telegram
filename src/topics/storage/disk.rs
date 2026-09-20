@@ -3,7 +3,7 @@
 //! (300-line file limit).
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -12,8 +12,6 @@ use std::{
 pub(crate) struct Store {
     #[serde(default)]
     pub topics: HashMap<String, i64>,
-    #[serde(default)]
-    pub unread: HashSet<String>,
     #[serde(default)]
     pub tags: HashMap<String, String>,
     #[serde(default)]

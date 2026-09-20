@@ -198,11 +198,7 @@ async fn open_shell_inner(
 /// `tab.create` with the KNOWN id (never re-resolve: a just-created
 /// id may not list yet, which must not read as "unknown space").
 pub async fn open_space_shell(s: &AppState, chat: i64, thread: Option<i64>, ws_id: &str) {
-    if ws_id.is_empty() {
-        s.tg.send_msg(chat, thread, "⚠️ space create returned no id", None)
-            .await;
-        return;
-    }
+    debug_assert!(!ws_id.is_empty(), "create_workspace never returns Ok-empty");
     match await_fresh_root(&s.cfg.socket, ws_id).await {
         Some(pane) => {
             attach_shell_pane(s, chat, thread, &pane, &space_label(s, ws_id).await, true).await

@@ -230,7 +230,7 @@ pub fn cfg_from_env() -> Res<Cfg> {
         });
 
     Ok(Cfg {
-        token,
+        token: token.trim().to_string(),
         socket,
         owners,
         forum,

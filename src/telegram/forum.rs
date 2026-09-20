@@ -3,6 +3,15 @@ use crate::types::Res;
 use serde_json::json;
 use std::time::Duration;
 
+/// True when a create error rejects the icon color — retry without it.
+/// Case-insensitive (`COLOR_INVALID`, `Icon_color_invalid`, …).
+/// Color-shaped only: a bare "color" substring also matches unrelated
+/// fatals and would mask them behind a doomed retry. Single source for
+/// the strip gate below.
+pub fn is_color_rejection(msg: &str) -> bool {
+    msg.contains("COLOR_INVALID") || msg.to_lowercase().contains("icon_color")
+}
+
 pub fn build_create_forum_topic_params(
     chat_id: i64,
     name: &str,
@@ -31,11 +40,9 @@ impl TelegramClient {
             Ok(v) => v,
             Err(e) => {
                 let msg = e.to_string();
-                // Case-insensitive: Telegram sends `COLOR_INVALID`,
-                // `Icon_color_invalid`, etc. depending on the endpoint.
                 // Fail-closed shape: body is locally built as an object —
                 // a non-object here returns the error instead of panicking.
-                if body.get("icon_color").is_some() && msg.to_lowercase().contains("color") {
+                if body.get("icon_color").is_some() && is_color_rejection(&msg) {
                     let Some(obj) = body.as_object_mut() else {
                         return Err(e);
                     };
@@ -74,15 +81,26 @@ impl TelegramClient {
 
     /// Close: corpse propagates (caller prunes by thread) — never
     /// swallowed here, or the next caller treats `true` as done and
-    /// leaks a dead thread forever.
+    /// leaks a dead thread forever. Already-closed converges like
+    /// reopen's already-open (reopen parity): without this every 60s
+    /// watchdog tick errors + retries a closed topic forever.
     pub async fn close_forum_topic(&self, chat_id: i64, thread_id: i64) -> Res<()> {
-        self.call_retrying(
-            "closeForumTopic",
-            json!({"chat_id": chat_id, "message_thread_id": thread_id}),
-            Duration::from_secs(15),
-        )
-        .await?;
-        Ok(())
+        match self
+            .call_retrying(
+                "closeForumTopic",
+                json!({"chat_id": chat_id, "message_thread_id": thread_id}),
+                Duration::from_secs(15),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                if super::errors::is_close_converged(&e.to_string()) {
+                    return Ok(());
+                }
+                Err(e)
+            }
+        }
     }
 
     pub async fn reopen_forum_topic(&self, chat_id: i64, thread_id: i64) -> Res<()> {
@@ -102,7 +120,8 @@ impl TelegramClient {
                 if super::errors::topic_missing(&msg) {
                     return Err(e);
                 }
-                if msg.contains("TOPIC_NOT_MODIFIED") || msg.contains("not closed") {
+                // Already-open converges (shared helper, close parity).
+                if super::errors::is_close_converged(&msg) {
                     return Ok(());
                 }
                 Err(e)
@@ -143,7 +162,8 @@ impl TelegramClient {
             .await
         {
             let msg = e.to_string();
-            if msg.contains("message is not modified") || msg.contains("NOT_MODIFIED") {
+            // No-op edit converges (shared helper — never retry-spam).
+            if super::errors::topic_not_modified(&msg) {
                 return Ok(());
             }
             eprintln!("set_topic_icon #{thread_id} failed: {}", self.redact(&msg));
@@ -222,5 +242,22 @@ mod tests {
         assert_eq!(p2["chat_id"], 123);
         assert_eq!(p2["name"], "test-topic");
         assert!(p2.get("icon_color").is_none());
+    }
+
+    #[test]
+    fn test_is_color_rejection_only_color_shaped() {
+        for m in [
+            "Bad Request: COLOR_INVALID",
+            "Bad Request: Icon_color_invalid",
+        ] {
+            assert!(is_color_rejection(m), "must strip: {m}");
+        }
+        // "color" as a coincidental substring must not mask the real fatal.
+        for m in [
+            "Bad Request: TOPIC_ID_INVALID",
+            "Forbidden: bot was kicked from the group chat",
+        ] {
+            assert!(!is_color_rejection(m), "must propagate: {m}");
+        }
     }
 }

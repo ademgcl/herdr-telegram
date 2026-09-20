@@ -26,9 +26,8 @@ pub async fn enqueue_prompt(
     };
     let pane = row.pane.clone();
 
-    // Reuse the live watcher when there is one; a stopped (retired) job
-    // is replaced — reusing it would attach the prompt to a dead watcher
-    // while its cancel branch eats the fresh intent.
+    // Reuse the live watcher; a stopped job is replaced (reusing it
+    // attaches the prompt to a dead watcher whose cancel eats it).
     let existing = s
         .jobs
         .lock()
@@ -61,16 +60,9 @@ pub async fn enqueue_prompt(
         }
     };
 
-    // Deliver FIRST, record after: a failed submit must neither bump the
-    // epoch (it would reset the live watcher's stream state for nothing)
-    // nor overwrite dest/prompt with undelivered text.
-    // Reservation-window cover: the watcher spawned above samples the
-    // agent while the 30s submit RPC is still in flight — light the
-    // indicator now and sustain it until submit lands (else the window
-    // sits dark). Unconditional: DM has no typing task at all, and a
-    // forum pane still unmapped pauses its task — both need the loop;
-    // where the task runs too the touches are idempotent refreshes.
-    // Spawned, never awaited.
+    // Deliver FIRST, record after: a failed submit bumps nothing.
+    // Reservation-window cover: light + sustain the indicator while the
+    // 30s submit RPC is in flight (spawned, never awaited).
     s.start_typing(&pane).await;
     {
         let tg = s.tg.clone();
@@ -126,24 +118,15 @@ pub async fn enqueue_prompt(
             .await;
         }
         // Live re-read (never the pre-report snapshot): a concurrent
-        // successful submit landing during the report sends above bumped
-        // pending — retiring on a stale owed==0 would wipe its cover +
-        // durable intent (silent prompt loss). This one was never
-        // recorded, so live pending is prior prompts only.
+        // success landing during the report bumped pending — retiring on
+        // a stale owed==0 would wipe its cover + durable intent.
         if *job.pending.lock().await > 0 {
-            // Co-owned prompts remain: watcher and intent stay.
             return;
         }
-        // Nothing owed: retire the map entry synchronously (stopped jobs
-        // are also replaced, never reused) so the next enqueue starts
-        // clean. (Without this it finalizes on the untouched screen —
-        // the bogus "(no captured output)" card.) Never clear the
-        // durable slot here: this submit recorded nothing, so any intent
-        // present belongs to a racing shell command (shared slot) or a
-        // stale corpse (bounded by the 24h reap) — wiping it eats a
-        // foreign reply. No notify: the watcher exits silently at its
-        // loop top instead of posting "cancelled" for a retire that was
-        // never a user cancel.
+        // Nothing owed: retire the map entry synchronously so the next
+        // enqueue starts clean (never clear the durable slot here: any
+        // intent present belongs to a racing shell/corpsed submit).
+        // No notify: the watcher exits silently at its loop top.
         job.mark_stopped();
         {
             let mut map = s.jobs.lock().await;
@@ -162,6 +145,12 @@ pub async fn enqueue_prompt(
         s.stop_shell_typing(&pane).await;
         return;
     }
+    // Cancel won during the submit RPC: the job is stopped and its
+    // durable intent cleared — writing books now would resurrect
+    // cancelled work (pending_matches below would match our own rewrite).
+    if job.is_stopped() {
+        return;
+    }
     // Delivered: last-wins dest/prompt/epoch, durable intent so a restart
     // re-arms this watcher instead of eating the reply.
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
@@ -178,11 +167,59 @@ pub async fn enqueue_prompt(
     // detached job and the durable intent would sit watcherless until
     // a restart. If the map no longer holds this job and no live
     // successor took the pane, re-arm a watcher for the recorded intent.
+    // A LIVE successor (concurrent enqueue won mid-submit) needs the same
+    // full last-wins transfer — otherwise our prompt is owed to a dead
+    // watcher while the successor serves with a short count (dropped
+    // reply). Same job + live needs nothing (books already landed home).
+    let live_successor = s
+        .jobs
+        .lock()
+        .await
+        .get(&pane)
+        .cloned()
+        .filter(|j| !Arc::ptr_eq(j, &job) && !j.is_stopped());
+    if let Some(j) = live_successor {
+        super::enqueue_transfer::transfer_live(
+            &s,
+            &pane,
+            &j,
+            req.chat_id,
+            req.message_thread_id,
+            &req.text,
+        )
+        .await;
+        return;
+    }
     let rearm = match s.jobs.lock().await.get(&pane).cloned() {
         Some(j) if Arc::ptr_eq(&j, &job) => false,
         Some(j) => j.is_stopped(),
         None => true,
     };
+    // Transfer gap cover: a live successor inserted between the two
+    // locks above sees rearm==false (live, not stopped) with no transfer
+    // — our delivered books strand on a detached Arc (dropped reply).
+    // A live non-self job here always takes the full last-wins transfer.
+    if !rearm {
+        if let Some(j) = s
+            .jobs
+            .lock()
+            .await
+            .get(&pane)
+            .cloned()
+            .filter(|j| !Arc::ptr_eq(j, &job) && !j.is_stopped())
+        {
+            super::enqueue_transfer::transfer_live(
+                &s,
+                &pane,
+                &j,
+                req.chat_id,
+                req.message_thread_id,
+                &req.text,
+            )
+            .await;
+        }
+        return;
+    }
     if rearm {
         let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
         // Ownership re-check: a /cancel (or quiet retire) landing during
@@ -225,12 +262,15 @@ pub async fn enqueue_prompt(
                 let mut map = s.jobs.lock().await;
                 if let Some(j) = map.get(&pane).cloned().filter(|j| !j.is_stopped()) {
                     drop(map);
-                    *j.dest.lock().await = (req.chat_id, req.message_thread_id);
-                    *j.prompt.lock().await = req.text.clone();
-                    *j.pending.lock().await += 1;
-                    j.epoch.fetch_add(1, Ordering::Relaxed);
-                    s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
-                        .await;
+                    super::enqueue_transfer::transfer_live(
+                        &s,
+                        &pane,
+                        &j,
+                        req.chat_id,
+                        req.message_thread_id,
+                        &req.text,
+                    )
+                    .await;
                 } else {
                     map.insert(pane.clone(), j2.clone());
                     drop(map);
@@ -239,20 +279,16 @@ pub async fn enqueue_prompt(
                 }
             }
             Some(j) => {
-                // Full last-wins transfer (house rule, same as the
-                // delivered-books path above): dest/prompt move to our req
-                // so they match the durable slot our delivered path just
-                // wrote — a prompt/dest split would mismatch
-                // clear_pending_if_matches and leak the intent (ghost
-                // re-arm after restart). History/focus already recorded
-                // above for the same req; durable rewrite is idempotent.
                 // (No map held here — live_other was cloned above.)
-                *j.dest.lock().await = (req.chat_id, req.message_thread_id);
-                *j.prompt.lock().await = req.text.clone();
-                *j.pending.lock().await += 1;
-                j.epoch.fetch_add(1, Ordering::Relaxed);
-                s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
-                    .await;
+                super::enqueue_transfer::transfer_live(
+                    &s,
+                    &pane,
+                    &j,
+                    req.chat_id,
+                    req.message_thread_id,
+                    &req.text,
+                )
+                .await;
             }
         }
     }

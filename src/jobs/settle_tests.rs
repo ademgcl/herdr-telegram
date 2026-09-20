@@ -128,3 +128,28 @@ fn test_settle_commit_fatal_stuck_bypasses_gate() {
     assert!(settle_commit("done", &mut since, t0, true));
     assert!(!settle_commit("idle", &mut since, t0, false));
 }
+
+#[tokio::test]
+async fn test_sleep_or_superseded_exits_on_stop_and_epoch() {
+    // A stopped job (failed-submit retire: no notify, no epoch bump) must
+    // not park the backoff for the full minute — the loop top retires it.
+    let job = crate::jobs::job::Job::new(Vec::new(), 1, None);
+    job.mark_stopped();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        sleep_or_superseded(&job, 0, Duration::from_secs(60)),
+    )
+    .await
+    .expect("stopped job must exit the backoff promptly");
+    // A superseding epoch bump exits too.
+    let job2 = crate::jobs::job::Job::new(Vec::new(), 1, None);
+    job2
+        .epoch
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        sleep_or_superseded(&job2, 0, Duration::from_secs(60)),
+    )
+    .await
+    .expect("superseded epoch must exit the backoff promptly");
+}

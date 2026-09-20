@@ -1,6 +1,10 @@
 use super::target::{resolve_target, unmatched_reply};
 use crate::{state::AppState, types::AgentRow};
 
+/// Single source for the DM /model target refuse (corpse-reply + bare
+/// arms share it — dup'd literals re-drift).
+const WHO_MODEL: &str = "who? `/model <pane>` or tap an agent in /agents";
+
 pub(crate) async fn handle_model(
     s: &AppState,
     chat: i64,
@@ -48,13 +52,7 @@ pub(crate) async fn handle_model(
     // Corpse reply: refuse — falling through would drive the model
     // picker key sequence into the wrong live session's work.
     if pane.is_none() && unmatched_reply(rows, reply_pane) {
-        s.tg.send_msg(
-            chat,
-            None,
-            "who? `/model <pane>` or tap an agent in /agents",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, None, WHO_MODEL, None).await;
         return;
     }
     if pane.is_none() {
@@ -74,13 +72,7 @@ pub(crate) async fn handle_model(
         }
     }
     let Some(pane) = pane else {
-        s.tg.send_msg(
-            chat,
-            None,
-            "who? `/model <pane>` or tap an agent in /agents",
-            None,
-        )
-        .await;
+        s.tg.send_msg(chat, None, WHO_MODEL, None).await;
         return;
     };
     if query.is_empty() {

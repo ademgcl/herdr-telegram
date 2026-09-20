@@ -102,7 +102,14 @@ pub(crate) async fn handle_space(s: &AppState, chat: i64, arg: &str) {
     let label = if super::space::check_label(arg) {
         arg.to_string()
     } else {
-        super::space::next_label(s).await
+        // Auto-label needs a readable list: an outage must refuse,
+        // never mint a colliding `space-1`.
+        let Some(label) = super::space::next_label(s).await else {
+            s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        };
+        label
     };
     super::space::open_space(s, chat, None, &label).await;
 }

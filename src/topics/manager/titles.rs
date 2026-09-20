@@ -20,7 +20,6 @@ impl TopicManager {
             .unwrap_or_else(|e| e.into_inner())
             .insert(pane.to_string(), kind.to_string());
     }
-
     /// True iff a kind was seen before AND differs (missing = false, no boot churn).
     pub fn kind_changed(&self, pane: &str, kind: &str) -> bool {
         let last = self
@@ -30,6 +29,17 @@ impl TopicManager {
             .get(pane)
             .cloned();
         crate::handlers::title_rules::kind_bypass(last.as_deref(), kind)
+    }
+
+    /// Live-only retain for the kind memory (reap parity with the
+    /// per-pane maps in hygiene): mapping-less dead panes (shells,
+    /// never-minted topics) never pass `remove_mapping_if_thread`, so
+    /// without this every dead pane id leaks one entry forever.
+    pub fn prune_kinds(&self, live: &std::collections::HashSet<String>) {
+        self.last_kind
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|p, _| live.contains(p));
     }
 
     /// CAS record of a title the telegram side already shows (native
@@ -68,9 +78,12 @@ impl TopicManager {
                 None
             }
             Err(e) => {
-                if crate::telegram::topic_missing(&e.to_string()) {
+                if crate::telegram::topic_gone(&e.to_string()) {
                     // Compare-and-delete: a stale rename must never kill
-                    // a fresh mapping minted after the snapshot.
+                    // a fresh mapping minted after the snapshot. `gone`
+                    // (not just `missing`): a kick/chat-delete must prune
+                    // here too, not linger until the probe ring (probe
+                    // parity — one source per prune verdict).
                     if self.remove_mapping_if_thread(pane, thread) {
                         println!("[topics] pruned missing topic #{thread} ({pane})");
                         return Some(pane.to_string());
@@ -158,7 +171,7 @@ impl TopicManager {
         match self.tg.set_topic_title(forum, thread, &title).await {
             Ok(()) => None,
             Err(e) if crate::telegram::topic_not_modified(&e.to_string()) => None,
-            Err(e) if crate::telegram::topic_missing(&e.to_string()) => {
+            Err(e) if crate::telegram::topic_gone(&e.to_string()) => {
                 if self.remove_mapping_if_thread(&pane, thread) {
                     println!("[topics] probe pruned deleted topic #{thread} ({pane})");
                     return Some(pane);

@@ -108,8 +108,19 @@ pub async fn settle_step(
     // sleep owns the pane even when the kind is unchanged (fast
     // done→done): the pre-sleep epoch below catches it.
     let epoch_at_entry = job.epoch.load(Ordering::Relaxed);
-    tokio::time::sleep(Duration::from_millis(750)).await;
-    if job.epoch.load(Ordering::Relaxed) != epoch_at_entry {
+    // Cancellable like every backoff below: /cancel or a superseding
+    // prompt landing inside the 750ms window must not stall its handoff.
+    tokio::select! {
+        _ = job.cancel.notified() => {
+            *settled_since = None;
+            return SettleStep::Continue;
+        }
+        _ = sleep_or_superseded(job, epoch_at_entry, Duration::from_millis(750)) => {}
+    }
+    // A failed submit retires via mark_stopped() with no epoch bump and
+    // no notify (enqueue.rs): an epoch-only check is blind to it and
+    // would finalize a retired job's stale screen into a bogus card.
+    if job.epoch.load(Ordering::Relaxed) != epoch_at_entry || job.is_stopped() {
         *settled_since = None;
         return SettleStep::Continue;
     }
@@ -183,16 +194,22 @@ pub async fn settle_step(
             _ = sleep_or_superseded(job, epoch_now, Duration::from_secs(*retry_wait)) => {}
         }
         *retry_wait = (*retry_wait * 2).min(60);
+        // The backoff above is a blackout (no samples): an arm timestamped
+        // before it must not count as persistence spanning it — the next
+        // settled sample re-arms instead of committing at once.
+        *settled_since = None;
         return SettleStep::Continue;
     }
     SettleStep::Break
 }
 
 /// Sleep up to `dur`, returning early when the job's epoch moves
-/// (a superseding prompt took over mid-backoff).
+/// (a superseding prompt took over mid-backoff) or the job is stopped
+/// (a failed submit retired it with no notify and no epoch bump — the
+/// loop top would else wait out the full backoff before exiting).
 pub(crate) async fn sleep_or_superseded(job: &Arc<Job>, epoch: u64, dur: Duration) {
     let end = Instant::now() + dur;
-    while job.epoch.load(Ordering::Relaxed) == epoch {
+    while job.epoch.load(Ordering::Relaxed) == epoch && !job.is_stopped() {
         let left = end.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;

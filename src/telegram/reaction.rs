@@ -39,6 +39,7 @@ impl TelegramClient {
                     || msg.contains("REACTION_INVALID")
                     || msg.contains("not modified")
                     || msg.contains(super::errors::NO_RIGHTS)
+                    || msg.contains(super::errors::BOT_BLOCKED)
                     || super::errors::topic_missing(&msg)
                 {
                     return Ok(());

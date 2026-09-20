@@ -10,13 +10,21 @@ pub(crate) fn stale_picker_text(cur: Option<&str>, pane: &str, kind: &str) -> St
     )
 }
 
+/// Delivery-gated pin verdict (pure, tested): a deleted card
+/// (`edit_gone`) must not pin DM focus/routing, and a read-only forum
+/// view must not reroute global DM traffic (DM-only focus). Single
+/// source for the `M:list` arm below.
+pub(crate) fn model_list_pins_focus(thread: Option<i64>, edit_ok: bool) -> bool {
+    edit_ok && thread.is_none()
+}
+
 /// Model-card taps: `M:list:<pane>` re-renders the card in place,
 /// `M:<idx>:<pane>` switches to that free-Zen model with progress edits.
 pub(crate) async fn handle_model_tap(
     s: &AppState,
     chat: i64,
     msg_id: i64,
-    _thread: Option<i64>,
+    thread: Option<i64>,
     r: &str,
 ) {
     let Some((idx, pane)) = r.split_once(':') else {
@@ -43,9 +51,16 @@ pub(crate) async fn handle_model_tap(
         } else {
             None
         };
-        s.remember(chat, Some(msg_id), pane).await;
-        s.set_focus(pane).await;
-        s.tg.edit_msg(chat, msg_id, &text, kb).await;
+        // Routing follows delivery (show_model parity): a deleted card
+        // (edit_gone) must not pin DM focus/routing, and a read-only
+        // forum view must not reroute global DM traffic (DM-only focus).
+        let edit_ok = s.tg.try_edit_msg(chat, msg_id, &text, kb).await.is_ok();
+        if edit_ok {
+            s.remember(chat, Some(msg_id), pane).await;
+        }
+        if model_list_pins_focus(thread, edit_ok) {
+            s.set_focus(pane).await;
+        }
         return;
     }
     let Ok(i) = idx.parse::<usize>() else {
@@ -78,7 +93,7 @@ pub(crate) async fn handle_model_tap(
     s.tg.edit_msg(
         chat,
         msg_id,
-        &format!("⏳ switching {pane} → `{marker}`…"),
+        &super::model::switch_progress(pane, &marker),
         no_kb.clone(),
     )
     .await;
@@ -87,11 +102,15 @@ pub(crate) async fn handle_model_tap(
         // follows success only — a failed switch must not stick focus
         // to a pane that can't switch.
         Ok(footer) => {
-            s.set_focus(pane).await;
+            // DM-only focus (M:list parity above): a forum switch is
+            // thread-routed and must not reroute global DM traffic.
+            if thread.is_none() {
+                s.set_focus(pane).await;
+            }
             s.tg.edit_msg(
                 chat,
                 msg_id,
-                &format!("✅ model set: `{footer}`\n[{pane}]"),
+                &super::model::switch_done(pane, &footer),
                 Some(Value::Array(Vec::new())),
             )
             .await;
@@ -135,4 +154,21 @@ pub(crate) async fn handle_model_tap(
     // Card edits happen in place (same thread), so only routing memory
     // needs updating here.
     s.remember(chat, Some(msg_id), pane).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_model_list_pins_focus_dm_only_on_delivery() {
+        // DM tap with a delivered edit pins focus.
+        assert!(model_list_pins_focus(None, true));
+        // Deleted card (edit_gone) pins nothing — no focus, and the
+        // caller skips `remember` on the same verdict.
+        assert!(!model_list_pins_focus(None, false));
+        // Forum view never reroutes global DM traffic, even delivered.
+        assert!(!model_list_pins_focus(Some(7), true));
+        assert!(!model_list_pins_focus(Some(7), false));
+    }
 }

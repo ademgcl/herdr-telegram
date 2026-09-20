@@ -62,15 +62,38 @@ pub async fn try_finalize_blocked(
     // never job.dest): the question card posts fresh below.
     // Fail-closed: mid without dest drops without editing rather
     // than guessing the thread after a remap.
-    if let Some(mid) = live_mid.take() {
-        if let Some((lchat, _)) = live_dest.take() {
-            s.tg.edit_msg(
-                lchat,
-                mid,
-                "⛔ blocked — needs input (see next message)",
-                None,
+    // Bounded: a slow Telegram must not stall settle past the tick —
+    // sibling live paths (live.rs, repoint.rs, handoff retire) wrap the
+    // same edit in LIVE_RPC_TIMEOUT_SECS; a timeout keeps the slot for
+    // the next tick instead of duplicating, never blocks the ❗ post.
+    // Take the slot only on landed/gone (live.rs retire_for_handoff
+    // parity): a transient failure keeps it for the next turn to adopt.
+    if let Some(mid) = live_mid {
+        if let Some((lchat, _)) = live_dest {
+            let retire = tokio::time::timeout(
+                std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
+                s.tg.try_edit_msg(
+                    *lchat,
+                    *mid,
+                    "⛔ blocked — needs input (see next message)",
+                    None,
+                ),
             )
             .await;
+            let done = match retire {
+                Ok(Ok(())) => true,
+                Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
+                Err(_) => {
+                    eprintln!("[prompt] finalize {pane}: live retire edit timed out");
+                    false
+                }
+            };
+            if done {
+                live_mid.take();
+                live_dest.take();
+            }
+        } else {
+            live_mid.take();
         }
     } else {
         live_dest.take();
@@ -83,12 +106,13 @@ pub async fn try_finalize_blocked(
     }
     // Single-flight with tap answers: a concurrent tap that already
     // passed its sig check owns the card — contention stays silent
-    // (no strip, no second buzz), the holder's card stands. Books still
-    // settle: every other arm does, or pending-count/intent leaks and
-    // replays after restart.
+    // (no strip, no second buzz). Intent is KEPT for retry, never
+    // settled here: nothing proves the holder's card landed, and
+    // retiring on assumption silently loses the question when the
+    // holder's send drops. The next tick retires via the sig-match arm
+    // above once the holder stamps, or wins the claim and posts itself.
     let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
-        settle_books(s, pane, job, entry_epoch, entry_pending).await;
-        return Some(false);
+        return Some(true);
     };
     // Re-check after the claim: the tap winner may have just stamped
     // this exact dialog — posting again would double-buzz ❗.
@@ -104,6 +128,9 @@ pub async fn try_finalize_blocked(
             return Some(false);
         }
         observe_status(s, pane, settled, true, "job").await;
+        // Same as the pre-claim sig-match arm above: a live working card
+        // would else freeze next to the already-buzzed question card.
+        fold_live(s, live_dest, live_mid, crate::ui::BLOCKED_SEE_CARD).await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }

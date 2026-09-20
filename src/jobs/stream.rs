@@ -45,7 +45,9 @@ impl EvStream {
             use tokio::io::{AsyncBufReadExt, AsyncReadExt};
             let mut limited = (&mut reader).take(65_536);
             limited.read_line(&mut ack).await?;
-            if ack.len() >= 65_536 {
+            // At-cap AND unterminated means truncated: a complete line of
+            // exactly cap bytes (newline included) is not oversize.
+            if ack.len() >= 65_536 && !ack.ends_with('\n') {
                 return Err("event subscribe ack too large".into());
             }
         }
@@ -80,7 +82,20 @@ impl EvStream {
                 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
                 let mut limited = (&mut self.reader).take(262_144);
                 let n = limited.read_line(&mut line).await.ok()?;
-                if line.len() >= 262_144 {
+                // At-cap AND unterminated means truncated: a complete
+                // line of exactly cap bytes (newline included) is a full
+                // event — draining past it would eat the next event line.
+                if line.len() >= 262_144 && !line.ends_with('\n') {
+                    // `take` cut mid-line: the tail would else parse as the
+                    // next event. Drain to the newline first (bounded, never
+                    // OOM), then skip — events-task drain parity.
+                    drop(limited);
+                    use tokio::io::AsyncReadExt as _DrainExt;
+                    let mut tail = Vec::new();
+                    let _ = (&mut self.reader)
+                        .take(4_194_304)
+                        .read_until(b'\n', &mut tail)
+                        .await;
                     continue;
                 }
                 if n == 0 {
@@ -111,12 +126,16 @@ pub fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
             return &new[i + base.len()..];
         }
     }
-    // Baseline scrolled off — cut after the newest baseline line still visible
+    // Baseline scrolled off — cut after the newest baseline line still visible.
+    // First occurrence, never last: with duplicated lines the cut position is
+    // ambiguous, and cutting after the last match silently drops fresh output
+    // (loss) while cutting after the first only risks duplicating old lines
+    // (noise). Duplicates-over-silence: never lose the reply.
     for b in base.iter().rev() {
         if b.trim().is_empty() {
             continue;
         }
-        if let Some(pos) = new.iter().rposition(|l| l == b) {
+        if let Some(pos) = new.iter().position(|l| l == b) {
             return &new[pos + 1..];
         }
     }
@@ -153,6 +172,15 @@ mod tests {
         let base = v(&["marker", "tail"]);
         let new = v(&["junk", "marker", "new stuff"]);
         assert_eq!(delta(&new, &base), v(&["new stuff"]));
+    }
+
+    #[test]
+    fn test_delta_fallback_keeps_dup_lines() {
+        // Duplicated lines make the cut ambiguous: never drop fresh output
+        // (first occurrence) — a duplicate old line is only noise.
+        let base = v(&["x", "y"]);
+        let new = v(&["y", "y", "fresh"]);
+        assert_eq!(delta(&new, &base), v(&["y", "fresh"]));
     }
 
     #[test]

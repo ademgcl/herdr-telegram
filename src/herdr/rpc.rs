@@ -24,7 +24,10 @@ pub async fn rpc_t(socket: &str, method: &str, params: Value, timeout_secs: u64)
             use tokio::io::AsyncReadExt;
             let mut limited = (&mut reader).take(2_097_152);
             limited.read_line(&mut line).await?;
-            if line.len() >= 2_097_152 {
+            // Truncation, not size: take() caps the read, so a complete
+            // line of exactly the cap (payload + newline) is legal — only
+            // a missing trailing newline proves the reply was cut off.
+            if line.len() >= 2_097_152 && !line.ends_with('\n') {
                 return Err("herdr reply too large".into());
             }
         }

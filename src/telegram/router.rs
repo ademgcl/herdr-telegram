@@ -109,6 +109,16 @@ pub async fn handle_update(s: AppState, u: &Value) {
         println!("[topics] user customized icon for {pane}: {icon}");
         s.topics.note_user_icon(&pane, &icon);
     }
+    // User cleared the custom icon: drop the stored id so the watchdog
+    // heals the live kind glyph (a stale custom wedges kind flips).
+    if let Some(thread) = crate::handlers::topic_edit::parse_topic_icon_cleared(msg)
+        && (chat_type == "supergroup" || chat_type == "group")
+        && s.cfg.forum == Some(chat_id)
+        && let Some(pane) = s.topics.pane_of_thread(thread)
+    {
+        println!("[topics] user cleared icon for {pane}");
+        s.topics.clear_user_icon(&pane);
+    }
 
     // Native forum-topic rename (service message, no text): sync the new
     // name back to the herdr pane label. Must run BEFORE the empty-text
@@ -153,13 +163,20 @@ pub async fn handle_update(s: AppState, u: &Value) {
             due
         };
         if due {
-            s.tg.send_msg(
-                chat_id,
-                th,
-                "⌛️ that message arrived too late — please resend",
-                None,
-            )
-            .await;
+            // Spawned, never awaited: the loud send sleeps up to 3×60s
+            // on flood — awaiting it here would stall the sequential
+            // update pump (main loop handles updates one by one) and age
+            // the whole batch past STALE_SECS into a drop cascade.
+            let tg = s.tg.clone();
+            tokio::spawn(async move {
+                tg.send_msg(
+                    chat_id,
+                    th,
+                    "⌛️ that message arrived too late — please resend",
+                    None,
+                )
+                .await;
+            });
         }
         return;
     }
@@ -195,7 +212,12 @@ pub async fn handle_update(s: AppState, u: &Value) {
             let note = format!(
                 "🤖 Connected to Herdr!\n\nTo enable per-agent forum topics, add this group to `.env`:\n`TELEGRAM_FORUM_CHAT_ID={chat_id}`"
             );
-            s.tg.send_msg(chat_id, th, &note, None).await;
+            // Spawned, never awaited (stale-notice parity): a flood-wait
+            // sleep must not stall the sequential update pump.
+            let tg = s.tg.clone();
+            tokio::spawn(async move {
+                tg.send_msg(chat_id, th, &note, None).await;
+            });
         }
     }
 }

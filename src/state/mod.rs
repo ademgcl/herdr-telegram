@@ -208,7 +208,6 @@ impl State {
                 }
             },
         };
-        let dm_only = cfg.forum.is_none();
         let st = Arc::new(Self {
             cfg,
             tg,
@@ -243,11 +242,11 @@ impl State {
             shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
         });
-        // DM-mode heal: pre-gate `last_msgs` orphans (write-only disk
-        // growth, never pruned without mappings) drop once at boot.
-        if dm_only {
-            st.topics.storage.prune_orphan_msgs();
-        }
+        // Orphan-heal: `last_msgs` entries without a mapping are
+        // write-only disk growth (stale mids also resurface via
+        // `reset_topic` copy_msg into reminted topics). Prune at boot in
+        // every mode — DM→forum switches orphan the same way.
+        st.topics.storage.prune_orphan_msgs();
         Ok(st)
     }
 

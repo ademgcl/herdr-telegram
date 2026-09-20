@@ -203,11 +203,18 @@ pub(crate) async fn scan_limits(s: &AppState) {
             delivered = send_one(s, fchat, Some(fth), &text, &pane).await;
         }
         if !delivered && forum_dest.is_none() && !s.cfg.owners.is_empty() {
-            let mut ok = true;
+            // Per-owner (not product): one blocked owner must not hold the
+            // healthy ones hostage for retries + every future tick, nor
+            // spam the healthy with duplicates on retry. Complete when at
+            // least one owner landed (spontaneous.rs dm_complete parity);
+            // only none-landed releases the claim + cools down for retry.
+            let mut per_owner = Vec::with_capacity(s.cfg.owners.len());
             for id in &s.cfg.owners {
-                ok = send_one(s, *id, None, &text, &pane).await && ok;
+                per_owner.push(usize::from(
+                    send_one(s, *id, None, &text, &pane).await,
+                ));
             }
-            delivered = ok;
+            delivered = crate::notifier::spontaneous::dm_complete(&per_owner, 1);
         }
         // Screen excerpts stay out of the log (terminal content can hold
         // secrets); kind + length are enough for stall forensics.

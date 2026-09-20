@@ -55,14 +55,16 @@ pub(crate) async fn handle_new_space(
 ) -> bool {
     s.tg.edit_msg(chat, msg_id, "⏳ creating space…", None)
         .await;
-    let label = super::space::next_label(s).await;
+    // Auto-label needs a readable list: an outage refuses before any
+    // billable mint, never guesses a colliding `space-1`.
+    let Some(label) = super::space::next_label(s).await else {
+        s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+            .await;
+        return false;
+    };
+    // create_workspace fail-closed (empty→Err): no dead Ok-empty arm.
     let ws_id = match create_workspace(&s.cfg.socket, &label).await {
-        Ok(id) if !id.is_empty() => id,
-        Ok(_) => {
-            s.tg.edit_msg(chat, msg_id, "⚠️ space create returned no id", None)
-                .await;
-            return false;
-        }
+        Ok(id) => id,
         Err(e) => {
             s.tg.edit_msg(
                 chat,

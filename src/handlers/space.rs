@@ -13,11 +13,13 @@ pub fn check_label(label: &str) -> bool {
 }
 
 /// Auto label (`space-N`) when `/space` gets no name: first unused N,
-/// not len+1 (deleted middle spaces must not collide).
-pub async fn next_label(s: &AppState) -> String {
+/// not len+1 (deleted middle spaces must not collide). None on an
+/// unreadable list (fail-closed): guessing `space-1` on an outage
+/// mints a duplicate label — the caller refuses instead.
+pub async fn next_label(s: &AppState) -> Option<String> {
     let labels: Vec<String> = list_workspaces(&s.cfg.socket)
         .await
-        .unwrap_or_default()
+        .ok()?
         .into_iter()
         .map(|w| w.label)
         .collect();
@@ -25,7 +27,7 @@ pub async fn next_label(s: &AppState) -> String {
     while labels.iter().any(|l| l == &format!("space-{n}")) {
         n += 1;
     }
-    format!("space-{n}")
+    Some(format!("space-{n}"))
 }
 
 /// Resolve a workspace id-or-label to its id: buttons pass ids, humans
@@ -40,13 +42,9 @@ pub async fn resolve_ws(s: &AppState, spec: &str) -> Option<String> {
 }
 
 pub async fn open_space(s: &AppState, chat: i64, thread: Option<i64>, label: &str) {
+    // create_workspace fail-closed (empty→Err): no dead Ok-empty arm.
     let ws_id = match create_workspace(&s.cfg.socket, label).await {
-        Ok(id) if !id.is_empty() => id,
-        Ok(_) => {
-            s.tg.send_msg(chat, thread, "⚠️ space create returned no id", None)
-                .await;
-            return;
-        }
+        Ok(id) => id,
         Err(e) => {
             s.tg.send_msg(
                 chat,

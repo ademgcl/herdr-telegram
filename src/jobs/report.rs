@@ -11,6 +11,16 @@ pub const RUN_ENDED: &str = "⏹️ run ended";
 /// User-cancel text: every cancel branch edits in place, never posts fresh.
 pub const CANCELLED: &str = "✋ cancelled";
 
+/// Cancel ownership verdict (pure, tested): a superseding enqueue owns
+/// the intent — a stale watcher's retire clears it only when the jobs
+/// map still points here. Single source for `runner::cancel_watch`.
+pub(crate) fn cancel_owns_intent(
+    current: Option<&std::sync::Arc<super::job::Job>>,
+    job: &std::sync::Arc<super::job::Job>,
+) -> bool {
+    current.is_some_and(|j| std::sync::Arc::ptr_eq(j, job))
+}
+
 /// Cancel edit: retires the live card where it lives (live_dest), never
 /// job.dest (remap race). Falls back to a fresh post at the current dest
 /// only when the card is definitely gone — a transient edit failure
@@ -112,3 +122,7 @@ pub async fn fold_live(
         live_dest.take();
     }
 }
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod tests;

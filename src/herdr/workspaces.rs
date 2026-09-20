@@ -1,5 +1,5 @@
 use super::agents::get_agent;
-use super::rpc::{rpc, rpc_t};
+use super::rpc::{is_not_found, rpc, rpc_t};
 use crate::types::{AgentRow, Res, WorkspaceInfo};
 use serde_json::json;
 
@@ -20,7 +20,14 @@ pub async fn list_workspaces(socket: &str) -> Res<Vec<WorkspaceInfo>> {
 
 pub async fn create_workspace(socket: &str, label: &str) -> Res<String> {
     let r = rpc_t(socket, "workspace.create", json!({"label": label}), 30).await?;
-    Ok(r["workspace"]["workspace_id"].as_str().unwrap_or("").into())
+    // Fail-closed at the source (create_tab parity): a missing id must
+    // never flow downstream as a ghost Ok("") — every caller guards
+    // empty today only because this once returned it.
+    let id = r["workspace"]["workspace_id"].as_str().unwrap_or("");
+    if id.is_empty() {
+        return Err("space create returned no id".into());
+    }
+    Ok(id.to_string())
 }
 
 /// Rename a workspace's display label (Telegram `[space]`-only renames
@@ -47,9 +54,6 @@ pub async fn ensure_tg_space(socket: &str) -> Res<(String, bool)> {
         }
     }
     let id = create_workspace(socket, "tg").await?;
-    if id.is_empty() {
-        return Err("space create returned no id".into());
-    }
     Ok((id, true))
 }
 
@@ -116,14 +120,41 @@ pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> R
     // The verify read can fail on a herdr hiccup AFTER the start
     // succeeded: don't leak the minted tab+agent (retry would mint
     // another). A reused root is NOT ours: leave it as a shell.
+    // Fail-closed: only a confirmed-dead pane reaps the minted tab —
+    // a transient read failure keeps it (never kill a healthy
+    // just-started agent; retry would mint a second tab+agent).
     let detail = match get_agent(socket, &pane).await {
         Ok(d) => d,
         Err(e) => {
-            if ours {
+            if ours && verify_failure_reaps(&e.to_string()) {
                 let _ = super::panes::close_pane(socket, &pane).await;
             }
             return Err(e);
         }
     };
     Ok(detail.into())
+}
+
+/// Verify-read verdict (pure, tested): only a confirmed-dead pane
+/// reaps the minted tab (agent died instantly). Single source for the
+/// spawn arm above.
+fn verify_failure_reaps(msg: &str) -> bool {
+    is_not_found(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verify_failure_reaps_dead_only() {
+        // Instant-death reaps the minted tab (no leak, no double-mint).
+        assert!(verify_failure_reaps("agent_not_found"));
+        assert!(verify_failure_reaps("no such pane"));
+        // Transient blips keep the pane (fail-closed): the agent is
+        // plausibly healthy, and retry must adopt it, not kill it.
+        assert!(!verify_failure_reaps("herdr agent.start timed out"));
+        assert!(!verify_failure_reaps("herdr closed connection (empty reply)"));
+        assert!(!verify_failure_reaps("no agent output yet"));
+    }
 }

@@ -3,6 +3,7 @@
 //! Escape (blocked-status only, never into live work). Commands — not
 //! buttons — are the out-of-band path, so they work even when every
 //! card on screen is stale or gone.
+use super::esc_ack::{get_err_msg, gone_ack, heal_stripped, not_blocked_msg};
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
     handlers::dialog::send_blocked_card,
@@ -13,50 +14,6 @@ use crate::{
 };
 use std::time::Duration;
 
-/// Corpse-vs-outage probe (dm_info parity): confirmed-gone reports
-/// UNKNOWN_TARGET, blips retry. Single source for post_card + esc_pane.
-async fn gone_ack(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    match crate::herdr::client::list_panes(&s.cfg.socket).await {
-        Ok(l) if l.contains(&pane.to_string()) => {
-            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
-                .await;
-        }
-        Ok(_) => {
-            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
-                .await;
-        }
-        Err(_) => {
-            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
-                .await;
-        }
-    }
-}
-
-/// Shared not-blocked ack (single source for pre + post gates):
-/// remedy syntax differs by surface (topics own-pane, DM names pane).
-async fn not_blocked_msg(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, status: &str) {
-    let hint = match thread {
-        Some(_) => "`/keys esc`".to_string(),
-        None => format!("`/keys {pane} esc`"),
-    };
-    s.tg.send_msg(
-        chat,
-        thread,
-        &crate::ui::not_blocked_ack(status, Some(&hint)),
-        None,
-    )
-    .await;
-}
-
-/// Shared get_agent error ack (single source for all gates): classified
-/// death → gone probe, blips → retryable. Never UNKNOWN_TARGET on outage.
-/// Verdict via esc_guard::classify (pinned by test).
-async fn get_err_msg(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, msg: &str) {
-    match super::esc_guard::classify(Err(msg.to_string())) {
-        super::esc_guard::EscGate::Gone => gone_ack(s, chat, thread, pane).await,
-        _ => _ = s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await,
-    }
-}
 /// Re-post the pane's live dialog card. Read-only: never sends keys,
 /// never clears waiters, refuses while a tap owns the pane.
 /// Self-healing peek: a stale corpse evicts so /card stays a way out.
@@ -119,10 +76,14 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
         Ok(a) if a.status == "blocked" => {}
         Ok(a) => {
             not_blocked_msg(s, chat, thread, pane, &a.status).await;
+            // Buttons already stripped above: heal, never strand.
+            heal_stripped(s, pane);
             return;
         }
         Err(e) => {
             get_err_msg(s, chat, thread, pane, &e.to_string()).await;
+            // Buttons already stripped above: heal, never strand.
+            heal_stripped(s, pane);
             return;
         }
     }
@@ -134,13 +95,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             .await;
         // Heal like Unchanged (strip already ran): buttonless must not
         // strand until the ≤60s watchdog.
-        crate::handlers::dialog::strip_tracked(s, pane).await;
-        let s2 = s.clone();
-        let pane2 = pane.to_string();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            crate::handlers::dialog::refresh_blocked_card(&s2, &pane2).await;
-        });
+        heal_stripped(s, pane);
         return;
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -160,6 +115,11 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             if let Some(m) = mid {
                 let _ = s.tg.set_reaction(chat, m, Some("✅")).await;
             }
+            // Follow the resumed turn to its final reply (tap parity:
+            // without a follower a racing prompt baselines past the
+            // answer-turn output and the reply never lands).
+            drop(_op);
+            crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
         }
         TapResult::NewDialog => {
             s.tg.send_msg(
@@ -184,13 +144,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             .await;
             // Dead-end buttons stay off (tap Unchanged parity): the
             // explainer above carries the way out, heal re-renders below.
-            crate::handlers::dialog::strip_tracked(s, pane).await;
-            let s2 = s.clone();
-            let pane2 = pane.to_string();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                crate::handlers::dialog::refresh_blocked_card(&s2, &pane2).await;
-            });
+            heal_stripped(s, pane);
         }
     }
 }

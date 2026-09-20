@@ -108,6 +108,15 @@ pub const SHELL_NO_CARD: &str = "this is a shell — nothing to answer.";
 pub const GENERAL_HINT: &str =
     "💡 To talk to an agent, please open its dedicated topic or use `/agents` to spawn one.";
 
+/// Single source for the orphan-topic refuse (a threaded message whose
+/// thread maps to nothing: reset/remint orphan or user-made topic).
+/// Posted in-thread (dead threads fail silently on send, live ones get
+/// guidance) instead of routing to General — General control (`/reset`,
+/// `/spawn`, …) must never fire from a corpse thread, and bare prompts
+/// must never route with the wrong id for follow-ups.
+pub const UNKNOWN_TOPIC: &str =
+    "this topic is no longer linked to an agent — see General or `/agents`.";
+
 /// Single source for the topic cancel ack (agent + shell flavors share it).
 pub fn cancel_ack(pane: &str, cancelled: bool) -> String {
     if cancelled {
@@ -135,6 +144,10 @@ pub fn not_blocked_ack(status: &str, keys_hint: Option<&str>) -> String {
         None => format!("not blocked (status={status}) — nothing to answer"),
     }
 }
+
+/// Single source for the reset contention ack (paced + single share
+/// it — dup'd literals re-drift).
+pub const RESET_BUSY: &str = "⚠️ reset already in progress, try again shortly";
 
 /// Single source for the reset permission abort (paced + single share it).
 pub const RESET_NO_PERM: &str = "⚠️ reset aborted: bot lacks 'can_manage_topics' admin permission";

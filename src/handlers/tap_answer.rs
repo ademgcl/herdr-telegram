@@ -267,6 +267,9 @@ pub async fn answer_tap(
                     // (Routing memory is set per-branch above: the live
                     // card on edit, the fresh message on fallback.)
                     s.blocked_sig.lock().await.remove(pane);
+                    // Follow resumed work to its final reply (spontaneous loses to a racing prompt).
+                    drop(_op);
+                    crate::jobs::follow::follow_answer(s, pane, chat, thread, &send.label).await;
                     delayed_refresh(s, pane).await;
                 }
                 TapResult::Unchanged => {

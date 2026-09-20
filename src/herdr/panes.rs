@@ -46,6 +46,14 @@ pub async fn send_pane_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()> 
 pub async fn read_shell_output(socket: &str, pane: &str, lines: u32) -> Res<String> {
     match read_pane_output(socket, pane, lines).await {
         Ok(out) => Ok(out),
+        // Confirmed death is not a source problem: falling back to the
+        // viewport would serve a shell-reused name's output as the dead
+        // pane's (delaying retire to the next hygiene cycle).
+        Err(e) if super::rpc::is_not_found(&e.to_string()) => Err(e),
+        // A timeout already spent the full RPC budget: falling back
+        // doubles a sick-herdr read to ~60s on the settle path. Bound
+        // it — the next tick retries.
+        Err(e) if e.to_string().contains("timed out") => Err(e),
         Err(_) => {
             let r = rpc(
                 socket,
@@ -140,13 +148,15 @@ pub async fn first_pane_in_ws(socket: &str, ws: &str) -> Option<String> {
 }
 
 /// Shell check: `agent.get` succeeds only on agent panes (shells are
-/// invisible to it — same shape as the DM shell fallback). Fail-open
-/// (Err → shell) is safe HERE because callers only probe just-created
-/// workspaces: the pane is ours by construction, and a pane that died
-/// mid-flight self-heals via the reconcile watchdog (dead topic ages
-/// out; commands fail visibly until then).
+/// invisible to it — same shape as the DM shell fallback). Fail-closed:
+/// only a confirmed-dead lookup reads as shell — a transient (timeout,
+/// herdr down) reads as NOT shell so `first_shell_pane` falls back to
+/// `tab.create` instead of hijacking a live agent pane on reuse.
 pub async fn is_shell_pane(socket: &str, pane: &str) -> bool {
-    super::agents::get_agent(socket, pane).await.is_err()
+    match super::agents::get_agent(socket, pane).await {
+        Ok(_) => false,
+        Err(e) => super::rpc::is_not_found(&e.to_string()),
+    }
 }
 
 /// True when the shell sits at a prompt (the foreground group is the

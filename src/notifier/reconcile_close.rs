@@ -14,18 +14,13 @@ pub(crate) async fn close_dead_pane(s: &AppState, pane: &str) -> bool {
     // recover's 24h stale drop). The flap self-terminates: a successful
     // close drops the mapping, so this runs at most once more.
     let owed = s.pending.lock().await.get(pane).cloned();
-    // CAS BEFORE the close RPC: a remint racing the tick keeps its fresh
-    // topic (closing it would kill live work). Skip when reminted.
-    // Race-free: the snapshot id rides the RPC directly (no re-read),
-    // then compare-deletes only when still current.
-    if let Some(t) = thread
-        && s.topics.all_mappings().get(pane).copied() != Some(t)
-    {
-        return true;
-    }
     // (close_topic_for_thread compare-deletes on success. Snapshot None
     // means no known thread: skip the RPC entirely — any mapping present
     // now is by definition a remint whose fresh topic must survive.)
+    // NOTE: no pre-RPC re-read compare here by design — two back-to-back
+    // reads with no await between cannot differ (no yield point), so that
+    // check is dead code; the real remint guards are the post-RPC CAS
+    // below and close_topic_for_thread's own compare-delete.
     if let Some(t) = thread {
         s.topics.close_topic_for_thread(pane, t).await;
     }

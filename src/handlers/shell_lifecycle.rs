@@ -169,10 +169,14 @@ async fn do_quit(
     for _ in 0..if confirmed { 8 } else { 4 } {
         sleep(Duration::from_millis(1500)).await;
         match get_agent(&s.cfg.socket, pane).await {
-            Err(_) => {
+            // Confirmed death only: any other error is a blip (timeout,
+            // dropout) that must keep polling, never claim the shell — a
+            // false claim wipes jobs/intent over a live agent (fail-open).
+            Err(e) if crate::herdr::rpc::is_not_found(&e.to_string()) => {
                 shelled = true;
                 break;
             }
+            Err(_) => {}
             Ok(a) => {
                 seen_kind = Some(a.kind.clone());
                 if confirmed

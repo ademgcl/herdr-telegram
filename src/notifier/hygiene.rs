@@ -2,7 +2,6 @@
 //! and per-pane maps for externally-closed panes. Split from `reconcile`
 //! (300-line file limit).
 use crate::{
-    herdr::client::list_panes,
     jobs::{persist, recover::recoverable},
     state::{
         AppState,
@@ -15,29 +14,30 @@ use crate::{
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Cached single `list_panes` per tick (shared with the forum block):
-/// 1 RPC, not 2. Fail-open: Err keeps everything.
-pub(crate) async fn panes_once(
-    s: &AppState,
-    cache: &mut Option<HashSet<String>>,
-) -> Option<HashSet<String>> {
-    if let Some(p) = cache {
-        return Some(p.clone());
+#[path = "hygiene_panes.rs"]
+mod hygiene_panes;
+pub(crate) use hygiene_panes::panes_once;
+
+/// Confirm suspected deaths against a fresh read (pure, tested): panes
+/// missing from both reads are truly dead; panes the first read
+/// transiently missed but the confirm sees must survive AND join the
+/// retain set (pruning on one read's miss wipes a live session's
+/// baselines/dedup and reaps its tap guard). Single source for the
+/// double-confirm arm below.
+pub(crate) fn confirm_deaths(
+    first: &HashSet<String>,
+    fresh: &HashSet<String>,
+    dying: Vec<String>,
+) -> (Vec<String>, HashSet<String>) {
+    let out: Vec<String> = dying
+        .into_iter()
+        .filter(|p| !fresh.contains(p))
+        .collect();
+    let mut retain: HashSet<String> = first.clone();
+    for p in fresh {
+        retain.insert(p.clone());
     }
-    match list_panes(&s.cfg.socket).await {
-        Ok(l) => {
-            let set: HashSet<String> = l.into_iter().collect();
-            *cache = Some(set.clone());
-            Some(set)
-        }
-        Err(e) => {
-            eprintln!(
-                "[reconcile] pane list failed, keeping topics: {}",
-                crate::types::mask_home(&e.to_string())
-            );
-            None
-        }
-    }
+    (out, retain)
 }
 
 /// Reap mode-independent orphans: DM-mode prompts can orphan jobs,
@@ -135,7 +135,7 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
         Some(live) if live.is_empty() => {
             eprintln!("[reconcile] pane list empty, keeping intents");
         }
-        Some(live) => {
+        Some(mut live) => {
             // Retain live-only (not live∪known): known includes
             // the just-cleared dead panes, so ∪ would keep
             // everything clear_pane missed.
@@ -159,7 +159,11 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                     *pane_list = None;
                     match panes_once(s, pane_list).await {
                         Some(fresh) if !fresh.is_empty() => {
-                            dying.into_iter().filter(|p| !fresh.contains(p)).collect()
+                            let (out, union) = confirm_deaths(&live, &fresh, dying);
+                            for p in &union {
+                                live.insert(p.clone());
+                            }
+                            out
                         }
                         Some(_) => {
                             eprintln!("[reconcile] confirm empty, keeping all");
@@ -231,6 +235,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
             s.blocked_card.lock().await.retain(|p, _| live.contains(p));
+            // Kind memory is mapping-less by design (shells never mint):
+            // dead entries never pass remove_mapping_if_thread, so they
+            // retain live-only here like every other per-pane map.
+            s.topics.prune_kinds(&live);
             // Shell generations are pane-scoped like the maps above.
             s.shell_gen.lock().await.retain(|p, _| live.contains(p));
             // Corpse-tap reap: a wedged OpGuard (drop lost the lock race)

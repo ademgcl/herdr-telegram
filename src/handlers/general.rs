@@ -1,6 +1,8 @@
 use super::forum::bare_cmd;
 use crate::{state::AppState, ui::general_help_text};
 
+use super::general_typewait::ProbeOut;
+
 pub(crate) async fn handle_general_forum_message(
     s: AppState,
     chat: i64,
@@ -61,41 +63,73 @@ pub(crate) async fn handle_general_forum_message(
                     .await;
                 return;
             }
-            match super::tap::type_text(&s, &wpane, text).await {
-                Ok(()) => {
-                    s.typewait.lock().await.remove(&(chat, thread_id));
-                    s.tg.send_msg(chat, thread_id, &crate::ui::typed_ack(&wpane), None)
-                        .await;
-                    return;
-                }
-                Err(super::tap::TypeError::Resumed) => {
-                    s.typewait.lock().await.remove(&(chat, thread_id));
-                    // Raced resume: answer text must never become General
-                    // control (a literal "/reset" as an answer must not
-                    // wipe topics). Fall through to bare-text guidance only.
-                    if cmd.starts_with('/') {
+            // Shell-flip probe (split: `general_typewait`): a stranded
+            // waiter drops visibly, a dead pane degrades to normal
+            // routing below (waiter already evicted — never a type
+            // attempt), a blip keeps + refuses.
+            let degraded = match super::general_typewait::probe_typewait(&s, chat, thread_id, &wpane)
+                .await
+            {
+                ProbeOut::Handled => return,
+                ProbeOut::Degraded => true,
+                ProbeOut::Proceed => false,
+            };
+            // A dead pane degrades to normal routing below (waiter
+            // already evicted above — never a type attempt into it).
+            if !degraded {
+                match super::tap::type_text(&s, &wpane, text).await {
+                    Ok(()) => {
+                        s.typewait.lock().await.remove(&(chat, thread_id));
+                        s.tg.send_msg(chat, thread_id, &crate::ui::typed_ack(&wpane), None)
+                            .await;
+                        // Resumed work owns no job — follow it to the final reply.
+                        crate::jobs::follow::follow_answer(&s, &wpane, chat, thread_id, text).await;
+                        return;
+                    }
+                    Err(super::tap::TypeError::Resumed) => {
+                        s.typewait.lock().await.remove(&(chat, thread_id));
+                        // Raced resume (DM/forum parity): the answer
+                        // becomes a prompt on the waited pane, never
+                        // General control (a literal "/reset" as an answer
+                        // must not wipe topics). Fail-closed: an unreadable
+                        // re-read keeps the waiter (original instant, never
+                        // re-stamped) + refuses instead of dropping input.
+                        match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await
+                        {
+                            Ok(a) => {
+                                crate::jobs::enqueue_prompt(
+                                    s.clone(),
+                                    chat,
+                                    thread_id,
+                                    a.into(),
+                                    text.to_string(),
+                                )
+                                .await;
+                            }
+                            Err(_) => {
+                                s.typewait
+                                    .lock()
+                                    .await
+                                    .insert((chat, thread_id), (wpane.clone(), armed_at));
+                                s.tg.send_msg(chat, thread_id, crate::ui::HERDR_UNREACHABLE, None)
+                                    .await;
+                            }
+                        }
+                        return;
+                    }
+                    Err(e) => {
                         s.tg.send_msg(
                             chat,
                             thread_id,
-                            "that answer arrived after the question moved on — re-send as a fresh prompt in the agent's topic.",
+                            &format!(
+                                "⚠️ type failed: {} — retry, or /cancel to abort",
+                                crate::types::mask_home(&e.to_string())
+                            ),
                             None,
                         )
                         .await;
                         return;
                     }
-                }
-                Err(e) => {
-                    s.tg.send_msg(
-                        chat,
-                        thread_id,
-                        &format!(
-                            "⚠️ type failed: {} — retry, or /cancel to abort",
-                            crate::types::mask_home(&e.to_string())
-                        ),
-                        None,
-                    )
-                    .await;
-                    return;
                 }
             }
         }
@@ -192,3 +226,7 @@ pub(crate) async fn handle_general_forum_message(
     s.tg.send_msg(chat, thread_id, crate::ui::GENERAL_HINT, None)
         .await;
 }
+
+#[cfg(test)]
+#[path = "general_tests.rs"]
+mod tests;

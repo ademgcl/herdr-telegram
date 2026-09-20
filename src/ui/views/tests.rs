@@ -219,3 +219,10 @@ fn test_build_identity_card_text() {
     assert!(!minimal.contains("Branch:"));
     assert!(minimal.contains("Status: 🟢 ready"));
 }
+
+#[test]
+fn test_chunks_empty_yields_no_message() {
+    // Empty bodies must not produce a `[""]` chunk (Telegram 400s it).
+    assert!(chunks("", 100).is_empty());
+    assert!(!chunks("hi", 100).is_empty());
+}

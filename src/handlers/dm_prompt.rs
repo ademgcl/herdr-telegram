@@ -203,6 +203,8 @@ pub(crate) async fn handle_bare_prompt(
                 s.set_focus(&row.pane).await;
                 s.tg.send_msg(chat, None, &crate::ui::typed_ack(&row.pane), None)
                     .await;
+                // Resumed work owns no job — follow it to the final reply.
+                crate::jobs::follow::follow_answer(s, &row.pane, chat, None, &prompt_text).await;
             }
             // Resumed between snapshot and send: the text becomes a
             // regular prompt instead of stray input.

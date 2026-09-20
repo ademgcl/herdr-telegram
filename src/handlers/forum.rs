@@ -7,6 +7,14 @@ pub(crate) fn bare_cmd(cmd: &str) -> &str {
     cmd.split('@').next().unwrap_or(cmd)
 }
 
+/// Orphan-thread verdict (pure, tested): `true` when a threaded
+/// message maps to nothing — a reset/remint orphan or a user-made
+/// topic, never General traffic (General carries no thread id).
+/// Single source for the refuse below so the shape can never drift.
+pub(crate) fn is_orphan_thread(thread_id: Option<i64>, pane_found: bool) -> bool {
+    thread_id.is_some() && !pane_found
+}
+
 pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     let from = msg["from"]["id"].as_i64().unwrap_or(0);
     if !s.cfg.owners.contains(&from) {
@@ -48,7 +56,14 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
             let label = if super::space::check_label(arg) {
                 arg.to_string()
             } else {
-                super::space::next_label(&s).await
+                // Auto-label needs a readable list: an outage refuses
+                // before any billable mint, never a colliding `space-1`.
+                let Some(label) = super::space::next_label(&s).await else {
+                    s.tg.send_msg(chat, thread_id, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                };
+                label
             };
             super::space::open_space(&s, chat, thread_id, &label).await;
             return;
@@ -73,6 +88,18 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     // Inside General topic or non-agent thread:
+    // Orphan refuse (status/model parity): a threaded message whose
+    // thread maps to nothing is a reset/remint orphan or a user-made
+    // topic — never General traffic (General carries no thread id).
+    // General control (`/reset`, `/spawn`, …) must never fire from a
+    // corpse replay, and bare prompts must never route with the wrong
+    // id for follow-ups. Posted in-thread: dead threads fail the send
+    // silently (same as a drop), live ones get guidance (no silent
+    // loss). Never falls through to General routing.
+    if is_orphan_thread(thread_id, false) {
+        s.tg.send_msg(chat, thread_id, crate::ui::UNKNOWN_TOPIC, None).await;
+        return;
+    }
     super::general::handle_general_forum_message(s, chat, thread_id, text).await;
 }
 
@@ -85,5 +112,16 @@ mod tests {
         assert_eq!(bare_cmd("/model@HerdrBot"), "/model");
         assert_eq!(bare_cmd("/model"), "/model");
         assert_eq!(bare_cmd("hello"), "hello");
+    }
+
+    #[test]
+    fn test_is_orphan_thread_live_only() {
+        // Threaded + unmapped (remint orphan / user-made): refuse.
+        assert!(is_orphan_thread(Some(7), false));
+        // General (no thread) never refuses, even unmapped.
+        assert!(!is_orphan_thread(None, false));
+        // Mapped agent/shell threads route to their topic, never refuse.
+        assert!(!is_orphan_thread(Some(7), true));
+        assert!(!is_orphan_thread(None, true));
     }
 }

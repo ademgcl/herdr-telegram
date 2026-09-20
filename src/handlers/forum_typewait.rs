@@ -82,6 +82,8 @@ pub(crate) async fn consume_typewait(
             s.typewait.lock().await.remove(&(chat, Some(thread_id)));
             s.tg.send_msg(chat, Some(thread_id), &crate::ui::typed_ack(&wpane), None)
                 .await;
+            // Resumed work owns no job — follow it to the final reply.
+            crate::jobs::follow::follow_answer(s, &wpane, chat, Some(thread_id), text).await;
             WaitOut::Handled
         }
         Err(super::tap::TypeError::Resumed) => {

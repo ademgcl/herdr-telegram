@@ -31,7 +31,7 @@ impl TopicManager {
         match self.tg.reopen_forum_topic(forum, thread).await {
             Ok(()) => None,
             Err(e) => {
-                if crate::telegram::topic_missing(&e.to_string()) {
+                if crate::telegram::topic_gone(&e.to_string()) {
                     // Human-deleted topic: drop the corpse so the next
                     // ensure recreates instead of reusing a dead thread.
                     // Compare-and-delete: never kill a fresh remint.
@@ -54,7 +54,13 @@ impl TopicManager {
     /// sync 1:1 with herdr names), just ensures the topic. Returns true
     /// when the mapping was pruned this call (caller retires its dialog
     /// generation — uniform with every other sync site).
+    /// Reuse-only when the workspace is unknown: minting with a "[?]"
+    /// placeholder leaks a visible stub until the watchdog converges —
+    /// defer the mint to the tick that knows the real space.
     pub async fn mark_shell(&self, pane: &str) -> bool {
+        if self.storage.get_thread(pane).is_none() {
+            return false;
+        }
         self.sync_topic_prune(pane, "shell", "?").await.1
     }
 
@@ -69,7 +75,7 @@ impl TopicManager {
         let ok = match self.tg.close_forum_topic(forum, thread).await {
             Ok(()) => true,
             Err(e) => {
-                if crate::telegram::topic_missing(&e.to_string()) {
+                if crate::telegram::topic_gone(&e.to_string()) {
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
@@ -101,7 +107,7 @@ impl TopicManager {
                 true
             }
             Err(e) => {
-                if crate::telegram::topic_missing(&e.to_string()) {
+                if crate::telegram::topic_gone(&e.to_string()) {
                     self.remove_mapping_if_thread(pane, thread);
                     return true;
                 }
@@ -241,6 +247,9 @@ impl TopicManager {
         for mid in mids {
             let _ = self.tg.copy_msg(forum, forum, mid, Some(new_thread)).await;
         }
+        // Old mids point at the deleted topic: drop them so the next
+        // reset copies nothing stale (copy failures are silent).
+        self.storage.clear_msgs(pane);
 
         // F2: fresh identity card, tracked by id for status edits —
         // never pinned.

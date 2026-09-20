@@ -6,22 +6,31 @@ use crate::{
     herdr::labels::{pane_facts, tab_labels},
     notifier::hygiene::reap_orphans,
     notifier::hygiene_flip::flip_dm_shells,
+    notifier::limits::scan_limits,
     state::AppState,
     types::AgentRow,
 };
 use std::collections::HashSet;
 
-/// DM flip + dead-pane hygiene + 1:1 titles (tail of `reconcile`).
+/// DM flip + stall scan + hygiene + titles (tail of `reconcile`).
 pub async fn reconcile_tail(
     s: &AppState,
     rows: &[AgentRow],
     live_panes: &HashSet<String>,
     pane_list: &mut Option<HashSet<String>>,
+    silent: bool,
 ) {
     // DM mode has no topics, but `status` still drives the limit
     // scanner — flip shell-reused panes (status + episode, no report).
     if s.cfg.forum.is_none() {
         flip_dm_shells(s, live_panes, pane_list).await;
+    }
+
+    // Stall scan runs AFTER every shell flip (forum block in the caller
+    // + DM flip above): a quit pane scans as `shell` (skipped), never
+    // with stale agent status vs fresh shell output.
+    if !silent {
+        scan_limits(s).await;
     }
 
     // Mode-independent dead-pane hygiene (jobs, intent, per-pane maps

@@ -30,8 +30,13 @@ impl LiveSlot {
             mid: None,
             dest: None,
             // Primed: the first stream lands immediately (cooldown
-            // throttles repeats, never the first card).
-            last_edit: Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS),
+            // throttles repeats, never the first card). checked_sub:
+            // Instant::now() - cooldown panics when the monotonic clock
+            // is younger than the cooldown (fresh boot); fall back to
+            // now (first output delayed one cooldown, never a panic).
+            last_edit: Instant::now()
+                .checked_sub(Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS))
+                .unwrap_or_else(Instant::now),
         }
     }
 
@@ -40,7 +45,9 @@ impl LiveSlot {
     /// Address clears separately via the superseded retire below so the
     /// old card folds instead of orphaning.
     pub fn rearm(&mut self) {
-        self.last_edit = Instant::now() - Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS);
+        self.last_edit = Instant::now()
+            .checked_sub(Duration::from_secs(LIVE_EDIT_COOLDOWN_SECS))
+            .unwrap_or_else(Instant::now);
     }
 
     /// Retire the old turn's card on a handoff (bounded, silent): take

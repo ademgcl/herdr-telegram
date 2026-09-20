@@ -204,7 +204,7 @@ impl TopicManager {
                     Ok(()) => {
                         self.storage.set_icon(pane, icon);
                     }
-                    Err(e) if crate::telegram::topic_missing(&e.to_string()) => {
+                    Err(e) if crate::telegram::topic_gone(&e.to_string()) => {
                         self.remove_mapping_if_thread(pane, thread);
                         return (None, true);
                     }
@@ -274,7 +274,7 @@ impl TopicManager {
                 Ok(()) => {
                     self.storage.set_icon(pane, icon);
                 }
-                Err(e) if crate::telegram::topic_missing(&e.to_string()) => {
+                Err(e) if crate::telegram::topic_gone(&e.to_string()) => {
                     self.remove_mapping_if_thread(pane, thread);
                     return (None, true);
                 }
@@ -288,5 +288,10 @@ impl TopicManager {
     /// Note user-customized icon from Telegram so it is never overwritten.
     pub fn note_user_icon(&self, pane: &str, icon: &str) {
         self.storage.set_icon(pane, icon);
+    }
+
+    /// Forget a user-cleared custom icon (watchdog heals the kind glyph).
+    pub fn clear_user_icon(&self, pane: &str) {
+        self.storage.clear_icon(pane);
     }
 }

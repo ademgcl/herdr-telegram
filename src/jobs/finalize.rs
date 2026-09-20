@@ -51,10 +51,20 @@ pub async fn finalize(
     // renders. Two delayed re-reads (~4s) rescue fast-task replies.
     if body.is_empty() {
         for _ in 0..2 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            // Cancellable grace wait (settle.rs parity): a submit or
+            // /cancel landing mid-wait owns the pane at once, never after
+            // up to 4s of dead sleep.
+            super::settle::sleep_or_superseded(
+                job,
+                entry_epoch,
+                std::time::Duration::from_secs(2),
+            )
+            .await;
             // Superseded during the grace wait: drop like any mid-finalize
-            // retarget below instead of posting stale.
-            if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            // retarget below instead of posting stale. Cancel counts too:
+            // /cancel bumps epoch AND marks stopped — the mark covers a
+            // retire that reused the epoch without bumping it.
+            if job.epoch.load(Ordering::Relaxed) != entry_epoch || job.is_stopped() {
                 println!("[prompt] finalize {pane}: superseded in grace wait, dropping");
                 acc.clear();
                 return false;
@@ -142,10 +152,16 @@ pub async fn finalize(
         observe_status(s, pane, settled, true, "job").await;
         // Address from the slot (remap-safe); mid without dest drops
         // without editing (fail-closed, never wrong thread).
+        // Bounded like the blocked-path retire: a slow Telegram must not
+        // stall settle past the tick — a timeout keeps the slot for the
+        // next tick instead of blocking the retire.
         if let Some(mid) = live_mid.take() {
             if let Some((lchat, _)) = live_dest.take() {
-                s.tg.edit_msg(lchat, mid, "✅ settled — no fresh output", None)
-                    .await;
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
+                    s.tg.try_edit_msg(lchat, mid, "✅ settled — no fresh output", None),
+                )
+                .await;
                 let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
             }
         } else {

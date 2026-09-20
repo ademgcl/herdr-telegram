@@ -110,6 +110,12 @@ pub fn mask_home(s: &str) -> String {
     mask_home_with(s, &home_dir())
 }
 
+/// Render a path for logs with $HOME collapsed to `~` (no username
+/// leak). Single source for main's boot log line.
+pub fn home_masked(p: &std::path::Path) -> String {
+    collapse_home(&p.display().to_string(), &home_dir())
+}
+
 /// Collapse $HOME to `~` in a display path (log hygiene: no username
 /// leak). Pure so it is unit-tested; empty home leaves the path alone.
 pub fn collapse_home(path: &str, home: &str) -> String {
@@ -266,5 +272,18 @@ mod tests {
             );
         }
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn test_home_masked_collapses_home_prefix() {
+        // Single source for main's boot log line: $HOME collapses to `~`.
+        assert_eq!(
+            collapse_home("/Users/x/.config/ht", "/Users/x"),
+            "~/.config/ht"
+        );
+        assert_eq!(
+            home_masked(std::path::Path::new("/other/path")),
+            collapse_home("/other/path", &home_dir())
+        );
     }
 }

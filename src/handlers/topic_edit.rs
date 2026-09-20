@@ -32,6 +32,20 @@ pub fn parse_topic_icon_edit(msg: &Value) -> Option<(i64, String)> {
     Some((thread, icon))
 }
 
+/// True when a `forum_topic_edited` service msg cleared the custom icon
+/// (key present as null/empty): the stored custom must drop so the next
+/// watchdog heals the kind glyph instead of wedging on it forever. A
+/// name-only edit omits the key entirely (None) — never a clear.
+pub fn parse_topic_icon_cleared(msg: &Value) -> Option<i64> {
+    let edited = msg.get("forum_topic_edited")?;
+    let thread = msg["message_thread_id"].as_i64()?;
+    match edited.get("icon_custom_emoji_id") {
+        Some(v) if v.is_null() => Some(thread),
+        Some(Value::String(s)) if s.trim().is_empty() => Some(thread),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,6 +98,36 @@ mod tests {
             parse_topic_icon_edit(
                 &json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_topic_icon_cleared_only_explicit() {
+        // Explicit null / empty clears; a name-only edit (key absent)
+        // never clears (else every rename would drop the custom icon).
+        assert_eq!(
+            parse_topic_icon_cleared(&json!({
+                "message_thread_id": 17,
+                "forum_topic_edited": {"icon_custom_emoji_id": null}
+            })),
+            Some(17)
+        );
+        assert_eq!(
+            parse_topic_icon_cleared(&json!({
+                "message_thread_id": 17,
+                "forum_topic_edited": {"icon_custom_emoji_id": "  "}
+            })),
+            Some(17)
+        );
+        assert_eq!(
+            parse_topic_icon_cleared(
+                &json!({"message_thread_id": 17, "forum_topic_edited": {"name": "hi"}})
+            ),
+            None
+        );
+        assert_eq!(
+            parse_topic_icon_cleared(&json!({"text": "hi"})),
             None
         );
     }

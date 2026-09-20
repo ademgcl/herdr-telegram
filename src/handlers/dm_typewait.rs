@@ -71,6 +71,8 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
             s.typewait.lock().await.remove(&(chat, None));
             s.tg.send_msg(chat, None, &crate::ui::typed_ack(&wpane), None)
                 .await;
+            // Resumed work owns no job — follow it to the final reply.
+            crate::jobs::follow::follow_answer(s, &wpane, chat, None, text).await;
             true
         }
         // Raced by a resume: the waiter is consumed — route the text to

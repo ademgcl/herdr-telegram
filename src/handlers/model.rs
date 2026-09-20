@@ -103,6 +103,18 @@ pub async fn show_model(s: &AppState, chat: i64, thread: Option<i64>, pane: &str
     }
 }
 
+/// Single source for the switch narration (topic arm below + the
+/// callback tap arm): dup'd literals re-drift.
+pub(crate) fn switch_progress(pane: &str, marker: &str) -> String {
+    format!("⏳ switching {pane} → `{marker}`…")
+}
+
+/// Single source for the switch confirmation (topic arm below + the
+/// callback tap arm).
+pub(crate) fn switch_done(pane: &str, footer: &str) -> String {
+    format!("✅ model set: `{footer}`\n[{pane}]")
+}
+
 /// Switch `pane` to `filter`/`marker`, narrating progress into the chat.
 /// Focus follows success only (a failed switch must not pin focus).
 pub async fn switch_by_filter(
@@ -113,26 +125,18 @@ pub async fn switch_by_filter(
     filter: &str,
     marker: &str,
 ) {
-    s.tg.send_msg(
-        chat,
-        thread,
-        &format!("⏳ switching {pane} → `{marker}`…"),
-        None,
-    )
-    .await;
+    s.tg.send_msg(chat, thread, &switch_progress(pane, marker), None)
+        .await;
     match switch_model(s, pane, filter, marker).await {
         // Set means set: plain confirmation, NO picker keyboard back —
         // re-offering options after success only confuses.
         Ok(footer) => {
-            s.set_focus(pane).await;
-            let mid =
-                s.tg.send_msg(
-                    chat,
-                    thread,
-                    &format!("✅ model set: `{footer}`\n[{pane}]"),
-                    None,
-                )
-                .await;
+            // DM-only focus (show_model parity): a forum switch is
+            // thread-routed and must not reroute global DM traffic.
+            if thread.is_none() {
+                s.set_focus(pane).await;
+            }
+            let mid = s.tg.send_msg(chat, thread, &switch_done(pane, &footer), None).await;
             s.remember(chat, mid, pane).await;
         }
         Err(e) => {
@@ -219,12 +223,23 @@ async fn switch_inner(s: &AppState, pane: &str, filter: &str, marker: &str) -> R
         .into());
     }
     // Re-check idleness: typing must never leak into a working session.
-    let busy = get_agent(&s.cfg.socket, pane)
+    let busy_blocked = get_agent(&s.cfg.socket, pane)
         .await
-        .map(|a| !matches!(a.status.as_str(), "idle" | "done"))
-        .unwrap_or(true);
-    if busy {
-        close_picker(s, pane).await;
+        .map(|a| {
+            (
+                !matches!(a.status.as_str(), "idle" | "done"),
+                a.status == "blocked",
+            )
+        })
+        .unwrap_or((true, false));
+    if busy_blocked.0 {
+        // A raced `blocked` means a permission dialog may be open: a bare
+        // esc would dismiss/deny it unordered — leave the screen alone
+        // (the next open_picker escs first anyway). Otherwise the picker
+        // is up and esc only closes it.
+        if !busy_blocked.1 {
+            close_picker(s, pane).await;
+        }
         return Err("agent got busy — try when idle".into());
     }
     send_agent_keys(&s.cfg.socket, pane, &["enter"])

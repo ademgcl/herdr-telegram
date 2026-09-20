@@ -19,7 +19,15 @@ fn test_store_roundtrip_and_migration() {
     let _ = std::fs::remove_file(&cur);
 
     let s = Store::default();
-    assert!(!s.unread.contains("x"));
+    assert!(s.topics.is_empty());
+    // Removed `unread` set still loads (unknown-field tolerant): a legacy
+    // file carrying it must not fail the read path.
+    let leg2 =
+        std::env::temp_dir().join(format!("herdr-tg-test-unread-{}.json", std::process::id()));
+    std::fs::write(&leg2, r#"{"topics": {"w3:p3": 9}, "unread": ["w3:p3"]}"#).unwrap();
+    let st3 = TopicStorage::at(leg2.clone());
+    assert_eq!(st3.get_thread("w3:p3"), Some(9));
+    let _ = std::fs::remove_file(&leg2);
 }
 
 #[test]
@@ -240,4 +248,21 @@ fn test_empty_main_falls_back_to_prev() {
     assert_eq!(empty.get_thread("w1:p1"), None);
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&prev);
+}
+
+#[test]
+fn test_clear_msgs_and_icon_drop_stale() {
+    // Reset migration drops old-topic mids; icon clear drops the custom
+    // so the watchdog heals the kind glyph instead of wedging.
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-clear-{}.json", std::process::id())),
+    );
+    st.insert("w1:p1".into(), 42);
+    st.record_msg("w1:p1", 100);
+    st.set_icon("w1:p1", "1234567890");
+    st.clear_msgs("w1:p1");
+    assert!(st.get_recent_msgs("w1:p1").is_empty());
+    st.clear_icon("w1:p1");
+    assert_eq!(st.get_icon("w1:p1"), None);
+    let _ = std::fs::remove_file(&st.file_path);
 }

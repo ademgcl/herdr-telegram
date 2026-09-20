@@ -77,6 +77,7 @@ impl State {
             }
             self.clear_pending(pane).await;
             self.clear_waiters(pane).await;
+            self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
             // No watcher left to reap the typing task — stop it here
             // (the job path below relies on the watcher's own footer).
@@ -89,6 +90,9 @@ impl State {
         }
         self.clear_pending(pane).await;
         self.clear_waiters(pane).await;
+        // Fresh stall episode after quiet retire (loud parity): a
+        // same-name remint must not inherit limit_alert/seen/miss/cool.
+        self.clear_limit_episode(pane).await;
         self.debounce.lock().await.remove(pane);
         // After removal: unowned, so this actually stops the task
         // (shell-aware like the loud path — a racing shell submit keeps
@@ -112,6 +116,11 @@ impl State {
     pub async fn cancel_job_only_for(self: &Arc<Self>, pane: &str) -> bool {
         let cur = self.jobs.lock().await.get(pane).cloned();
         let Some(job) = cur else {
+            // Lost-race guard (loud/quiet parity): a successor inserted
+            // after the snapshot owns the fresh debounce — leave it alone.
+            if self.jobs.lock().await.contains_key(pane) {
+                return false;
+            }
             self.debounce.lock().await.remove(pane);
             return false;
         };
@@ -203,6 +212,7 @@ pub(crate) struct TestStateDir {
     path: std::path::PathBuf,
     _guard: std::sync::MutexGuard<'static, ()>,
     old: Option<std::ffi::OsString>,
+    old_home: Option<std::ffi::OsString>,
 }
 #[cfg(test)]
 impl Drop for TestStateDir {
@@ -211,6 +221,11 @@ impl Drop for TestStateDir {
             unsafe { std::env::set_var("HERDR_STATE_DIR", old) };
         } else {
             unsafe { std::env::remove_var("HERDR_STATE_DIR") };
+        }
+        if let Some(old) = self.old_home.take() {
+            unsafe { std::env::set_var("HOME", old) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
         }
         let _ = std::fs::remove_dir_all(&self.path);
     }
@@ -223,6 +238,7 @@ static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
     let guard = TEST_ENV_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let old = std::env::var_os("HERDR_STATE_DIR");
+    let old_home = std::env::var_os("HOME");
     let n = TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -231,6 +247,12 @@ pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
     let path = std::env::temp_dir().join(format!("ht-{n}-{nanos}"));
     std::fs::create_dir_all(&path).expect("test tempdir");
     unsafe { std::env::set_var("HERDR_STATE_DIR", &path) };
+    // Hermetic HOME: State::new + TopicStorage migrate legacy
+    // `~/.local/share/herdr-telegram/{focus,topics.json}` when the fresh
+    // dir is empty. Without this the dev machine's real focus (e.g.
+    // `w8:p1`) leaks into every isolated state and stale focus shadows
+    // the sole-agent fallback (see handlers::target dm_pane).
+    unsafe { std::env::set_var("HOME", &path) };
     let cfg = crate::config::Cfg {
         token: "test-token".to_string(),
         socket: "nonexistent-test.sock".to_string(),
@@ -244,6 +266,7 @@ pub(crate) fn isolated_state() -> (crate::state::AppState, TestStateDir) {
             path,
             _guard: guard,
             old,
+            old_home,
         },
     )
 }

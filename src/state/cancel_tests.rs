@@ -57,6 +57,25 @@ async fn test_quiet_retires_silently() {
 }
 
 #[tokio::test]
+async fn test_quiet_clears_limit_episode_loud_parity() {
+    // Same-name remint must not inherit stall state after a quiet
+    // dead/shell retire (loud parity: cancel_jobs_for clears it).
+    let (s, _dir) = isolated_state();
+    let now = std::time::Instant::now();
+    s.limit_alert.lock().await.insert("t:p1".into(), ("m".into(), now));
+    s.limit_seen.lock().await.insert("t:p1".into(), ("m".into(), now));
+    let job = Job::new(vec![], 1, None);
+    s.jobs.lock().await.insert("t:p1".into(), job.clone());
+    assert!(s.cancel_jobs_for_quiet("t:p1").await);
+    assert!(!s.limit_alert.lock().await.contains_key("t:p1"));
+    assert!(!s.limit_seen.lock().await.contains_key("t:p1"));
+    // No-job branch clears too (loud parity).
+    s.limit_miss.lock().await.insert("t:p9".into(), 3);
+    s.cancel_jobs_for_quiet("t:p9").await;
+    assert!(!s.limit_miss.lock().await.contains_key("t:p9"));
+}
+
+#[tokio::test]
 async fn test_job_only_preserves_pending_intent() {
     // Already-shell branch: stale watcher dies, live shell intent stays.
     let (s, _dir) = isolated_state();
@@ -81,6 +100,49 @@ async fn test_clear_pending_if_matches_is_exact() {
     assert!(s.clear_pending_if_matches("t:p1", 1, None, "make").await);
     assert!(!s.pending.lock().await.contains_key("t:p1"));
     assert!(!s.clear_pending_if_matches("t:p1", 1, None, "make").await);
+}
+
+#[tokio::test]
+async fn test_job_only_vacant_keeps_live_debounce() {
+    // Vacant-pane retire must not eat a live pane's fresh settle debounce.
+    let (s, _dir) = isolated_state();
+    let live = Job::new(vec![], 9, None);
+    s.jobs.lock().await.insert("t:p9".into(), live);
+    s.debounce.lock().await.insert("t:p9".into(), ("idle".into(), std::time::Instant::now()));
+    assert!(!s.cancel_job_only_for("t:vacant").await);
+    assert!(s.debounce.lock().await.contains_key("t:p9"));
+    // Vacant pane's own stale debounce still clears.
+    s.debounce.lock().await.insert("t:vacant".into(), ("idle".into(), std::time::Instant::now()));
+    assert!(!s.cancel_job_only_for("t:vacant").await);
+    assert!(!s.debounce.lock().await.contains_key("t:vacant"));
+}
+
+#[tokio::test]
+async fn test_job_only_lost_race_keeps_successor_debounce() {
+    // Lost-race guard (loud/quiet parity): a successor inserted after
+    // the vacant snapshot owns the fresh debounce — the retire leaves
+    // it alone. Raced both orders: whichever wins, a live successor
+    // never loses its debounce (the pre-guard code ate it, dropping
+    // the next settle's card).
+    let (s, _dir) = isolated_state();
+    for _ in 0..100 {
+        s.jobs.lock().await.remove("t:race");
+        s.debounce.lock().await.remove("t:race");
+        let s2 = s.clone();
+        let racer = tokio::spawn(async move {
+            let job = Job::new(vec![], 1, None);
+            s2.jobs.lock().await.insert("t:race".into(), job);
+            s2.debounce
+                .lock()
+                .await
+                .insert("t:race".into(), ("idle".into(), std::time::Instant::now()));
+        });
+        let _ = s.cancel_job_only_for("t:race").await;
+        racer.await.unwrap();
+        if s.jobs.lock().await.contains_key("t:race") {
+            assert!(s.debounce.lock().await.contains_key("t:race"));
+        }
+    }
 }
 
 #[tokio::test]

@@ -7,13 +7,41 @@ use crate::{
     handlers::shell_common::{ShellReuse, classify_shell_reuse},
     herdr::client::{get_agent, list_agents},
     notifier::hygiene::{panes_once, reap_orphans},
-    notifier::limits::scan_limits,
     notifier::status::observe_status,
     state::AppState,
 };
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Process-wide reconcile single-flight (reset-guard parity): the 60s
+/// watchdog tick and the event-task resubscribe scan ("reconnect") run
+/// on different tasks — `MissedTickBehavior::Skip` serializes ticks
+/// against themselves only, never against the event task. The loser
+/// skips (every scan is per-pane idempotent; the next tick covers), so
+/// concurrent full scans never double RPC load or interleave
+/// observe/limits/hygiene writes. Atomic flag, never a mutex held
+/// across RPCs.
+static RECONCILE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+struct ReconcileGuard;
+impl Drop for ReconcileGuard {
+    fn drop(&mut self) {
+        RECONCILE_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
+}
+
+fn try_begin_reconcile() -> Option<ReconcileGuard> {
+    RECONCILE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .ok()
+        .map(|_| ReconcileGuard)
+}
 
 pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
+    let Some(_guard) = try_begin_reconcile() else {
+        println!("[reconcile] skipped overlapping {src} scan (one already running)");
+        return;
+    };
     // While reset runs, topic lifecycle belongs to reset: a watchdog tick
     // opening topics and posting cards would race delete/create and cause
     // a 429 storm. Hygiene still runs (no topic writes) so status, limits
@@ -46,14 +74,11 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
 
     // Rate-limit stalls never transition (herdr reports `working` while
     // opencode retries internally), so the status path above stays mute:
-    // scan non-shell panes for the banner directly (immediate quota/auth
-    // on any status — herdr can sample idle mid-retry; gated still needs
-    // working), backstopping prompt-owned panes with parked watchers.
-    // Skipped on the silent seed (boot text can mimic error banners); the
-    // next watchdog tick — 60s later — surfaces real stalls anyway.
-    if !silent {
-        scan_limits(s).await;
-    }
+    // scan runs in the tail AFTER the shell flips below — a pane that
+    // quit since the last tick must scan as `shell` (skipped), never
+    // with its stale agent status against fresh shell output (one-tick
+    // STRONG-auth false-❗). Skipped on the silent seed (boot text can
+    // mimic error banners); the next watchdog tick surfaces real stalls.
 
     // Stored panes with no agent are shells (quit) or dead (closed).
     // Shells keep their topic with the shell badge and zero alerts;
@@ -190,6 +215,21 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         }
     }
 
-    // DM flip + hygiene + titles tail (split: 300-line file limit).
-    super::reconcile_tail::reconcile_tail(s, &rows, &live_panes, &mut pane_list).await;
+    // DM flip + stall scan + hygiene + titles tail (split: 300-line file limit).
+    super::reconcile_tail::reconcile_tail(s, &rows, &live_panes, &mut pane_list, silent).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_reconcile_guard_single_flight() {
+        // First claim wins, overlap loses, drop releases.
+        let g = try_begin_reconcile().expect("first scan claims");
+        assert!(try_begin_reconcile().is_none());
+        drop(g);
+        assert!(try_begin_reconcile().is_some());
+        RECONCILE_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
 }

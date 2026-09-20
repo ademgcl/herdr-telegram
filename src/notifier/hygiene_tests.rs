@@ -266,3 +266,20 @@ async fn test_reap_prunes_stale_intent_and_persists() {
     assert!(disk.contains_key("dead:fresh"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_confirm_deaths_union_verified() {
+    // Deferred transient handling, now verified: a pane the first read
+    // missed but the confirm sees survives AND joins the retain set
+    // (pruning on one read's miss would wipe live baselines/dedup);
+    // a pane missing from both reads is truly dead.
+    let first: HashSet<String> = HashSet::from(["live:p1".to_string()]);
+    let fresh: HashSet<String> =
+        HashSet::from(["live:p1".to_string(), "flap:p2".to_string()]);
+    let dying = vec!["flap:p2".to_string(), "dead:p9".to_string()];
+    let (out, retain) = super::confirm_deaths(&first, &fresh, dying);
+    assert_eq!(out, vec!["dead:p9".to_string()]);
+    assert!(retain.contains("live:p1"));
+    assert!(retain.contains("flap:p2"));
+    assert!(!retain.contains("dead:p9"));
+}

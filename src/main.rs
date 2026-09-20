@@ -4,6 +4,7 @@ mod config;
 mod ctl;
 mod ctl_auth;
 mod ctl_cmd;
+mod ctl_inspect;
 mod handlers;
 mod herdr;
 mod jobs;
@@ -21,18 +22,12 @@ use crate::{
     herdr::{event_task, ping},
     jobs::recover_pending,
     notifier::reconcile,
-    shutdown::shutdown_signal,
+    shutdown::{should_advance_offset, shutdown_signal, sleep_or_shutdown},
     state::State,
     telegram::{get_updates, handle_update},
-    types::{HERDR_PROTOCOL, Res, TG_POLL_SECS},
+    types::{HERDR_PROTOCOL, Res, TG_POLL_SECS, home_masked},
 };
 use std::time::Duration;
-
-/// Render a path for logs with $HOME collapsed to `~` (no username leak).
-/// Crate-wide log helper (pure core: [`crate::types::collapse_home`]).
-fn home_masked(p: &std::path::Path) -> String {
-    crate::types::collapse_home(&p.display().to_string(), &crate::types::home_dir())
-}
 
 #[tokio::main]
 async fn main() -> Res<()> {
@@ -182,7 +177,9 @@ async fn main() -> Res<()> {
     // Skip catch-up bursts: a slow reconcile (many panes × RPCs) overrunning
     // 60s must resume with ONE tick, never back-to-back scans (double-buzz,
     // 429 storm). The loop awaits each reconcile inline, so ticks can't
-    // overlap — only the queued backlog needs dropping.
+    // overlap each other — only the queued backlog needs dropping. Overlap
+    // with the event-task resubscribe scan is stopped inside `reconcile`
+    // itself (process-wide single-flight; the loser skips).
     watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first interval tick fires immediately: consume it so boot isn't
     // a double-scan (seed reconcile just ran above).
@@ -203,12 +200,20 @@ async fn main() -> Res<()> {
                 // Tick bound: a sick-herdr/large-fleet scan must not stretch
                 // the ≤60s herdr→tg guarantee into minutes — partial tick +
                 // retry next cycle (reconcile is per-pane idempotent; Skip
-                // alone prevents overlap, never lateness).
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(50),
-                    reconcile(&s, false, "watchdog"),
-                )
-                .await;
+                // alone prevents overlap, never lateness). Shutdown-aware:
+                // TERM mid-scan saves the offset and exits instead of
+                // stalling exit (and the offset flush) up to 50s.
+                tokio::select! {
+                    _ = shutdown_signal() => {
+                        println!("[main] shutdown signal mid-watchdog — saving offset");
+                        s.save_offset().await;
+                        return Ok(());
+                    }
+                    _ = tokio::time::timeout(
+                        Duration::from_secs(50),
+                        reconcile(&s, false, "watchdog"),
+                    ) => {}
+                }
             }
             updates = async {
                 let off = *s.offset.lock().await;
@@ -235,9 +240,11 @@ async fn main() -> Res<()> {
                             // Ack AFTER handling (at-least-once): bumping
                             // before the handler acked a never-handled
                             // update on TERM — a silent prompt loss.
+                            // Poison guard (single source:
+                            // [`crate::shutdown::should_advance_offset`]).
                             {
                                 let mut off = s.offset.lock().await;
-                                if id >= *off {
+                                if should_advance_offset(id, *off) {
                                     *off = id + 1;
                                 }
                             }
@@ -252,34 +259,34 @@ async fn main() -> Res<()> {
                         let msg = s.tg.redact(&e.to_string());
                         // Backoff sleeps stay signal-aware: a deaf 30s
                         // sleep starves TERM into SIGKILL + replay.
-                        // Revoked-token 401 never recovers by retrying:
-                        // FATAL-break like menu sync so a fixed replacement
-                        // can bind instead of squatting the guard forever.
+                        // Revoked-token 401/404 never recovers by
+                        // retrying: FATAL-break like menu sync so a fixed
+                        // replacement can bind instead of squatting the
+                        // guard forever.
                         if crate::telegram::client::TelegramClient::is_unauthorized(&msg) {
-                            eprintln!("[tg] FATAL: getUpdates unauthorized (401) — token revoked?");
+                            eprintln!("[tg] FATAL: getUpdates unauthorized/not-found (401/404) — token revoked?");
                             s.save_offset().await;
                             break;
                         }
                         if msg.contains("Conflict") {
                             eprintln!("[tg] poll conflict (overlap), backing off 30s: {msg}");
-                            tokio::select! {
-                                _ = shutdown_signal() => {
-                                    println!("[main] shutdown signal during backoff — saving offset");
-                                    s.save_offset().await;
-                                    return Ok(());
-                                }
-                                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                            if sleep_or_shutdown(30).await {
+                                println!("[main] shutdown signal during backoff — saving offset");
+                                s.save_offset().await;
+                                return Ok(());
                             }
                         } else {
-                            let wait = crate::telegram::polling::poll_backoff_secs(poll_fails);
+                            // Flood-aware: a 429 `retry after N` overrides
+                            // the capped backoff — re-hitting early only
+                            // extends the flood (see flood_aware_poll_wait).
+                            let wait = crate::telegram::polling::flood_aware_poll_wait(
+                                &msg, poll_fails,
+                            );
                             eprintln!("[tg] poll failed (retry in {wait}s): {msg}");
-                            tokio::select! {
-                                _ = shutdown_signal() => {
-                                    println!("[main] shutdown signal during backoff — saving offset");
-                                    s.save_offset().await;
-                                    return Ok(());
-                                }
-                                _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
+                            if sleep_or_shutdown(wait).await {
+                                println!("[main] shutdown signal during backoff — saving offset");
+                                s.save_offset().await;
+                                return Ok(());
                             }
                         }
                     }

@@ -50,11 +50,21 @@ pub async fn dm_pane(
     if arg.is_empty() && unmatched_reply(rows, reply) {
         return None;
     }
-    match resolve_target(rows, Some(arg)) {
-        Some(r) => Some(r.pane),
-        None if arg.is_empty() => reply.clone().or(s.get_focus().await),
-        _ => None,
+    if !arg.is_empty() {
+        return resolve_target(rows, Some(arg)).map(|r| r.pane);
     }
+    // Bare path: live reply, else focus, else sole agent. The sole-agent
+    // shortcut must never shadow a rowless-shell focus (shell text into
+    // the agent is a cross-session write — bare-prompt parity): focus is
+    // returned as-is and callers report the shell case themselves.
+    // (A present reply is live here — corpses refused above.)
+    if let Some(rp) = reply.clone() {
+        return Some(rp);
+    }
+    if let Some(f) = s.get_focus().await {
+        return Some(f);
+    }
+    resolve_target(rows, Some("")).map(|r| r.pane)
 }
 
 #[cfg(test)]
@@ -155,5 +165,28 @@ mod tests {
         }];
         assert_eq!(dm_pane(&s, &rows, "", &Some("dead:p9".into())).await, None);
         assert_eq!(dm_pane(&s, &rows, "", &None).await, Some("w1:p1".into()));
+    }
+
+    #[tokio::test]
+    async fn test_dm_pane_prefers_focus_over_sole_agent() {
+        // Bare /quit with one agent + rowless-shell focus must return the
+        // focus (caller reports the shell card), never the sole agent's
+        // confirm for the wrong pane.
+        let (s, _dir) = crate::state::cancel::isolated_state();
+        let rows = vec![AgentRow {
+            kind: "claude".into(),
+            pane: "w1:p1".into(),
+            title: "".into(),
+            status: "idle".into(),
+            ws: "w1".into(),
+        }];
+        s.set_focus("w1:p2").await;
+        assert_eq!(dm_pane(&s, &rows, "", &None).await, Some("w1:p2".into()));
+        // Explicit args still resolve, ignoring focus.
+        assert_eq!(
+            dm_pane(&s, &rows, "w1:p1", &None).await,
+            Some("w1:p1".into())
+        );
+        assert_eq!(dm_pane(&s, &rows, "nope", &None).await, None);
     }
 }

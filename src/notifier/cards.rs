@@ -121,8 +121,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     let body = join_trimmed(&final_block(&source, ""));
     // Baseline anchors on delivery; stray/empty also anchors (same-screen
     // strays must not re-RPC every settle). Drops leave the delta.
-    // Reset mid-debounce: never sync/post into the migration.
+    // Reset mid-debounce: never sync/post into the migration. The arm
+    // IS consumed (stale would abort the post-reset retry).
     if crate::handlers::reset::is_resetting() {
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
     // Pre-sync re-check (window = screen read above): a /cancel clearing
@@ -160,16 +162,13 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
-    // Pruned (human-deleted) topics retire the dialog before the settle
-    // card posts into the recreated, card-less topic.
-    if s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
-        crate::handlers::dialog::retire_dialog(&s, &pane).await;
-    }
     // Single stray chars (picker echoes, vim residue) never page; real
     // shorts ("ok", "done") do. Empty stays silent but advances the
     // baseline so the stray doesn't haunt future settles.
+    // Checked BEFORE sync_topic_prune: strays post nothing, so they must
+    // neither mint a card-less topic nor retire the blocked dialog.
     if body.chars().count() < 2 {
-        // Post-RPC re-check (window = get_agent/spaces/sync above): a
+        // Post-RPC re-check (window = get_agent/spaces above): a
         // prompt/final landing during those RPCs owns the pane now —
         // anchoring would wipe its fresh delta into the baseline (lost
         // reply). Consume the arm only, never the baseline.
@@ -187,6 +186,12 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         s.seen.lock().await.insert(pane.clone(), screen);
         return;
+    }
+    // Pruned (human-deleted) topics retire the dialog before the settle
+    // card posts into the recreated, card-less topic. After the stray
+    // gate above: strays mint/post nothing.
+    if s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
+        crate::handlers::dialog::retire_dialog(&s, &pane).await;
     }
     // Pre-post re-check (window = read + sync RPCs above): a job/final
     // that landed during get_agent/spaces/sync owns the reply now — and
@@ -273,7 +278,11 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         if super::retry_guard::moved_on_now(&s, &pane, &settled).await {
             break;
         }
-        tokio::time::sleep(Duration::from_secs(15)).await;
+        // No trailing sleep after the final attempt: the loop exits with
+        // delivered=false and the next transition owns it.
+        if i < 2 {
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        }
     }
     if delivered {
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);

@@ -89,7 +89,7 @@ pub async fn run_single_topic_reset(
     // Share the paced-reset lock: without it the watchdog renames the
     // topic mid-mint and a concurrent paced reset double-migrates it.
     let Some(_guard) = super::reset::try_begin_reset() else {
-        let msg = "⚠️ reset already in progress, try again shortly";
+        let msg = crate::ui::RESET_BUSY;
         if chat != 0 {
             s.tg.send_msg(chat, thread_id, msg, None).await;
         }

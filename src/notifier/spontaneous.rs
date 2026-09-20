@@ -49,6 +49,21 @@ pub(crate) fn arm_superseded(
         .unwrap_or(true)
 }
 
+/// DM arm currency (single source for the DM inside-post re-check):
+/// DM mode never inserts debounce arms (status.rs returns before the
+/// forum arm), so a missing arm proceeds — only a present-but-stale
+/// arm aborts. The `last_done` check below still suppresses stale
+/// duplicates when a final retired during the screen RPC. Pure for
+/// tests.
+pub(crate) fn dm_arm_blocks(
+    cur: Option<(&str, &std::time::Instant)>,
+    settled: &str,
+    armed_at: &std::time::Instant,
+) -> bool {
+    cur.map(|(st, at)| st != settled || at != armed_at)
+        .unwrap_or(false)
+}
+
 /// Answer push: the body alone (never a status-word lead), plus the reply
 /// affordance when input is needed. Blocked keeps its urgent prefix.
 /// True when a part landed: drops must neither stamp `last_done` (it
@@ -120,6 +135,17 @@ pub(crate) async fn post_spontaneous_card(
             {
                 return false;
             }
+            // Moved-on stays silent (§3, forum parity with the DM
+            // branch below + settle_check pre-post/retry guards):
+            // PC-side work starting during the sync above owns the
+            // pane — a flip to `working` after the observe must not
+            // buzz the stale settle.
+            if super::retry_guard::moved_on(
+                s.status.lock().await.get(pane).map(String::as_str),
+                settled,
+            ) {
+                return false;
+            }
             for part in &parts {
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if let Some(m) = mid {
@@ -134,12 +160,21 @@ pub(crate) async fn post_spontaneous_card(
         }
     } else {
         // DM immediate: no sync RPC, check immediately before sends.
+        // Liveness first (forum parity): a pane dying after the
+        // settle pre-check must not buzz post-cancel; ambiguous reads
+        // post nothing (next tick retries).
+        if liveness(list_panes(&s.cfg.socket).await.ok().as_ref(), pane) != Liveness::Allow {
+            return false;
+        }
+        // No debounce arm is ever inserted in DM mode, so currency is
+        // arm-optional (`dm_arm_blocks`): a missing arm proceeds, a
+        // present-but-mismatched arm still aborts.
         if s.jobs.lock().await.contains_key(pane) {
             return false;
         }
         if let Some(at) = armed_at {
             let cur = s.debounce.lock().await.get(pane).cloned();
-            if arm_superseded(cur.as_ref().map(|(st, a)| (st.as_str(), a)), settled, &at) {
+            if dm_arm_blocks(cur.as_ref().map(|(st, a)| (st.as_str(), a)), settled, &at) {
                 return false;
             }
         }
@@ -147,6 +182,16 @@ pub(crate) async fn post_spontaneous_card(
             && let Some(t) = s.last_done.lock().await.get(pane)
             && *t > at
         {
+            return false;
+        }
+        // Moved-on stays silent (§3): PC-side work starting during the
+        // screen/send RPCs owns the pane — a flip to `working` after the
+        // observe must not buzz the stale settle (forum parity: the
+        // settle_check pre-post + retry guards).
+        if super::retry_guard::moved_on(
+            s.status.lock().await.get(pane).map(String::as_str),
+            settled,
+        ) {
             return false;
         }
         let mut per_owner = vec![0usize; s.cfg.owners.len()];
@@ -230,5 +275,18 @@ mod tests {
         assert!(arm_superseded(None, "done", &at));
         assert!(arm_superseded(Some(("done", &later)), "done", &at));
         assert!(arm_superseded(Some(("idle", &at)), "done", &at));
+    }
+
+    #[test]
+    fn test_dm_arm_blocks_missing_arm_proceeds() {
+        // DM mode never inserts debounce arms: missing proceeds so
+        // spontaneous answers actually deliver; a present-but-stale
+        // arm still aborts the superseded post.
+        let at = std::time::Instant::now();
+        let later = at + std::time::Duration::from_secs(1);
+        assert!(!dm_arm_blocks(None, "done", &at));
+        assert!(!dm_arm_blocks(Some(("done", &at)), "done", &at));
+        assert!(dm_arm_blocks(Some(("done", &later)), "done", &at));
+        assert!(dm_arm_blocks(Some(("idle", &at)), "done", &at));
     }
 }

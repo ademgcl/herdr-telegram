@@ -24,6 +24,19 @@ const RETRY_BACKOFF_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
+/// Shared cancel retire: mark, clear the intent only when the map
+/// still points here (a superseding enqueue owns it otherwise), fold
+/// the live card quiet. Single source for the select arm, the backoff
+/// arm, and the reconnect race below.
+async fn cancel_watch(s: &AppState, pane: &str, job: &Arc<Job>, live: &mut super::live::LiveSlot) {
+    job.mark_stopped();
+    if super::report::cancel_owns_intent(s.jobs.lock().await.get(pane), job) {
+        s.clear_pending(pane).await;
+    }
+    let (chat, th) = *job.dest.lock().await;
+    edit_live(s, chat, th, pane, &mut live.mid, &mut live.dest, CANCELLED).await;
+}
+
 /// Watch the agent via herdr push-events: every output burst updates one live
 /// Telegram message; settle turns it into the final result card.
 pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
@@ -34,7 +47,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // this at display time (last segment only, see segment::final_block)
     let mut acc: Vec<String> = Vec::new();
     let mut ev = None;
-    let mut last_open = Instant::now() - Duration::from_secs(REOPEN_COOLDOWN_SECS);
+    // checked_sub: Instant::now() - cooldown panics when the monotonic
+    // clock is younger than the cooldown (fresh boot); fall back to now
+    // (first reconnect delayed one cooldown, never a panic).
+    let mut last_open = Instant::now()
+        .checked_sub(Duration::from_secs(REOPEN_COOLDOWN_SECS))
+        .unwrap_or_else(Instant::now);
     // Rate-limit episode already buzzed about (kind, not excerpt: retry
     // countdowns change every second and must not re-alert). Cleared
     // when the banner leaves the screen so the next episode re-alerts.
@@ -130,11 +148,22 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Reconnect the event stream lazily — never in a hot loop.
         // Bounded: a hung ack degrades to polling, never freezes pre-select.
+        // Cancel-raced: the open await sits outside the select below, so
+        // /cancel (or a supersede, via the epoch check next iteration)
+        // must not wait behind up to 10s of dial.
         if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
             last_open = Instant::now();
-            match EvStream::open_bounded(&s.cfg.socket, &pane, 10).await {
-                Ok(stream) => ev = Some(stream),
-                Err(e) => eprintln!(
+            let opened = tokio::select! {
+                _ = job.cancel.notified() => None,
+                r = EvStream::open_bounded(&s.cfg.socket, &pane, 10) => Some(r),
+            };
+            match opened {
+                None => {
+                    cancel_watch(&s, &pane, &job, &mut live).await;
+                    break;
+                }
+                Some(Ok(stream)) => ev = Some(stream),
+                Some(Err(e)) => eprintln!(
                     "[watcher] {pane} event stream open failed: {}",
                     crate::types::mask_home(&e.to_string())
                 ),
@@ -152,15 +181,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // to a poll cycle too (its own cost is one spawned `typing` RPC).
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
-                job.mark_stopped();
-                // A superseding enqueue replaced this watcher: the intent
-                // belongs to the new job — only clear when the map still
-                // points here.
-                if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
-                    s.clear_pending(&pane).await;
-                }
-                let (chat, th) = *job.dest.lock().await;
-                edit_live(&s, chat, th, &pane, &mut live.mid, &mut live.dest, CANCELLED).await;
+                cancel_watch(&s, &pane, &job, &mut live).await;
                 break;
             }
             _ = typing_tick.tick() => {
@@ -204,12 +225,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     let backoff_epoch = job.epoch.load(Ordering::Relaxed);
                     tokio::select! {
                         _ = job.cancel.notified() => {
-                            job.mark_stopped();
-                            if s.jobs.lock().await.get(&pane).map(|j| Arc::ptr_eq(j, &job)).unwrap_or(false) {
-                                s.clear_pending(&pane).await;
-                            }
-                            let (chat, th) = *job.dest.lock().await;
-                            edit_live(&s, chat, th, &pane, &mut live.mid, &mut live.dest, CANCELLED).await;
+                            cancel_watch(&s, &pane, &job, &mut live).await;
                             break;
                         }
                         _ = sleep_or_superseded(&job, backoff_epoch, Duration::from_secs(60)) => {}

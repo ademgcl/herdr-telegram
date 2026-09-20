@@ -4,6 +4,7 @@
 use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 mod disk;
+mod meta;
 #[cfg(test)]
 mod tests;
 
@@ -110,7 +111,6 @@ impl TopicStorage {
     pub fn remove(&self, pane: &str) -> Option<i64> {
         let mut s = self.lock();
         let prev = s.topics.remove(pane);
-        s.unread.remove(pane);
         let a = s.tags.remove(pane);
         let b = s.titles.remove(pane);
         let c = s.pins.remove(pane);
@@ -132,7 +132,6 @@ impl TopicStorage {
             return false;
         }
         s.topics.remove(pane);
-        s.unread.remove(pane);
         s.tags.remove(pane);
         s.titles.remove(pane);
         s.pins.remove(pane);
@@ -149,18 +148,6 @@ impl TopicStorage {
             return;
         }
         if s.tags.remove(pane).is_some() {
-            self.save(&s);
-        }
-    }
-
-    pub fn get_icon(&self, pane: &str) -> Option<String> {
-        self.lock().icons.get(pane).cloned()
-    }
-
-    pub fn set_icon(&self, pane: &str, icon: &str) {
-        let mut s = self.lock();
-        if s.icons.get(pane).map(|i| i.as_str()) != Some(icon) {
-            s.icons.insert(pane.to_string(), icon.to_string());
             self.save(&s);
         }
     }
@@ -246,24 +233,6 @@ impl TopicStorage {
         true
     }
 
-    /// F6: Record last seen message ID for a pane (bounded to 3 recent msgs).
-    pub fn record_msg(&self, pane: &str, mid: i64) {
-        let mut s = self.lock();
-        let list = s.last_msgs.entry(pane.to_string()).or_default();
-        if list.last().copied() != Some(mid) {
-            list.push(mid);
-            if list.len() > 3 {
-                list.remove(0);
-            }
-            self.save(&s);
-        }
-    }
-
-    /// F6: Get up to 3 recent message IDs for this pane.
-    pub fn get_recent_msgs(&self, pane: &str) -> Vec<i64> {
-        self.lock().last_msgs.get(pane).cloned().unwrap_or_default()
-    }
-
     pub fn all_mappings(&self) -> HashMap<String, i64> {
         self.lock().topics.clone()
     }
@@ -273,7 +242,6 @@ impl TopicStorage {
     pub fn clear_all(&self) {
         let mut s = self.lock();
         s.topics.clear();
-        s.unread.clear();
         s.tags.clear();
         s.titles.clear();
         s.pins.clear();

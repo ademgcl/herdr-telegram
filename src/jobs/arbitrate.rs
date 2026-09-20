@@ -20,13 +20,12 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
     let screen_body = join_trimmed(&final_block(screen, prompt));
     // Fatal provider errors settle fast (often before the stream sees
     // them) while `acc` still holds the prior turn. A settled error must
-    // never lose to a stale healthy stream — otherwise Telegram repeats
-    // the old answer and the error vanishes.
+    // never lose to a stale stream — otherwise Telegram repeats the old
+    // answer and the error vanishes. When both carry failures the fresh
+    // settled screen still wins (it is the current turn).
     let screen_failed = crate::jobs::notices::screen_has_provider_failure(screen)
         || crate::jobs::notices::is_provider_failure_line(&screen_body);
-    let acc_failed = crate::jobs::notices::screen_has_provider_failure(acc)
-        || crate::jobs::notices::is_provider_failure_line(&acc_body);
-    if screen_failed && !acc_failed && !screen_body.is_empty() {
+    if screen_failed && !screen_body.is_empty() {
         return screen_body;
     }
     let squash = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -187,5 +186,18 @@ mod tests {
             "error surfaced: {body:?}"
         );
         assert!(!body.contains("three services"));
+    }
+
+    #[test]
+    fn test_fresh_error_beats_stale_error() {
+        // Both turns failed: the fresh settled screen (current turn) wins
+        // over the prior turn's streamed error.
+        let old_err = "Error from provider (Console): old rate limit, retry later";
+        let new_err = "Error from provider (Console): Upstream request failed: [invalid_request_error] fresh failure";
+        let acc = v(&[&format!("  ┃  {old_err}")]);
+        let screen = v(&["  ┃", &format!("  ┃  {new_err}"), "╹▀▀▀▀"]);
+        let body = select_final_body(&acc, &screen, "do it");
+        assert!(body.contains("fresh failure"), "fresh wins: {body:?}");
+        assert!(!body.contains("old rate limit"));
     }
 }
