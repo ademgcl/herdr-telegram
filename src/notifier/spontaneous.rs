@@ -91,7 +91,7 @@ pub(crate) async fn post_spontaneous_card(
             // above owns the reply now — send nothing (window is now the
             // send RPC only, no sync between check and send). A /cancel
             // or newer arm in the same window aborts too.
-            if s.jobs.lock().await.contains_key(pane) {
+            if s.job_live(pane).await {
                 return false;
             }
             if let Some(at) = armed_at {

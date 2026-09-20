@@ -148,7 +148,14 @@ pub(crate) async fn scan_limits(s: &AppState) {
         // Reply dest from the live map (prompt-owned panes report into
         // their own chat, exactly where their watcher would). No dest
         // anywhere ⇒ nothing to claim, nothing to send.
-        let owner = { s.jobs.lock().await.get(&pane).cloned() };
+        let owner = {
+            s.jobs
+                .lock()
+                .await
+                .get(&pane)
+                .cloned()
+                .filter(|j| !j.is_stopped())
+        };
         let mut owned_dest: Option<(i64, Option<i64>)> = None;
         if let Some(j) = &owner {
             owned_dest = Some(*j.dest.lock().await);

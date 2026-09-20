@@ -3,11 +3,11 @@
 //! from `finalize`/`settle` (300-line file limit). One task per prompt;
 //! supersede/cancel retire via epoch + cancel signal, never by killing.
 use crate::jobs::episode::BuzzEpisode;
-use crate::jobs::report::{CANCELLED, RUN_ENDED, fold_live};
+use crate::jobs::report::{RUN_ENDED, fold_live};
+use crate::jobs::runner_cancel::cancel_watch;
 use crate::jobs::stall::watch_stall;
 use crate::{
     herdr::client::get_agent,
-    jobs::finalize::edit_live,
     jobs::job::Job,
     jobs::settle::{SettleStep, SettledArm, settle_step, sleep_or_superseded},
     jobs::stream::{EvStream, WatchEvent},
@@ -23,19 +23,6 @@ const SETTLED: &[&str] = &["idle", "done", "blocked", "exited", "closed", "dead"
 const RETRY_BACKOFF_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
-
-/// Shared cancel retire: mark, clear the intent only when the map
-/// still points here (a superseding enqueue owns it otherwise), fold
-/// the live card quiet. Single source for the select arm, the backoff
-/// arm, and the reconnect race below.
-async fn cancel_watch(s: &AppState, pane: &str, job: &Arc<Job>, live: &mut super::live::LiveSlot) {
-    job.mark_stopped();
-    if super::report::cancel_owns_intent(s.jobs.lock().await.get(pane), job) {
-        s.clear_pending(pane).await;
-    }
-    let (chat, th) = *job.dest.lock().await;
-    edit_live(s, chat, th, pane, &mut live.mid, &mut live.dest, CANCELLED).await;
-}
 
 /// Watch the agent via herdr push-events: every output burst updates one live
 /// Telegram message; settle turns it into the final result card.

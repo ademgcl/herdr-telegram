@@ -135,7 +135,8 @@ pub fn build_ws_text(ws: &str, spaces: &[WorkspaceInfo], agents: &[AgentRow]) ->
         text.push_str("(no live agents here)\n");
     }
     for a in agents {
-        let title: String = a.title.chars().take(36).collect();
+        // Masked like the agent card below (titles carry terminal paths).
+        let title: String = crate::types::mask_home(&a.title).chars().take(36).collect();
         text.push_str(&format!(
             "{} {} [{}]\n   {title}\n",
             emoji(&a.status),
@@ -177,7 +178,9 @@ pub fn build_identity_card_text(
     title: Option<&str>,
     branch: Option<&str>,
 ) -> String {
-    let mut card = format!("📌 **{kind}** · `{pane}`\nWorkspace: `{space}`");
+    // Plain text: no parse_mode is ever sent (build_send_msg_params
+    // sends raw text), so Markdown would render literally.
+    let mut card = format!("📌 {kind} · {pane}\nWorkspace: {space}");
     if let Some(t) = title.filter(|t| !t.trim().is_empty()) {
         card.push_str(&format!("\nTitle: {}", crate::types::mask_home(t.trim())));
     }

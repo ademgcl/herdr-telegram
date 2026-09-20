@@ -24,7 +24,7 @@ pub(crate) async fn push_dm_alert(
     observed_at: Instant,
 ) {
     // Fresh re-check + re-base (no extra RPC, just the lock).
-    if s.jobs.lock().await.contains_key(pane) {
+    if s.job_live(pane).await {
         return;
     }
     let fresh_base = s.seen.lock().await.get(pane).cloned().unwrap_or_default();
@@ -64,6 +64,7 @@ pub(crate) async fn push_dm_alert(
     // forum path anchors silently the same way.
     if let Some(t) = s.last_done.lock().await.get(pane)
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
+        && !screen.is_empty()
     {
         s.seen
             .lock()

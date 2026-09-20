@@ -5,10 +5,9 @@
 //! true completion) while the watchdog spams stall cards off prose.
 use crate::{
     herdr::client::get_agent,
-    jobs::finalize::{edit_live, finalize},
+    jobs::finalize::finalize,
     jobs::job::Job,
     jobs::repoint::repoint_dest_if_remapped,
-    jobs::report::CANCELLED,
     state::AppState,
 };
 use std::sync::Arc;
@@ -112,8 +111,13 @@ pub async fn settle_step(
     // prompt landing inside the 750ms window must not stall its handoff.
     tokio::select! {
         _ = job.cancel.notified() => {
+            // Loud /cancel only (quiet retires never notify): the card
+            // must read cancelled, not fall through to the loop-top
+            // quiet fold (RUN_ENDED). Single source with the runner's
+            // cancel arm and the backoff arm below.
             *settled_since = None;
-            return SettleStep::Continue;
+            super::runner_cancel::cancel_watch_parts(s, pane, job, live_mid, live_dest).await;
+            return SettleStep::Break;
         }
         _ = sleep_or_superseded(job, epoch_at_entry, Duration::from_millis(750)) => {}
     }
@@ -180,15 +184,10 @@ pub async fn settle_step(
         let epoch_now = job.epoch.load(Ordering::Relaxed);
         tokio::select! {
             _ = job.cancel.notified() => {
-                job.mark_stopped();
-                // Like the sibling cancel branches: a genuine
-                // cancel retires the durable intent (a supersede
-                // never notifies — it bumps the epoch instead).
-                if s.jobs.lock().await.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
-                    s.clear_pending(pane).await;
-                }
-                let (chat, th) = *job.dest.lock().await;
-                edit_live(s, chat, th, pane, live_mid, live_dest, CANCELLED).await;
+                // Like the sibling cancel branch: a genuine cancel
+                // retires the durable intent (a supersede never
+                // notifies — it bumps the epoch instead).
+                super::runner_cancel::cancel_watch_parts(s, pane, job, live_mid, live_dest).await;
                 return SettleStep::Break;
             }
             _ = sleep_or_superseded(job, epoch_now, Duration::from_secs(*retry_wait)) => {}

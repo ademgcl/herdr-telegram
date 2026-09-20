@@ -9,6 +9,18 @@ use std::{
 };
 
 impl State {
+    /// True when a LIVE watcher owns `pane`. Single source for every
+    /// notifier guard: a stopped corpse between `mark_stopped()` and map
+    /// removal must not read as an active watcher (else a one-shot
+    /// settle check aborts and its reply is lost with no retry).
+    pub async fn job_live(&self, pane: &str) -> bool {
+        self.jobs
+            .lock()
+            .await
+            .get(pane)
+            .is_some_and(|j| !j.is_stopped())
+    }
+
     /// Record a submitted prompt durably (cleared on settle/cancel).
     /// Disk write happens AFTER the guard drops (never hold `pending`
     /// across serde + blocking fs — it blocks every intent user).
@@ -106,7 +118,13 @@ impl State {
         let raw = pane_arg.split_whitespace().next().unwrap_or("").trim();
         let arg = raw.trim_start_matches('#');
         let running: Vec<String> = {
-            let mut v: Vec<String> = self.jobs.lock().await.keys().cloned().collect();
+            let jobs = self.jobs.lock().await;
+            let mut v: Vec<String> = jobs
+                .iter()
+                .filter(|(_, j)| !j.is_stopped())
+                .map(|(p, _)| p.clone())
+                .collect();
+            drop(jobs);
             for p in self.pending.lock().await.keys() {
                 if !v.contains(p) {
                     v.push(p.clone());

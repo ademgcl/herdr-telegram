@@ -59,7 +59,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
             return;
         }
     }
-    if s.jobs.lock().await.contains_key(&pane) {
+    if s.job_live(&pane).await {
         return;
     }
     // Settle holds across idle↔done sampling: a fast done→idle collapses,
@@ -95,7 +95,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .collect();
     // Post-read re-check: a prompt/final that landed during the read
     // owns the pane now — never double-post with the watcher.
-    if s.jobs.lock().await.contains_key(&pane) {
+    if s.job_live(&pane).await {
         return;
     }
     if s.last_done
@@ -169,7 +169,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         // prompt/final landing during those RPCs owns the pane now —
         // anchoring would wipe its fresh delta into the baseline (lost
         // reply). Consume the arm only, never the baseline.
-        let raced = s.jobs.lock().await.contains_key(&pane)
+        let raced = s.job_live(&pane).await
             || s.last_done
                 .lock()
                 .await
@@ -195,7 +195,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // PC-side work starting mid-read owns the pane (moved-on stays
     // silent): same idle↔done collapse as the arm check. A /cancel or a
     // newer arm in the same window aborts too (exact-arm match).
-    if s.jobs.lock().await.contains_key(&pane) {
+    if s.job_live(&pane).await {
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
@@ -248,7 +248,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
             delivered = true;
             break;
         }
-        if s.jobs.lock().await.contains_key(&pane) {
+        if s.job_live(&pane).await {
             break;
         }
         if s.last_done

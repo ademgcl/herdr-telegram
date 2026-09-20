@@ -17,6 +17,7 @@ pub mod recover;
 pub mod repoint;
 pub mod report;
 pub mod runner;
+pub mod runner_cancel;
 pub mod segment;
 pub mod settle;
 pub mod stall;

@@ -59,12 +59,7 @@ async fn part_currency(
     // Live-only (reconcile/typing parity): a stopped corpse between
     // mark_stopped() and map removal must not read as an active watcher
     // (else a stale tail posts beside the new prompt's turn).
-    let jobs_active = s
-        .jobs
-        .lock()
-        .await
-        .get(pane)
-        .is_some_and(|j| !j.is_stopped());
+    let jobs_active = s.job_live(pane).await;
     match armed_at {
         Some(at) => {
             let cur = s.debounce.lock().await.get(pane).cloned();

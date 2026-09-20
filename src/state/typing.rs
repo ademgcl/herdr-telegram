@@ -50,13 +50,7 @@ impl State {
     pub async fn stop_shell_typing(self: &Arc<Self>, pane: &str) {
         // Live-only: a stopped corpse between mark_stopped() and map
         // removal must not keep the typing task alive past retire.
-        if self
-            .jobs
-            .lock()
-            .await
-            .get(pane)
-            .is_some_and(|j| !j.is_stopped())
-        {
+        if self.job_live(pane).await {
             return;
         }
         if self.pending.lock().await.contains_key(pane) {
@@ -68,14 +62,7 @@ impl State {
         } else {
             false
         };
-        if aborted
-            && (self
-                .jobs
-                .lock()
-                .await
-                .get(pane)
-                .is_some_and(|j| !j.is_stopped())
-                || self.pending.lock().await.contains_key(pane))
+        if aborted && (self.job_live(pane).await || self.pending.lock().await.contains_key(pane))
         {
             self.start_typing(pane).await;
         }
@@ -88,13 +75,7 @@ impl State {
     /// abort so the kill is only a blip. Producers must insert into `jobs`
     /// BEFORE spawn → `start_typing` or a mint-after-check still races.
     pub async fn stop_typing_unless_owned(self: &Arc<Self>, pane: &str) {
-        if self
-            .jobs
-            .lock()
-            .await
-            .get(pane)
-            .is_some_and(|j| !j.is_stopped())
-        {
+        if self.job_live(pane).await {
             return;
         }
         let aborted = if let Some(handle) = self.typing_tasks.lock().await.remove(pane) {
@@ -105,13 +86,7 @@ impl State {
         };
         // Successor won the race after our check: re-mint so the abort
         // above is a blip, not a dark pane.
-        if aborted
-            && self
-                .jobs
-                .lock()
-                .await
-                .get(pane)
-                .is_some_and(|j| !j.is_stopped())
+        if aborted && self.job_live(pane).await
         {
             self.start_typing(pane).await;
         }

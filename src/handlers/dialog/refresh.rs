@@ -74,7 +74,7 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
     // so a lag-`blocked` heal must not ghost-post working prose with
     // live buttons beside the coming final. Mirrors observe_status's
     // job_owned early return and settle_check's jobs guards.
-    if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
+    if s.job_live(pane).await {
         return false;
     }
     // Fail fast before slow RPCs: a missing mapping (human-deleted, mint
@@ -103,7 +103,7 @@ pub async fn refresh_blocked_card(s: &AppState, pane: &str) -> bool {
         super::surfaces::resolve_cards(s, pane).await;
         return false;
     }
-    if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
+    if s.job_live(pane).await {
         return false;
     }
     let sig = dialog_sig(&screen);

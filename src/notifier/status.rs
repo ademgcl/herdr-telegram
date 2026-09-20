@@ -145,7 +145,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // it): a job appearing mid-observe races the watcher's finalize
     // into a double-card, mitigated by settle_check's re-check +
     // last_done (documented TOCTOU, not closed).
-    let job_owned = s.jobs.lock().await.contains_key(pane);
+    let job_owned = s.job_live(pane).await;
 
     if silent {
         // Boot seed only — but an already-blocked pane genuinely needs

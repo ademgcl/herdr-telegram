@@ -180,12 +180,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // mark_stopped() and map removal must not
                             // read as an active watcher (else Ignore
                             // misroutes to CancelJob/RetireVanished).
-                            let has_job = s
-                                .jobs
-                                .lock()
-                                .await
-                                .get(&pane)
-                                .is_some_and(|j| !j.is_stopped());
+                            let has_job = s.job_live(&pane).await;
                             match classify_shell_reuse(was_shell, owed.is_some(), has_job) {
                                 ShellReuse::Ignore => {
                                     s.status

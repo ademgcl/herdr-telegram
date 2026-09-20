@@ -206,15 +206,15 @@ fn test_build_identity_card_text() {
         Some("auth-service"),
         Some("feature/login"),
     );
-    assert!(full.contains("📌 **claude** · `w1:p2`"));
-    assert!(full.contains("Workspace: `shop`"));
+    assert!(full.contains("📌 claude · w1:p2"));
+    assert!(full.contains("Workspace: shop"));
     assert!(full.contains("Title: auth-service"));
     assert!(full.contains("Branch: 🌿 feature/login"));
     assert!(full.contains("Status: 🔄 working"));
 
     let minimal = build_identity_card_text("shell", "w1:p3", "infra", "idle", None, None);
-    assert!(minimal.contains("📌 **shell** · `w1:p3`"));
-    assert!(minimal.contains("Workspace: `infra`"));
+    assert!(minimal.contains("📌 shell · w1:p3"));
+    assert!(minimal.contains("Workspace: infra"));
     assert!(!minimal.contains("Title:"));
     assert!(!minimal.contains("Branch:"));
     assert!(minimal.contains("Status: 🟢 ready"));
