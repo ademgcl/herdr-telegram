@@ -20,16 +20,6 @@ impl TopicManager {
             .unwrap_or_else(|e| e.into_inner())
             .insert(pane.to_string(), kind.to_string());
     }
-    /// True iff a kind was seen before AND differs (missing = false, no boot churn).
-    pub fn kind_changed(&self, pane: &str, kind: &str) -> bool {
-        let last = self
-            .last_kind
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(pane)
-            .cloned();
-        crate::handlers::title_rules::kind_bypass(last.as_deref(), kind)
-    }
 
     /// Live-only retain for the kind memory (reap parity with the
     /// per-pane maps in hygiene): mapping-less dead panes (shells,

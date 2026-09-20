@@ -35,6 +35,13 @@ impl State {
             self.clear_waiters(pane).await;
             self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
+            // In-flight DM spontaneous owns no arm to disarm (missing arm
+            // proceeds by design) — stamp done so its inside-post check
+            // aborts via done-after instead of posting past the /cancel.
+            self.last_done
+                .lock()
+                .await
+                .insert(pane.to_string(), std::time::Instant::now());
             return had_pending;
         };
         let removed = Self::remove_if_same(&self.jobs, pane, &job).await;
@@ -48,6 +55,12 @@ impl State {
         self.clear_limit_episode(pane).await;
         // Disarm a pending settle debounce (armed card must not land after).
         self.debounce.lock().await.remove(pane);
+        // Same DM done-stamp as the no-job branch above: the in-flight
+        // screen read already passed the job-live check.
+        self.last_done
+            .lock()
+            .await
+            .insert(pane.to_string(), std::time::Instant::now());
         // After removal the pane is unowned, so this actually stops the
         // task now (the pre-removal stop above is a no-op while the job
         // is present — without this the indicator lingers on the
@@ -171,6 +184,16 @@ impl State {
         // Fresh episodes everywhere after a global cancel (see
         // cancel_jobs_for for the per-pane reason).
         self.clear_all_limit_episodes().await;
+        // DM done-stamps (cancel_jobs_for parity): in-flight DM
+        // spontaneous owns no arm — without this it posts past the
+        // global cancel via its done-after check.
+        {
+            let now = std::time::Instant::now();
+            let mut done = self.last_done.lock().await;
+            for pane in job_panes.union(&pending_panes) {
+                done.insert(pane.clone(), now);
+            }
+        }
         let count = jobs.len();
         for job in jobs.values() {
             job.mark_stopped();

@@ -44,6 +44,22 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
         s.cancel_job_only_for(pane).await;
         return;
     }
+    // Re-check after the status-claim await above: a submit landing
+    // between the first verdict and now owns the pane — quiet would wipe
+    // its fresh intent with no restore (tail re-check only covers
+    // post-quiet racers). Same job-only retire as a turned-over intent.
+    if let Some(pp) = &owed
+        && !s
+            .pending_matches(pane, pp.chat, pp.thread, &pp.prompt)
+            .await
+    {
+        s.cancel_job_only_for(pane).await;
+        return;
+    }
+    if owed.is_none() && s.pending.lock().await.contains_key(pane) {
+        s.cancel_job_only_for(pane).await;
+        return;
+    }
     s.cancel_jobs_for_quiet(pane).await;
     let Some(pp) = owed else {
         s.status
@@ -87,7 +103,27 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
     // Intent was already cancelled above: keep it so boot-recover
     // retries the notice instead of losing it. CAS restore so the next
     // tick retries instead of going quiet.
-    {
+    // Guarded like the dead-close restore: a submit racing the RPCs
+    // wins (atomic check-and-set: a check-then-remember across awaits
+    // would overwrite it). Original timestamp, never now: a fresh stamp
+    // per failed tick would defeat the 24h stale bound and retry forever.
+    let restored = s
+        .remember_pending_cas_with_time(
+            pane,
+            (pp.chat, pp.thread, &pp.prompt),
+            (pp.chat, pp.thread, &pp.prompt),
+            Some(pp.started_unix),
+        )
+        .await;
+    // Poison guard: a submit racing the report RPCs owns the pane now —
+    // restoring the agent status would re-arm RetireVanished on the next
+    // tick, which eats the fresh shell intent via cancel_jobs_for_quiet
+    // and misattributes a stale quit card to the new command. Restore
+    // the flip marker only when our owed intent still owns the slot (or
+    // it is vacant — the CAS above just re-armed it); a raced submit
+    // keeps "shell" so the next tick ignores/preserves its live work
+    // (tail-race precedent above: new work wins, old notice drops).
+    if restored {
         let mut st = s.status.lock().await;
         if st.get(pane).map(|v| v == "shell").unwrap_or(false) {
             match prev_status {
@@ -100,15 +136,4 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
             }
         }
     }
-    // Guarded like the dead-close restore: a submit racing the RPCs
-    // wins (atomic check-and-set: a check-then-remember across awaits
-    // would overwrite it). Original timestamp, never now: a fresh stamp
-    // per failed tick would defeat the 24h stale bound and retry forever.
-    s.remember_pending_cas_with_time(
-        pane,
-        (pp.chat, pp.thread, &pp.prompt),
-        (pp.chat, pp.thread, &pp.prompt),
-        Some(pp.started_unix),
-    )
-    .await;
 }

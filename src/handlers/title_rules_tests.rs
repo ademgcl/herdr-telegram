@@ -186,14 +186,6 @@ fn test_naming_core_none_on_tag_fallback() {
 }
 
 #[test]
-fn test_kind_bypass_flips_only() {
-    assert!(!kind_bypass(None, "shell"));
-    assert!(!kind_bypass(Some("shell"), "shell"));
-    assert!(kind_bypass(Some("opencode"), "shell"));
-    assert!(kind_bypass(Some("shell"), "opencode"));
-}
-
-#[test]
 fn test_space_rename_core_sheds_both_spaces() {
     // Plain remainder passes through.
     assert_eq!(

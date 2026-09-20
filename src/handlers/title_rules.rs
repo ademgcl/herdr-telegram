@@ -86,12 +86,6 @@ pub fn stored_covers_label(stored: Option<&str>, space: &str, kind: &str, label:
         .unwrap_or(false)
 }
 
-/// Kind-flip bypass: seen kind differing from current forces reformat
-/// (verbatim keeps must not hide an agent→shell icon change).
-pub fn kind_bypass(last: Option<&str>, cur: &str) -> bool {
-    matches!(last, Some(l) if l != cur)
-}
-
 /// Pane core after a `[new-space]` rename: `None` when the remainder is
 /// blank (space-only rename — keep the herdr core). Otherwise the
 /// remainder shed of chrome against BOTH spaces (old suffixes like `·

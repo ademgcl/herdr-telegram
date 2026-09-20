@@ -46,7 +46,12 @@ impl Job {
     }
 
     /// First successful sight of the pane anchors the delta stream.
+    /// Never anchors an empty screen: an outage/blank read would wipe a
+    /// good baseline and repost scrollback as fresh on the next tick.
     pub async fn anchor_baseline(&self, screen: Vec<String>) {
+        if screen.is_empty() {
+            return;
+        }
         *self.baseline.lock().await = screen;
         self.baseline_ok.store(true, Ordering::Relaxed);
     }

@@ -22,9 +22,10 @@ pub(crate) async fn handle_general_forum_message(
     }
 
     if cmd == "/cancel" {
-        s.keywait.lock().await.remove(&(chat, thread_id));
-        s.runwait.lock().await.remove(&(chat, thread_id));
-        s.typewait.lock().await.remove(&(chat, thread_id));
+        let k = super::forum::waiter_key(chat, thread_id);
+        s.keywait.lock().await.remove(&k);
+        s.runwait.lock().await.remove(&k);
+        s.typewait.lock().await.remove(&k);
         // Scoped (never a silent global nuke): `all`, a pane id, or focus.
         let msg = s.cancel_scoped(arg).await;
         s.tg.send_msg(chat, thread_id, &msg, None).await;
@@ -48,15 +49,24 @@ pub(crate) async fn handle_general_forum_message(
     // A race lost to a resume falls through to normal routing below.
     // Peek first (mirrors topics): failures keep the waiter for retry.
     // Self-healing: a stale corpse evicts instead of bricking answers.
-    if let Some((wpane, armed_at)) = s.typewait.lock().await.get(&(chat, thread_id)).cloned() {
+    // (General None and Some(1) are one conversation — every key below
+    // goes through `waiter_key` so arms from panel taps meet consumes.)
+    let wk = super::forum::waiter_key(chat, thread_id);
+    if let Some((wpane, armed_at)) = s.typewait.lock().await.get(&wk).cloned() {
         // Corpse bound at consume (mirrors topics): stale degrades to
         // normal routing instead of answering a dead question.
+        // Instant-guarded: a re-arm between peek and lock survives.
         if crate::state::guard::claim_stale(
             armed_at,
             std::time::Instant::now(),
             crate::state::guard::TYPEWAIT_STALE_SECS,
         ) {
-            s.typewait.lock().await.remove(&(chat, thread_id));
+            let mut tw = s.typewait.lock().await;
+            if tw.get(&wk).map(|(_, t)| *t == armed_at).unwrap_or(false) {
+                tw.remove(&wk);
+            }
+            // Fell through to normal routing below (stale arm gone or
+            // superseded — never answer a dead question).
         } else {
             if s.block_held(&wpane).await {
                 s.tg.send_msg(chat, thread_id, crate::ui::ANSWER_IN_FLIGHT, None)
@@ -78,7 +88,11 @@ pub(crate) async fn handle_general_forum_message(
             if !degraded {
                 match super::tap::type_text(&s, &wpane, text).await {
                     Ok(()) => {
-                        s.typewait.lock().await.remove(&(chat, thread_id));
+                        let mut tw = s.typewait.lock().await;
+                        if tw.get(&wk).map(|(_, t)| *t == armed_at).unwrap_or(false) {
+                            tw.remove(&wk);
+                        }
+                        drop(tw);
                         s.tg.send_silent(chat, thread_id, &crate::ui::typed_ack(&wpane))
                             .await;
                         // Resumed work owns no job — follow it to the final reply.
@@ -86,7 +100,12 @@ pub(crate) async fn handle_general_forum_message(
                         return;
                     }
                     Err(super::tap::TypeError::Resumed) => {
-                        s.typewait.lock().await.remove(&(chat, thread_id));
+                        {
+                            let mut tw = s.typewait.lock().await;
+                            if tw.get(&wk).map(|(_, t)| *t == armed_at).unwrap_or(false) {
+                                tw.remove(&wk);
+                            }
+                        }
                         // Raced resume (DM/forum parity): the answer
                         // becomes a prompt on the waited pane, never
                         // General control (a literal "/reset" as an answer
@@ -108,7 +127,8 @@ pub(crate) async fn handle_general_forum_message(
                                 s.typewait
                                     .lock()
                                     .await
-                                    .insert((chat, thread_id), (wpane.clone(), armed_at));
+                                    .entry(wk)
+                                    .or_insert((wpane.clone(), armed_at));
                                 s.tg.send_msg(chat, thread_id, crate::ui::HERDR_UNREACHABLE, None)
                                     .await;
                             }

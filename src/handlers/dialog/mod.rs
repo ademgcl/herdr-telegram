@@ -217,3 +217,14 @@ pub async fn retire_dialog(s: &AppState, pane: &str) {
     s.blocked_sig.lock().await.remove(pane);
     s.blocked_card.lock().await.remove(pane);
 }
+
+/// Contention-silent card strip (single source for dead-pane paths):
+/// a tap holding blockop owns the card — only drop the sig, never
+/// strip under it. clear_pane drops tracking without stripping.
+pub async fn resolve_cards_unless_held(s: &AppState, pane: &str) {
+    if s.block_held(pane).await {
+        s.blocked_sig.lock().await.remove(pane);
+    } else {
+        surfaces::resolve_cards(s, pane).await;
+    }
+}

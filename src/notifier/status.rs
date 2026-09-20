@@ -26,17 +26,26 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // Atomic status+last_change (lock order status→last_change, never
     // inverted anywhere — same pattern as torder→targets): concurrent
     // observes can't pair old from tick A with prev_change from tick B.
-    let (old, prev_change) = {
+    // Time-bounded flap dedup (never forever-mute): the collapse verdict
+    // runs BEFORE stamping, and a collapsed bounce leaves last_change
+    // untouched — a perpetual fast flap goes quiet for at most one
+    // FLAP window, then the next bounce lets through.
+    let (old, collapsed) = {
         let mut st = s.status.lock().await;
         let mut lc = s.last_change.lock().await;
-        let old = st.insert(pane.to_string(), new_status.to_string());
-        let prev = lc.insert(pane.to_string(), std::time::Instant::now());
-        (old, prev)
+        let old = st.get(pane).cloned();
+        let prev = lc.get(pane).copied();
+        let collapsed = collapse_flap(old.as_deref(), new_status, prev);
+        st.insert(pane.to_string(), new_status.to_string());
+        if !collapsed && old.as_deref() != Some(new_status) {
+            lc.insert(pane.to_string(), std::time::Instant::now());
+        }
+        (old, collapsed)
     };
 
     // Collapse rapid done <-> idle flap up front — before any fetch,
     // so oscillation never costs RPCs (see flap::collapse_flap).
-    if collapse_flap(old.as_deref(), new_status, prev_change) {
+    if collapsed {
         println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
         return;
     }
@@ -70,6 +79,11 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
+    // Degraded `list_workspaces` guard (titles watchdog parity): an
+    // unmapped id would render as the raw id (`[w8] …`) — skip the
+    // prune+pin, never mint a stub on outage. Empty spaces with a real
+    // ws is a failed read, not a real empty.
+    let spaces_ok = spaces.iter().any(|w| w.id == ws_id);
 
     // The pane's topic exists (ensured silently — never notifies).
     // Skipped during reset: event-driven ensure must not instantly reopen
@@ -80,7 +94,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // `kind != "?"` covers the Ok-with-missing-field shape as well
     // (`herdr/agents` defaults absent fields to "?" — same guard as
     // `sync_inner`'s no-mint rule).
-    if info.is_some() && kind != "?" && !crate::handlers::reset::is_resetting() {
+    if info.is_some() && kind != "?" && spaces_ok && !crate::handlers::reset::is_resetting() {
         // Pruned (human-deleted) topics retire the dialog: the mapping
         // is gone and the next ensure recreates card-less.
         if s.topics.sync_topic_prune(pane, &kind, raw_space).await.1 {

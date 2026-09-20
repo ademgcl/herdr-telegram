@@ -15,6 +15,7 @@ use crate::{
     state::AppState,
 };
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 /// Scan the raw screen for a stall banner and buzz once per episode.
@@ -35,6 +36,7 @@ pub(crate) async fn watch_stall(
     if crate::handlers::reset::is_resetting() {
         return Vec::new();
     }
+    let epoch_before = job.epoch.load(Ordering::Relaxed);
     let screen = read_screen_for_limits(&s.cfg.socket, pane).await;
     if screen.is_empty() {
         episode.note_empty();
@@ -93,15 +95,28 @@ pub(crate) async fn watch_stall(
         return screen;
     }
     let (chat, th) = *job.dest.lock().await;
+    // Epoch re-check (finalize parity): a submit landing during the
+    // screen read above owns the pane — buzzing the old screen into the
+    // new prompt's thread is stale. Release the claim, unfire, stay silent.
+    if job.epoch.load(Ordering::Relaxed) != epoch_before {
+        release_claim(s, pane, hit.kind, now).await;
+        episode.unfire();
+        return screen;
+    }
     // Remap-safe: a paced reset migrates the topic mid-run — buzzing
     // the corpse thread fails or lands in the deleted topic. Forum
     // dests follow the live mapping (the watchdog path already does);
-    // DM dests never gain a thread. Unmapped falls back to the old
-    // thread (the send-cooldown path below absorbs the failure).
+    // DM dests never gain a thread. Unmapped forum dests retire: there
+    // is nowhere to post, and falling back to the old thread retries
+    // forever against a deleted topic (finalize_blocked mappable parity).
     let th = if s.cfg.forum == Some(chat) {
         match s.topics.storage.get_thread(pane) {
             Some(cur) => Some(cur),
-            None => th,
+            None => {
+                release_claim(s, pane, hit.kind, now).await;
+                episode.unfire();
+                return screen;
+            }
         }
     } else {
         th
@@ -111,6 +126,16 @@ pub(crate) async fn watch_stall(
         s.tg.send_msg_with_effect(chat, th, &text, None, Some(crate::telegram::EFFECT_FIRE))
             .await;
     if let Some(m) = mid {
+        // Post-send epoch guard (finalize parity): a submit landing
+        // during the send owns the pane — the card buzzed the old
+        // screen into the new prompt's thread. Delete best-effort,
+        // never remember, release our claim.
+        if job.epoch.load(Ordering::Relaxed) != epoch_before {
+            s.tg.delete_msg(chat, m).await;
+            release_claim(s, pane, hit.kind, now).await;
+            episode.unfire();
+            return screen;
+        }
         let _ = s.tg.set_reaction(chat, m, Some("❗")).await;
         s.limit_send_cool.lock().await.remove(pane);
         s.remember(chat, mid, pane).await;

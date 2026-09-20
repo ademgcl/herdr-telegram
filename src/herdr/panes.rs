@@ -220,7 +220,9 @@ pub async fn first_shell_pane(socket: &str, ws: &str) -> Option<String> {
     if is_shell_pane(socket, &pane).await {
         Some(pane)
     } else {
-        eprintln!("[herdr] root pane {pane} hosts an agent, skipping reuse");
+        // Not confirmed-shell: either a live agent owns it or the read
+        // was transient (is_shell_pane fails closed) — never hijack.
+        eprintln!("[herdr] root pane {pane} not a confirmed shell, skipping reuse");
         None
     }
 }

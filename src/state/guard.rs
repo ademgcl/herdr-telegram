@@ -52,6 +52,12 @@ pub(crate) const TYPEWAIT_STALE_SECS: u64 = 3600;
 /// bound style as tap guards.
 pub(crate) const SPAWNOP_STALE_SECS: u64 = 300;
 
+/// Settle-debounce arm lifetime: covers the 15s debounce + 2×15s send
+/// retries with wide margin. Arms older than this own no live task (or a
+/// wedged one) — hygiene age-prunes them so live panes never accumulate
+/// stale arms in RAM.
+pub(crate) const DEBOUNCE_STALE_SECS: u64 = 300;
+
 /// Persistent spawn dedup: the pump handles updates sequentially, so two
 /// queued taps on the same card run one-after-the-other (a transient
 /// guard drops between them and the second would double-mint a billable

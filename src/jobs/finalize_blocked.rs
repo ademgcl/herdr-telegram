@@ -142,6 +142,11 @@ pub async fn try_finalize_blocked(
     // Silent icon sync (later observations dedupe via blocked_sig).
     observe_status(s, pane, settled, true, "job").await;
     if posted {
+        // The pre-post retire above keeps the slot on transient failure —
+        // but the watcher retires below, so no next turn adopts it: fold
+        // once more now that the question landed (take-on-landed/gone;
+        // a transient still keeps it, documented like every live path).
+        fold_live(s, live_dest, live_mid, crate::ui::BLOCKED_SEE_CARD).await;
         // A submit landing during the card post owns the pane now:
         // stamp nothing, or the new prompt's fresh output anchors
         // away into the old prompt's baseline.

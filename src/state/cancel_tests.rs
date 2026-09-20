@@ -82,6 +82,30 @@ async fn test_quiet_clears_limit_episode_loud_parity() {
 }
 
 #[tokio::test]
+async fn test_cancel_stamps_done_to_abort_dm_spontaneous() {
+    // Loud cancel stamps last_done: an in-flight DM spontaneous (no arm
+    // to disarm, job already gone) aborts via done-after instead of
+    // posting past the /cancel. Quiet retires stamp nothing (liveness
+    // covers dead panes; shell flips keep moved-on semantics).
+    let (s, _dir) = isolated_state();
+    let job = Job::new(vec![], 1, None);
+    s.jobs.lock().await.insert("t:p1".into(), job.clone());
+    let before = std::time::Instant::now();
+    assert!(s.cancel_jobs_for("t:p1").await);
+    let stamped = s.last_done.lock().await.get("t:p1").copied();
+    assert!(stamped.map(|t| t >= before).unwrap_or(false));
+    // No-job branch stamps too (shell/shell-intent cancel).
+    s.pending.lock().await.insert("t:p9".into(), prompt(1));
+    assert!(s.cancel_jobs_for("t:p9").await);
+    assert!(s.last_done.lock().await.contains_key("t:p9"));
+    // Global cancel stamps every owned pane.
+    let j2 = Job::new(vec![], 1, None);
+    s.jobs.lock().await.insert("t:p2".into(), j2.clone());
+    s.cancel_all_jobs().await;
+    assert!(s.last_done.lock().await.contains_key("t:p2"));
+}
+
+#[tokio::test]
 async fn test_job_only_preserves_pending_intent() {
     // Already-shell branch: stale watcher dies, live shell intent stays.
     let (s, _dir) = isolated_state();

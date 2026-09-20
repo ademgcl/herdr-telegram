@@ -26,4 +26,9 @@ fn test_looks_like_bot_exact() {
     assert!(!looks_like_bot("pgrep -f target/release/herdr-telegram"));
     assert!(!looks_like_bot("/usr/bin/some-daemon"));
     assert!(!looks_like_bot(""));
+    // Install paths with spaces still match the bare daemon…
+    assert!(looks_like_bot("/Users/a b/tools/herdr-telegram"));
+    // …but never a pgrep line or a subcommand.
+    assert!(!looks_like_bot("pgrep -f /Users/a b/herdr-telegram"));
+    assert!(!looks_like_bot("/Users/a b/herdr-telegram ctl"));
 }

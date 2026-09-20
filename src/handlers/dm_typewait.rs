@@ -18,7 +18,16 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
         std::time::Instant::now(),
         crate::state::guard::TYPEWAIT_STALE_SECS,
     ) {
-        s.typewait.lock().await.remove(&(chat, None));
+        // Instant-guarded evict: a re-arm landing between the peek and
+        // this lock must survive — only the same generation evicts.
+        let mut tw = s.typewait.lock().await;
+        if tw
+            .get(&(chat, None))
+            .map(|(_, t)| *t == armed_at)
+            .unwrap_or(false)
+        {
+            tw.remove(&(chat, None));
+        }
         return false;
     }
     // Shell-flip parity (shell_topic): a waiter stranded across an
@@ -68,7 +77,17 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     }
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
-            s.typewait.lock().await.remove(&(chat, None));
+            // Same-generation consume: a re-arm during the slow send
+            // owns the next message — never delete it.
+            let mut tw = s.typewait.lock().await;
+            if tw
+                .get(&(chat, None))
+                .map(|(_, t)| *t == armed_at)
+                .unwrap_or(false)
+            {
+                tw.remove(&(chat, None));
+            }
+            drop(tw);
             s.tg.send_silent(chat, None, &crate::ui::typed_ack(&wpane))
                 .await;
             // Resumed work owns no job — follow it to the final reply.
@@ -83,7 +102,15 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
         Err(super::tap::TypeError::Resumed) => {
             match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
                 Ok(a) => {
-                    s.typewait.lock().await.remove(&(chat, None));
+                    let mut tw = s.typewait.lock().await;
+                    if tw
+                        .get(&(chat, None))
+                        .map(|(_, t)| *t == armed_at)
+                        .unwrap_or(false)
+                    {
+                        tw.remove(&(chat, None));
+                    }
+                    drop(tw);
                     enqueue_prompt(
                         crate::state::AppState::clone(s),
                         chat,
@@ -98,11 +125,11 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
                     // waiter with its ORIGINAL instant (never consume
                     // on ambiguous read, never re-stamp now — a fresh
                     // stamp would immortalize the waiter across a
-                    // prolonged outage) so the retry re-routes.
-                    s.typewait
-                        .lock()
-                        .await
-                        .insert((chat, None), (wpane, armed_at));
+                    // prolonged outage) so the retry re-routes. Never
+                    // overwrite a fresher re-arm that landed mid-send.
+                    let mut tw = s.typewait.lock().await;
+                    tw.entry((chat, None)).or_insert((wpane, armed_at));
+                    drop(tw);
                     s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                 }

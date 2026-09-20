@@ -26,7 +26,7 @@ pub fn is_effect_rejection(msg: &str) -> bool {
 /// the card plausibly alive: callers must keep the slot and retry the
 /// edit, never send fresh. Single source for the fatal match below.
 pub fn edit_gone(msg: &str) -> bool {
-    super::errors::topic_missing(msg)
+    super::errors::topic_gone(msg)
         || msg.contains("message to edit not found")
         || msg.contains("message can't be edited")
         || msg.contains(super::errors::NO_RIGHTS)
@@ -134,19 +134,22 @@ impl TelegramClient {
                     // Effect-shaped only: a bare "not allowed" also matches
                     // unrelated fatals (rights/kicked) that must fail fast
                     // below instead of burning a second send that fails too.
-                    if params.get("message_effect_id").is_some() && is_effect_rejection(&msg) {
-                        let Some(obj) = params.as_object_mut() else {
-                            break;
-                        };
-                        obj.remove("message_effect_id");
-                        continue;
-                    }
+                    // Flood-wait always wins: a 429 whose text mentions
+                    // "effect" must still sleep before the strip retry, or
+                    // the immediate re-fire extends the flood.
                     if let Some(wait) = Self::retry_after(&msg) {
                         waits += 1;
                         if waits > 3 {
                             break;
                         }
                         tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    if params.get("message_effect_id").is_some() && is_effect_rejection(&msg) {
+                        let Some(obj) = params.as_object_mut() else {
+                            break;
+                        };
+                        obj.remove("message_effect_id");
                         continue;
                     }
                     sends += 1;

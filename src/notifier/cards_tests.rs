@@ -1,6 +1,6 @@
 //! Tests for [`super::cards`] reset-arm consume (split: 300-line limit).
 use super::*;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 fn arm(now: Instant, secs: u64) -> (String, Instant) {
     ("done".to_string(), now + Duration::from_secs(secs))

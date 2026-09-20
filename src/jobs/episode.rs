@@ -21,11 +21,14 @@ use super::notices::{LimitHit, needs_stuck_gate};
 use std::time::{Duration, Instant};
 
 /// Ticks with a gated (`error`/`provider`/`rate-limit`/WEAK-`auth`)
-/// banner and no settle before buzzing once.
-const STUCK_SECS: u64 = 90;
+/// banner and no settle before buzzing once. Single source for the
+/// watchdog scanner too (`notifier::limits` shares these — watcher and
+/// watchdog handoffs must never drift apart).
+pub(crate) const STUCK_SECS: u64 = 90;
 /// Consecutive clean (non-empty, banner-free) reads before the episode
-/// clears so the next banner re-alerts.
-const CLEAR_MISSES: u32 = 3;
+/// clears so the next banner re-alerts. Shared with `notifier::limits`
+/// (see above).
+pub(crate) const CLEAR_MISSES: u32 = 3;
 /// Consecutive ticks holding a different kind before it counts as a new
 /// episode (scroll-order flips stay silent).
 const KIND_SWITCH_STABLE: u32 = 3;

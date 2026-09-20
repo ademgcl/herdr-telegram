@@ -20,6 +20,16 @@ pub(crate) fn is_orphan_thread(thread_id: Option<i64>, pane_found: bool) -> bool
     }
 }
 
+/// Waiter key (pure, tested): General arrives as `None` on user
+/// messages but `Some(1)` on callback message objects — both are the
+/// same conversation, so arms keyed `Some(1)` could never meet consumes
+/// keyed `None` (answer fell through, /cancel reported cancel while the
+/// waiter survived). Single source for every `(chat, thread)` waiter
+/// key so the shape can never drift again.
+pub(crate) fn waiter_key(chat: i64, thread: Option<i64>) -> (i64, Option<i64>) {
+    (chat, thread.filter(|t| *t != 1))
+}
+
 pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     let from = msg["from"]["id"].as_i64().unwrap_or(0);
     if !s.cfg.owners.contains(&from) {
@@ -42,18 +52,18 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     // owns the next message (DM parity) — a literal "/space …" answer
     // must answer, never mint a billable workspace mid-dialog. Armed
     // threads (mapped or General) skip the mint and fall through to the
-    // topic/General dispatch below, which consumes waiters first. (Waiters
-    // are keyed (chat, thread) with thread always Some in forums, so a
-    // thread-less update can never be armed — no None hole.)
+    // topic/General dispatch below, which consumes waiters first. (Keys
+    // go through `waiter_key`: General None and Some(1) meet.)
     let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),
     };
     if bare_cmd(raw_cmd) == "/space" {
-        // Fail-closed: check (chat, thread_id) unconditionally — a
-        // thread-less General update can still own a (chat, None) waiter
-        // (panel taps carry no thread id), and minting is billable.
-        let k = (chat, thread_id);
+        // Fail-closed: check the normalized waiter key unconditionally —
+        // a thread-less General update can still own a waiter armed from
+        // a callback whose message carried thread 1 (panel taps carry no
+        // thread id), and minting is billable.
+        let k = waiter_key(chat, thread_id);
         let armed_here = s.typewait.lock().await.contains_key(&k)
             || s.keywait.lock().await.contains_key(&k)
             || s.runwait.lock().await.contains_key(&k);
@@ -122,6 +132,16 @@ mod tests {
         assert_eq!(bare_cmd("/model@HerdrBot"), "/model");
         assert_eq!(bare_cmd("/model"), "/model");
         assert_eq!(bare_cmd("hello"), "hello");
+    }
+
+    #[test]
+    fn test_waiter_key_general_parity() {
+        // General arrives as None on messages but Some(1) on callbacks —
+        // one key so arms meet consumes (answer + /cancel + typewait).
+        assert_eq!(waiter_key(7, None), waiter_key(7, Some(1)));
+        assert_eq!(waiter_key(7, None), (7, None));
+        // Real topic threads keep their identity.
+        assert_eq!(waiter_key(7, Some(9)), (7, Some(9)));
     }
 
     #[test]

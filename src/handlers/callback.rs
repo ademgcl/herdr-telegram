@@ -51,13 +51,13 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        // Fail-open: staleness must be proven — a callback without
-        // `message.date` (malformed/channel shape) defaults to now so a
-        // legitimate tap is never dropped as a day-0 relic (0 is always
-        // stale under `tap_stale`).
-        let date = cbq["message"]["date"].as_u64().unwrap_or(now);
+        // Fail-closed: staleness must be disproven — a callback without
+        // `message.date` (malformed/channel shape) defaults to 0 so a
+        // destructive tap is dropped, never executed blind (router parity:
+        // messages default 0 for the same gate).
+        let date = cbq["message"]["date"].as_u64().unwrap_or(0);
         if super::callback_stale::tap_stale(date, now) {
-            super::callback_stale::notify_stale_card(&s, chat, thread);
+            super::callback_stale::notify_stale_card(&s, chat, thread).await;
             return;
         }
     }
@@ -281,7 +281,10 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
         }
         _ => {
-            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
+            // Edit in place (B/X malformed parity): unknown data is a
+            // version-skew/crafted tap — a loud send spams the chat
+            // (spam oracle), an edit stays on the tapped card.
+            s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
                 .await;
         }
     }

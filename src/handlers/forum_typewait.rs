@@ -52,7 +52,14 @@ pub(crate) async fn consume_typewait(
         std::time::Instant::now(),
         crate::state::guard::TYPEWAIT_STALE_SECS,
     ) {
-        s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+        let mut tw = s.typewait.lock().await;
+        if tw
+            .get(&(chat, Some(thread_id)))
+            .map(|(_, t)| *t == at)
+            .unwrap_or(false)
+        {
+            tw.remove(&(chat, Some(thread_id)));
+        }
         return WaitOut::Pass;
     }
     if s.block_held(&wpane).await {
@@ -95,7 +102,15 @@ pub(crate) async fn consume_typewait(
     }
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
-            s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+            let mut tw = s.typewait.lock().await;
+            if tw
+                .get(&(chat, Some(thread_id)))
+                .map(|(_, t)| *t == at)
+                .unwrap_or(false)
+            {
+                tw.remove(&(chat, Some(thread_id)));
+            }
+            drop(tw);
             s.tg.send_silent(chat, Some(thread_id), &crate::ui::typed_ack(&wpane))
                 .await;
             // Resumed work owns no job — follow it to the final reply.

@@ -84,8 +84,11 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
     // Shells keep their topic with the shell badge and zero alerts;
     // only truly gone panes get closed. Fail-open: a herdr hiccup must
     // never read as "everything is dead" (wiped topics + intents).
-    // Single `list_panes` per tick (shared with the hygiene block
-    // below): 1 RPC, not 2. Forum-only: in DM mode a quit-to-shell pane
+    // Single `list_panes` per tick for the forum block + DM flip below:
+    // 1 RPC, not 2. Hygiene re-reads fresh in the tail (its
+    // double-confirm must never share this cache — a transient miss
+    // here would else retire live jobs without re-confirming).
+    // Forum-only: in DM mode a quit-to-shell pane
     // keeps its last agent status (fully-dead panes are still reaped by
     // hygiene below); shell reuse under the same name inherits episode
     // dedup for up to one remind window — accepted, DM has no topics.
@@ -134,6 +137,38 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                     eprintln!("[reconcile] pane list empty, keeping topics");
                 }
                 Some(panes) => {
+                    // Double-confirm the dead verdict (hygiene parity):
+                    // a single `pane.list` partial-miss must not close a
+                    // live pane's topic + retire its watcher (reply lost
+                    // until restart). Suspects-only: zero extra RPCs in
+                    // steady state. Fail-open: an unreadable confirm
+                    // closes nothing. (The shell verdict above needs no
+                    // confirm: a ghost entry only delays the close one
+                    // tick, it never destroys.)
+                    let dead: HashSet<String> = {
+                        let suspects: Vec<String> = missing
+                            .iter()
+                            .filter(|p| !panes.contains(*p))
+                            .cloned()
+                            .collect();
+                        if suspects.is_empty() {
+                            HashSet::new()
+                        } else {
+                            pane_list = None;
+                            match panes_once(s, &mut pane_list).await {
+                                Some(fresh) if !fresh.is_empty() => suspects
+                                    .into_iter()
+                                    .filter(|p| !fresh.contains(p))
+                                    .collect(),
+                                _ => {
+                                    eprintln!(
+                                        "[reconcile] close-confirm unreadable, keeping topics"
+                                    );
+                                    HashSet::new()
+                                }
+                            }
+                        }
+                    };
                     for pane in missing {
                         if panes.contains(&pane) {
                             // Already-shell panes run shell commands, not
@@ -209,7 +244,11 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                         // close must survive the outer remove. Quiet retire:
                         // loud's "✋ cancelled" card would break the silence.
                         // Split to `reconcile_close` (300-line file limit).
-                        } else if super::reconcile_close::close_dead_pane(s, &pane).await {
+                        // Unconfirmed by the second read above: a transient
+                        // first-read miss, never a death — skip the close.
+                        } else if dead.contains(&pane)
+                            && super::reconcile_close::close_dead_pane(s, &pane).await
+                        {
                             continue;
                         }
                     }

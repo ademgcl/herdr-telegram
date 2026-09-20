@@ -14,6 +14,7 @@ use std::{
 use tokio::sync::Mutex;
 
 pub(crate) mod cancel;
+mod clear;
 pub(crate) mod guard;
 pub(crate) mod history;
 mod jobs;
@@ -73,8 +74,14 @@ pub struct State {
     /// Last stale-arrival notice per (chat, thread): a boot burst queues
     /// N stale messages and each must not send its own "please resend".
     /// Time-bounded (STALE_SECS), never forever — a later genuine stall
-    /// in the same thread still notifies.
+    /// in the same thread still notifies. Tap expiries use the sibling
+    /// map below: same key shape, different notice text — sharing one
+    /// stamp would suppress the wrong guidance.
     pub stale_nagged: Mutex<HashMap<(i64, Option<i64>), std::time::Instant>>,
+    /// Last stale-tap notice per (chat, thread): same burst shape as
+    /// `stale_nagged` but a different notice ("card expired"), so a stale
+    /// tap must not consume a stale message's notice budget or vice versa.
+    pub stale_tap_nagged: Mutex<HashMap<(i64, Option<i64>), std::time::Instant>>,
     /// When a prompt watcher last reported a pane — status alerts inside
     /// this window are redundant (the final card already covered them).
     pub last_done: Mutex<HashMap<String, std::time::Instant>>,
@@ -225,6 +232,7 @@ impl State {
             typewait: Mutex::new(HashMap::new()),
             nagged: Mutex::new(HashMap::new()),
             stale_nagged: Mutex::new(HashMap::new()),
+            stale_tap_nagged: Mutex::new(HashMap::new()),
             last_done: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
             last_change: Mutex::new(HashMap::new()),
@@ -249,48 +257,5 @@ impl State {
         // every mode — DM→forum switches orphan the same way.
         st.topics.storage.prune_orphan_msgs();
         Ok(st)
-    }
-
-    /// Drop armed input waiters for a dead pane: a typewait surviving
-    /// /kill would eat the owner's next message as typed input into a
-    /// pane that no longer exists.
-    pub async fn clear_pane(self: &Arc<Self>, pane: &str) {
-        // Ownership-checked: a concurrent re-mint (same pane name reused)
-        // keeps its typing task; a dead pane has no owner so it stops.
-        self.stop_typing_unless_owned(pane).await;
-        self.clear_waiters(pane).await;
-        // Reply targets are NEVER pruned here: a DM reply to a corpse
-        // card must fail visibly ("pane gone") via the shell fallback —
-        // pruning it would silently reroute the text as a prompt into
-        // the focused live agent. Dead entries age out via the 512-cap
-        // overflow in `remember`; per-tap `forget_target` drops them.
-        // A killed pane must not stay focused: the next bare message
-        // would route into the void instead of resolving fresh. Single
-        // lock check-and-clear: a set_focus landing between a split check
-        // and clear would else wipe the FRESH focus (next bare message
-        // loses its target — sole-agent fallback or error).
-        {
-            let mut focus = self.focus.lock().await;
-            if focus.as_deref() == Some(pane) {
-                *focus = None;
-                let _ = std::fs::remove_file(persist_paths::focus_file());
-            }
-        }
-        self.status.lock().await.remove(pane);
-        self.last_done.lock().await.remove(pane);
-        self.seen.lock().await.remove(pane);
-        self.last_change.lock().await.remove(pane);
-        self.debounce.lock().await.remove(pane);
-        self.clear_limit_episode(pane).await;
-        self.blocked_sig.lock().await.remove(pane);
-        self.blocked_card.lock().await.remove(pane);
-        self.history.lock().await.remove(pane);
-        // Fresh guards die with the pane (remints must not inherit a
-        // live-tap brick or a stale shell generation): a flapped list
-        // sample races like jobs/waiters (pre-existing, shared) and the
-        // next tap claims fresh.
-        self.modelop.lock().await.remove(pane);
-        self.blockop.lock().await.remove(pane);
-        self.shell_gen.lock().await.remove(pane);
     }
 }

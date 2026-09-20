@@ -25,6 +25,7 @@ use std::sync::atomic::Ordering;
 /// exposes only raw TUI text, so answers ride the filtered stream).
 /// True when nothing was delivered (outage or all parts failed) so the
 /// watcher retries instead of retiring the intent.
+#[allow(clippy::too_many_arguments)]
 pub async fn finalize(
     s: &AppState,
     pane: &str,
@@ -33,13 +34,12 @@ pub async fn finalize(
     live_mid: &mut Option<i64>,
     live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
+    entry: (u64, usize, String),
 ) -> bool {
-    // Fresh reply only: the last segment after tool calls, reasoning
-    // headers and the prompt echo — earlier turns and intermediate work
-    // are dropped. Falls back to the settled screen for fast tasks where
-    // nothing streamed.
-    let (entry_epoch, entry_pending) = job.snapshot_generation().await;
-    let prompt = job.prompt.lock().await.clone();
+    // Settle-owned entry triple: snapshotted before the remap RPCs, never
+    // re-read here — a cross-thread submit in the gap would else pair the
+    // new epoch/prompt with this old acc/screen.
+    let (entry_epoch, entry_pending, prompt) = entry;
     // One settled read, arbitrated against the stream (see
     // select_final_body): alt-screen TUIs starve the delta stream, so a
     // trivial fragment must not shadow the real answer. The same screen
@@ -94,8 +94,10 @@ pub async fn finalize(
             fold_live(s, live_dest, live_mid, RUN_ENDED).await;
             // Gated like every stamp path: a submit racing the fold owns
             // the pane — anchoring our empty snapshot would eat the fresh
-            // baseline its reply needs.
-            if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+            // baseline its reply needs. Empty never anchors (anchor
+            // parity with Job::anchor_baseline): a blank read would wipe
+            // a good baseline and repost scrollback as fresh on reuse.
+            if !snapshot.is_empty() && job.epoch.load(Ordering::Relaxed) == entry_epoch {
                 s.seen.lock().await.insert(pane.to_string(), snapshot);
             }
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
@@ -155,6 +157,11 @@ pub async fn finalize(
         // stall settle past the tick — take the slot only on landed/gone
         // (finalize_blocked parity): a timeout keeps the slot for the
         // next tick instead of orphaning a frozen card.
+        // No next tick exists here (settle_books below retires the
+        // watcher): a transient failure returns retry with backoff
+        // (delivery-failure parity below) instead of retiring into an
+        // orphaned frozen card.
+        let mut transient = false;
         if let Some(mid) = *live_mid {
             if let Some((lchat, _)) = *live_dest {
                 let retire = tokio::time::timeout(
@@ -171,12 +178,22 @@ pub async fn finalize(
                     live_mid.take();
                     live_dest.take();
                     let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
+                } else {
+                    transient = true;
                 }
             } else {
                 live_mid.take();
             }
         } else {
             live_dest.take();
+        }
+        if transient {
+            // Superseded during the RPCs above: stamp nothing (blocked-path rule).
+            if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+                s.seen.lock().await.insert(pane.to_string(), snapshot);
+            }
+            println!("[prompt] finalize {pane}: live retire transient, retrying");
+            return true;
         }
         // Superseded during the RPCs above: stamp nothing (blocked-path rule).
         if job.epoch.load(Ordering::Relaxed) == entry_epoch {
@@ -204,15 +221,24 @@ pub async fn finalize(
     // And after: a submit during the observe RPCs above retargets.
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         println!("[prompt] finalize {pane}: superseded before post, dropping");
+        settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
         return false;
     }
     // Leaving blocked state clears the dialog signature (blocked path
     // returns above, so this only runs for settled non-blocked).
-    // Generation-checked: a new blocked episode stamped during the RPCs
-    // above keeps its dedup, or its fresh question card double-buzzes.
+    // Generation-checked + epoch re-checked INSIDE the lock: a submit
+    // between the check above and this lock would else wipe the
+    // successor's fresh stamp when it equals pre_sig (same question).
     {
         let mut m = s.blocked_sig.lock().await;
+        if job.epoch.load(Ordering::Relaxed) != entry_epoch {
+            drop(m);
+            println!("[prompt] finalize {pane}: superseded before post, dropping");
+            settle_books(s, pane, job, entry_epoch, entry_pending).await;
+            acc.clear();
+            return false;
+        }
         if m.get(pane) == pre_sig.as_ref() {
             m.remove(pane);
         }

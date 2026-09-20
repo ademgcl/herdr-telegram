@@ -7,9 +7,14 @@ pub async fn list_agents(socket: &str) -> Res<Vec<AgentRow>> {
     let mut out = Vec::new();
     if let Some(arr) = r["agents"].as_array() {
         for a in arr {
+            // Skip malformed rows: a ghost "?" pane would be subscribed
+            // and reconciled downstream — fail-closed, never invent ids.
+            let Some(pane) = a["pane_id"].as_str() else {
+                continue;
+            };
             out.push(AgentRow {
                 kind: a["agent"].as_str().unwrap_or("?").into(),
-                pane: a["pane_id"].as_str().unwrap_or("?").into(),
+                pane: pane.into(),
                 title: a["terminal_title_stripped"].as_str().unwrap_or("").into(),
                 status: a["agent_status"].as_str().unwrap_or("unknown").into(),
                 ws: a["workspace_id"].as_str().unwrap_or("?").into(),
@@ -88,8 +93,14 @@ pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
         && let Some(gitdir) = content.trim().strip_prefix("gitdir:")
         // Relative worktree gitdir resolves against the pane cwd, never
         // the bot CWD (else wrong HEAD → wrong branch card, silently).
+        // Pane-controlled content: an absolute gitdir would discard the
+        // cwd on join and read anywhere (`<abs>/HEAD`); `..` escapes the
+        // same way — fall through to the bounded subprocess instead.
+        && let gitdir = gitdir.trim()
+        && !std::path::Path::new(gitdir).is_absolute()
+        && !gitdir.split('/').any(|c| c == "..")
         && let Ok(head_content) =
-            tokio::fs::read_to_string(cwd_path.join(gitdir.trim()).join("HEAD")).await
+            tokio::fs::read_to_string(cwd_path.join(gitdir).join("HEAD")).await
         && let Some(b) = parse_branch_from_head(&head_content)
     {
         return Some(b);
@@ -200,5 +211,23 @@ mod tests {
     async fn test_derive_branch_non_existent_dir() {
         let a = json!({});
         assert_eq!(derive_branch(&a, "/non/existent/path/xyz").await, None);
+    }
+
+    #[tokio::test]
+    async fn test_derive_branch_rejects_absolute_gitdir() {
+        // Pane-controlled `.git` file pointing at an absolute gitdir must
+        // not read outside the cwd (join would discard the cwd).
+        let dir = std::env::temp_dir().join(format!(
+            "ht-gitdir-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".git"), "gitdir: /tmp/elsewhere\n").unwrap();
+        let a = json!({});
+        assert_eq!(derive_branch(&a, dir.to_str().unwrap()).await, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -212,6 +212,8 @@ async fn do_quit(
         return;
     }
     s.cancel_jobs_for(pane).await;
+    // Strip dead ⛔ buttons first (clear_pane drops tracking, shared helper).
+    crate::handlers::dialog::resolve_cards_unless_held(s, pane).await;
     s.clear_pane(pane).await;
     // Badge shell NOW (not on the next watchdog cycle) so a fast
     // re-enter still hushes correctly in the notifier.
@@ -224,8 +226,7 @@ async fn do_quit(
     if s.topics.mark_shell(pane).await {
         crate::handlers::dialog::retire_dialog(s, pane).await;
     }
-    // Record the flip NOW: the watchdog skips unknown-missing rows,
-    // which froze agent icons on shell topics forever.
+    // Record the flip NOW (watchdog skips unknown-missing rows).
     s.topics.note_kind(pane, "shell");
     // Immediate bot-owned re-icon (user customs kept); failures retry
     // next tick via the watchdog flip path above.

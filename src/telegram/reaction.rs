@@ -20,6 +20,7 @@ pub fn build_reaction_body(chat_id: i64, message_id: i64, emoji: Option<&str>) -
 impl TelegramClient {
     /// F7: Set an emoji reaction on a message (e.g. ❗ for blocked/stalled, ✅ for done/resumed).
     /// Pass None to clear reactions. Ignores unsupported chats / reaction errors gracefully.
+    /// Honors one flood-wait (then one retry): a tap burst must not silently drop ✅/❗.
     pub async fn set_reaction(
         &self,
         chat_id: i64,
@@ -27,24 +28,39 @@ impl TelegramClient {
         emoji: Option<&str>,
     ) -> Res<()> {
         let body = build_reaction_body(chat_id, message_id, emoji);
-        match self
-            .call("setMessageReaction", body, Duration::from_secs(10))
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("REACTIONS_NOT_ALLOWED")
-                    || msg.contains("REACTIONS_DISABLED")
-                    || msg.contains("REACTION_INVALID")
-                    || msg.contains("not modified")
-                    || msg.contains(super::errors::NO_RIGHTS)
-                    || msg.contains(super::errors::BOT_BLOCKED)
-                    || super::errors::topic_missing(&msg)
-                {
-                    return Ok(());
+        let mut waits = 0;
+        loop {
+            match self
+                .call("setMessageReaction", body.clone(), Duration::from_secs(10))
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("REACTIONS_NOT_ALLOWED")
+                        || msg.contains("REACTIONS_DISABLED")
+                        || msg.contains("REACTION_INVALID")
+                        || msg.contains("not modified")
+                        || msg.contains("message not found")
+                        || msg.contains("message to forward not found")
+                        || msg.contains("message to delete not found")
+                        || msg.contains("message to react not found")
+                        || msg.contains(super::errors::NO_RIGHTS)
+                        || msg.contains(super::errors::BOT_BLOCKED)
+                        || super::errors::topic_gone(&msg)
+                    {
+                        return Ok(());
+                    }
+                    if let Some(wait) = Self::retry_after(&msg) {
+                        waits += 1;
+                        if waits > 1 {
+                            return Err(e);
+                        }
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                    return Err(e);
                 }
-                Err(e)
             }
         }
     }

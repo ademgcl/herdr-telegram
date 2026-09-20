@@ -149,11 +149,12 @@ pub async fn enqueue_prompt(
         s.stop_shell_typing(&pane).await;
         return;
     }
-    // Cancel won during the submit RPC: the job is stopped and its
-    // durable intent cleared — writing books now would resurrect
-    // cancelled work (pending_matches below would match our own rewrite).
+    // Stopped mid-submit (cancel or a concurrent fail-path retire): the
+    // submit above still DELIVERED, so fall through to books + rearm /
+    // transfer below instead of stranding a watcherless prompt. (A lone
+    // /cancel racing success now watches work the agent truly received.)
     if job.is_stopped() {
-        return;
+        println!("[jobs] submit landed on stopped job for {pane} — re-covering");
     }
     // Delivered: last-wins books + durable intent. Atomic bump (epoch
     // + pending under one lock, no await — see bump_generation): a
@@ -195,8 +196,15 @@ pub async fn enqueue_prompt(
         return;
     }
     let rearm = match s.jobs.lock().await.get(&pane).cloned() {
-        Some(j) if Arc::ptr_eq(&j, &job) => false,
-        Some(j) => j.is_stopped(),
+        // Stopped self still maps (runner folds the card before its
+        // exit-removal): the delivered books above strand with no
+        // watcher unless we re-arm — a mapped stopped job always
+        // needs the re-cover path below, never a bare return.
+        // Single source: enqueue_verdict::rearm_verdict.
+        Some(j) => super::enqueue_verdict::rearm_verdict(
+            Some((Arc::ptr_eq(&j, &job), j.is_stopped())),
+            job.is_stopped(),
+        ),
         None => true,
     };
     // Transfer gap cover: a live successor inserted between the two
@@ -225,73 +233,13 @@ pub async fn enqueue_prompt(
         return;
     }
     if rearm {
-        let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-        // Ownership re-check: a /cancel landing during the submit RPC /
-        // baseline read cleared the slot — minting now resurrects it.
-        if !s
-            .pending_matches(&pane, req.chat_id, req.message_thread_id, &req.text)
-            .await
-        {
-            return;
-        }
-        // Re-check under a fresh lock: a concurrent enqueue may have won
-        // while the baseline read yielded (same pattern as the spawn
-        // above) — a mapped live job is always a successor, leave it.
-        // Adopt it instead of dropping our prompt: our books already
-        // landed on the retired job and durable holds our text, so
-        // transfer the full last-wins cover (dest/prompt/pending/epoch)
-        // to the live successor — otherwise our prompt is owed to a dead
-        // watcher while the successor serves with a short count (dropped
-        // reply), or prompt/dest split from durable and leak the intent
-        // (ghost re-arm after restart). Lock-free handoff (clone the Arc,
-        // drop the map, then write — never nest jobs→pending locks, not
-        // even a fresh Job's fields while holding the map).
-        let live_other = s
-            .jobs
-            .lock()
-            .await
-            .get(&pane)
-            .cloned()
-            .filter(|j| !j.is_stopped());
-        match live_other {
-            None => {
-                let j2 = Job::new(baseline, req.chat_id, req.message_thread_id);
-                *j2.prompt.lock().await = req.text.clone();
-                *j2.pending.lock().await = 1;
-                // Re-check under the insert lock: a concurrent enqueue
-                // may have won while the field writes above yielded —
-                // a mapped live job is always a successor, adopt it.
-                let mut map = s.jobs.lock().await;
-                if let Some(j) = map.get(&pane).cloned().filter(|j| !j.is_stopped()) {
-                    drop(map);
-                    super::enqueue_transfer::transfer_live(
-                        &s,
-                        &pane,
-                        &j,
-                        req.chat_id,
-                        req.message_thread_id,
-                        &req.text,
-                    )
-                    .await;
-                } else {
-                    map.insert(pane.clone(), j2.clone());
-                    drop(map);
-                    println!("[jobs] re-armed watcher for {pane} (retired mid-submit)");
-                    tokio::spawn(watch_job(s.clone(), pane.clone(), j2.clone()));
-                }
-            }
-            Some(j) => {
-                // (No map held here — live_other was cloned above.)
-                super::enqueue_transfer::transfer_live(
-                    &s,
-                    &pane,
-                    &j,
-                    req.chat_id,
-                    req.message_thread_id,
-                    &req.text,
-                )
-                .await;
-            }
-        }
+        super::enqueue_rearm::rearm_watcher(
+            &s,
+            &pane,
+            req.chat_id,
+            req.message_thread_id,
+            &req.text,
+        )
+        .await;
     }
 }

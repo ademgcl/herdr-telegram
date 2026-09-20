@@ -4,11 +4,8 @@
 //! that transient leaves the agent working unwatched (no final card at
 //! true completion) while the watchdog spams stall cards off prose.
 use crate::{
-    herdr::client::get_agent,
-    jobs::finalize::finalize,
-    jobs::job::Job,
-    jobs::repoint::repoint_dest_if_remapped,
-    state::AppState,
+    herdr::client::get_agent, jobs::finalize::finalize, jobs::job::Job,
+    jobs::repoint::repoint_dest_if_remapped, state::AppState,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -106,7 +103,24 @@ pub async fn settle_step(
     // not persistence of another. A supersede/cancel landing during the
     // sleep owns the pane even when the kind is unchanged (fast
     // done→done): the pre-sleep epoch below catches it.
-    let epoch_at_entry = job.epoch.load(Ordering::Relaxed);
+    // Single-epoch entry triple (finalize parity): generation (epoch +
+    // pending, atomic under one lock) + prompt text. Threaded through
+    // the remap and into finalize — finalize must NEVER re-snapshot. A
+    // submit landing anywhere after this entry (sleep, recheck RPCs,
+    // remap, or the cross-thread gap before finalize's first line)
+    // bumps the epoch, and every gate below compares against entry_epoch,
+    // so the old acc/screen can never post as the new generation.
+    // Prompt/enqueue skew: enqueue writes prompt BEFORE bumping, so a
+    // submit interleaving between the two snapshots could pair old-gen
+    // with new-prompt (or vice versa) — re-check the epoch after both
+    // and abort on any move.
+    let (entry_epoch, entry_pending) = job.snapshot_generation().await;
+    let entry_prompt = job.prompt.lock().await.clone();
+    if job.epoch.load(Ordering::Relaxed) != entry_epoch || job.is_stopped() {
+        *settled_since = None;
+        return SettleStep::Continue;
+    }
+    let epoch_at_entry = entry_epoch;
     // Cancellable like every backoff below: /cancel or a superseding
     // prompt landing inside the 750ms window must not stall its handoff.
     tokio::select! {
@@ -156,7 +170,7 @@ pub async fn settle_step(
     if !settle_commit(status, settled_since, Instant::now(), fatal_stuck) {
         return SettleStep::Continue;
     }
-    let epoch_before = job.epoch.load(Ordering::Relaxed);
+    let epoch_before = entry_epoch;
     repoint_dest_if_remapped(s, pane, job, live_mid, live_dest, epoch_before).await;
     // A submit landing during the remap fold owns the pane: finalize
     // captures its entry epoch AFTER the remap RPCs and would mistake
@@ -165,7 +179,17 @@ pub async fn settle_step(
         *settled_since = None;
         return SettleStep::Continue;
     }
-    let retry = finalize(s, pane, job, status, live_mid, live_dest, acc).await;
+    let retry = finalize(
+        s,
+        pane,
+        job,
+        status,
+        live_mid,
+        live_dest,
+        acc,
+        (entry_epoch, entry_pending, entry_prompt),
+    )
+    .await;
     // finalize consumes the live slot on success — drop its
     // address too, or a later reset would edit the final card.
     if live_mid.is_none() {

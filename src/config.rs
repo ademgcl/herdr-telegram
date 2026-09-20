@@ -141,8 +141,10 @@ pub fn cfg_from_env() -> Res<Cfg> {
     }
     let mut owners = Vec::new();
     // Union env + file keys: `.env`-only owners work without set_var.
-    let mut keys: Vec<String> = env::vars()
-        .map(|(k, _)| k)
+    // vars_os + to_str filter (never vars()): a single non-Unicode value
+    // anywhere in the environment must not panic the boot.
+    let mut keys: Vec<String> = env::vars_os()
+        .filter_map(|(k, _)| k.into_string().ok())
         .filter(|k| is_owner_key(k))
         .collect();
     for k in file.keys() {

@@ -92,9 +92,25 @@ fn test_dialog_chrome_keeps_header_arrows() {
         "← Access external directory ~/.config/opencode"
     ));
     assert!(!is_dialog_chrome("← ☐ Partial ☐ Story ✔ Submit →"));
+    // Numbered ❯ options are the dialog body (segment keeps them in the
+    // same block) — filtering them here emptied the whole question.
+    assert!(!is_dialog_chrome("❯ 1. Allow once"));
+    assert!(!is_dialog_chrome("❯ 2) Reject"));
     // Regular chrome still filters.
     assert!(is_dialog_chrome(
         "Enter to select · Tab/Arrow keys to navigate"
     ));
     assert!(is_dialog_chrome("• OpenCode 1.18.31"));
+}
+
+#[test]
+fn test_chrome_keeps_prose_dash_but_strips_full_rule() {
+    // A lone ─ inside prose is content, never a turn separator.
+    assert!(!is_chrome("foo ─ bar"));
+    assert!(!is_chrome("range 1 ─ 5, see above"));
+    // Full-width rules still go (segment parity: >=8 rule chars).
+    assert!(is_chrome(
+        "────────────────────────────────────────────────"
+    ));
+    assert!(is_chrome("━━━━━━━━━━━━━━━━"));
 }

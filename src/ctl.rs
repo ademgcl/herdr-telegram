@@ -60,10 +60,11 @@ pub async fn run_control_server(s: AppState, listener: TcpListener) {
                     Ok(Ok(n)) => n,
                     _ => return None,
                 };
-                // `take(4097)` caps allocation during the read: anything
-                // over 4KB (or empty/EOF) refuses without ever buffering
-                // an unbounded line.
-                if n == 0 || buf.len() > 4096 {
+                // `take(4097)` caps allocation during the read: empty/EOF
+                // refuses, and a 4097-byte read with no newline is a
+                // truncated over-4KB line (a 4KB payload + newline ends
+                // with `\n` and is accepted) — never buffer unbounded.
+                if n == 0 || (n == 4097 && !buf.ends_with(b"\n")) {
                     return None;
                 }
                 String::from_utf8(buf).ok().map(|s| {

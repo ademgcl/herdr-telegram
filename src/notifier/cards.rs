@@ -1,6 +1,7 @@
 //! Debounced spontaneous pushes: a settle must hold before its answer
 //! buzzes (micro-settle flicker stays silent; blocked posts immediately).
 
+use super::cards_retry::{SETTLE_DEBOUNCE_SECS, consume_reset_arm};
 use super::spontaneous::post_spontaneous_card;
 use crate::{
     herdr::client::{get_agent, list_panes, list_workspaces, read_agent_output},
@@ -9,28 +10,7 @@ use crate::{
     state::AppState,
     ui::ws_label,
 };
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
-
-/// A settle must hold this long before a spontaneous answer pushes —
-/// micro-settle flicker mid-task stays silent instead of buzzing.
-/// Blocked (needs input) always pushes immediately.
-pub(crate) const SETTLE_DEBOUNCE_SECS: u64 = 15;
-
-/// Pure reset-arm consume (testable without the 15s debounce sleep): a
-/// stale arm left armed would abort the post-reset retry — consume only
-/// the exact arm, never a newer one.
-pub(crate) fn consume_reset_arm(
-    db: &mut HashMap<String, (String, Instant)>,
-    pane: &str,
-    armed_at: Instant,
-) {
-    if db.get(pane).map(|(_, at)| at == &armed_at).unwrap_or(false) {
-        db.remove(pane);
-    }
-}
+use std::time::{Duration, Instant};
 
 /// Debounced spontaneous push: posts the fresh reply only if this settle
 /// is still current after the grace period. Baselines anchor on delivery
@@ -87,14 +67,25 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     {
         return;
     }
-    let screen: Vec<String> = read_agent_output(&s.cfg.socket, &pane, 80)
+    // Outage/unknown (Err collapsed above): never anchor an empty
+    // screen — it would wipe a good baseline and repost scrollback.
+    // Bounded retry (split: `cards_retry`): a one-shot return here loses
+    // the reply forever — no new transition re-fires this arm.
+    let mut screen: Vec<String> = read_agent_output(&s.cfg.socket, &pane, 80)
         .await
         .unwrap_or_default()
         .lines()
         .map(|l| l.trim_end().to_string())
         .collect();
-    // Post-read re-check: a prompt/final that landed during the read
-    // owns the pane now — never double-post with the watcher.
+    if screen.is_empty() {
+        let Some(retry) = super::cards_retry::read_screen_retry(&s, &pane, armed_at).await else {
+            return;
+        };
+        screen = retry;
+    }
+    // Post-read re-check (both paths above): a prompt/final that landed
+    // during the read owns the pane now — never double-post with the
+    // watcher.
     if s.job_live(&pane).await {
         return;
     }
@@ -105,11 +96,6 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         .map(|t| *t > armed_at)
         .unwrap_or(false)
     {
-        return;
-    }
-    // Outage/unknown (Err collapsed above): never anchor an empty
-    // screen — it would wipe a good baseline and repost scrollback.
-    if screen.is_empty() {
         return;
     }
     let base = s.seen.lock().await.get(&pane).cloned().unwrap_or_default();
@@ -142,9 +128,19 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     }
     // Liveness before sync (fail-closed verdict in spontaneous):
     // a dead pane never re-mints its topic (resurrection) nor buzzes
-    // post-cancel; an ambiguous read mints/posts nothing (next tick
-    // retries). Dead consumes the arm (no retry into a gone pane).
-    match super::spontaneous::liveness(list_panes(&s.cfg.socket).await.ok().as_ref(), &pane) {
+    // post-cancel; an ambiguous read mints/posts nothing. Dead consumes
+    // the arm (no retry into a gone pane); ambiguous retries bounded
+    // (split: `cards_retry`) then leaves the arm for the next transition.
+    let live = super::spontaneous::liveness(list_panes(&s.cfg.socket).await.ok().as_ref(), &pane);
+    let live = if matches!(live, super::spontaneous::Liveness::Ambiguous) {
+        let Some(retry) = super::cards_retry::liveness_retry(&s, &pane, armed_at).await else {
+            return;
+        };
+        retry
+    } else {
+        live
+    };
+    match live {
         super::spontaneous::Liveness::Dead => {
             consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
             return;
@@ -159,6 +155,10 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     };
     let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
     let raw_space = ws_label(&spaces, &ws_id);
+    // Degraded-spaces guard (status parity): an unmapped ws would prune
+    // with the raw id and mint a `[w8]` stub on outage — skip it. Kind
+    // "?" (unreadable agent) is already refused inside ensure_inner.
+    let spaces_ok = kind == "?" || spaces.iter().any(|w| w.id == ws_id);
     // Single stray chars (picker echoes, vim residue) never page; real
     // shorts ("ok", "done") do. Empty stays silent but advances the
     // baseline so the stray doesn't haunt future settles.
@@ -168,14 +168,20 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         // Post-RPC re-check (window = get_agent/spaces above): a
         // prompt/final landing during those RPCs owns the pane now —
         // anchoring would wipe its fresh delta into the baseline (lost
-        // reply). Consume the arm only, never the baseline.
+        // reply). A working flip in the same window is moved-on work in
+        // progress — anchoring folds it into the baseline and shrinks
+        // the next genuine delta. Consume the arm only, never the baseline.
         let raced = s.job_live(&pane).await
             || s.last_done
                 .lock()
                 .await
                 .get(&pane)
                 .map(|t| *t > armed_at)
-                .unwrap_or(false);
+                .unwrap_or(false)
+            || super::retry_guard::moved_on(
+                s.status.lock().await.get(&pane).map(String::as_str),
+                &settled,
+            );
         if raced {
             consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
             return;
@@ -186,8 +192,9 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     }
     // Pruned (human-deleted) topics retire the dialog before the settle
     // card posts into the recreated, card-less topic. After the stray
-    // gate above: strays mint/post nothing.
-    if s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
+    // gate above: strays mint/post nothing. Skipped on degraded spaces
+    // (guard above) — never mint a stub on outage.
+    if spaces_ok && s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
         crate::handlers::dialog::retire_dialog(&s, &pane).await;
     }
     // Pre-post re-check (window = read + sync RPCs above): a job/final

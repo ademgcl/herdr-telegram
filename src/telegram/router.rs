@@ -124,10 +124,11 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // name back to the herdr pane label. Must run BEFORE the empty-text
     // return below. No stale gate: replays are idempotent via the
     // stored-title compare, and a redelivered rename heals the down-window.
-    if let Some((thread, name)) = crate::handlers::topic_edit::parse_topic_edit(msg) {
-        if (chat_type == "supergroup" || chat_type == "group") && s.cfg.forum == Some(chat_id) {
-            crate::handlers::titles_adopt::adopt_topic_title(s, chat_id, Some(thread), &name).await;
-        }
+    if let Some((thread, name)) = crate::handlers::topic_edit::parse_topic_edit(msg)
+        && (chat_type == "supergroup" || chat_type == "group")
+        && s.cfg.forum == Some(chat_id)
+    {
+        crate::handlers::titles_adopt::adopt_topic_title(s, chat_id, Some(thread), &name).await;
         return;
     }
 
@@ -152,13 +153,17 @@ pub async fn handle_update(s: AppState, u: &Value) {
         let th = msg["message_thread_id"].as_i64();
         // Burst-deduped (see stale_notice_due): short lock, no await
         // inside — the map prune rides along, never a second pass.
+        // General arrives as None on messages but Some(1) on callbacks:
+        // one waiter_key so both are the same conversation (single
+        // source with forum.rs — never two notices for General).
         let at = Instant::now();
         let due = {
+            let key = crate::handlers::forum::waiter_key(chat_id, th);
             let mut nagged = s.stale_nagged.lock().await;
             nagged.retain(|_, t| at.duration_since(*t).as_secs() < STALE_SECS);
-            let due = stale_notice_due(nagged.get(&(chat_id, th)).copied(), at);
+            let due = stale_notice_due(nagged.get(&key).copied(), at);
             if due {
-                nagged.insert((chat_id, th), at);
+                nagged.insert(key, at);
             }
             due
         };
@@ -167,11 +172,15 @@ pub async fn handle_update(s: AppState, u: &Value) {
             // on flood — awaiting it here would stall the sequential
             // update pump (main loop handles updates one by one) and age
             // the whole batch past STALE_SECS into a drop cascade.
+            // Normalized send (waiter_key parity): General arrives as
+            // None on messages but Some(1) on callbacks — both are the
+            // same conversation, so the notice lands the same way.
+            let th_send = th.filter(|t| *t != 1);
             let tg = s.tg.clone();
             tokio::spawn(async move {
                 tg.send_msg(
                     chat_id,
-                    th,
+                    th_send,
                     "⌛️ that message arrived too late — please resend",
                     None,
                 )

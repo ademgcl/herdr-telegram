@@ -39,10 +39,15 @@ pub(crate) fn opt_tap_num(i: usize) -> Option<&'static str> {
 pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
     // Read first: the index is validated against the LIVE dialog below —
     // a stale card (or crafted callback) must never drive keys into a
-    // narrower turned-over dialog. Unreadable screens stay permissive
-    // (outage must not brick real buttons); unreadable status fails
-    // closed at the gate below, like `type_text`.
-    let before = read_screen_visible(socket, pane, crate::handlers::dialog::DIALOG_READ_LINES).await;
+    // narrower turned-over dialog. Unreadable screens fail closed (an
+    // outage bricks taps until the blip passes — sending blind risks
+    // wrong-option injection into a turned-over dialog); unreadable
+    // status fails closed at the gate below, like `type_text`.
+    let before =
+        read_screen_visible(socket, pane, crate::handlers::dialog::DIALOG_READ_LINES).await;
+    if before.is_empty() {
+        return TapCall::Unknown;
+    }
     // Stale-tap ground truth: buttons only exist on blocked panes. A tap
     // racing a resume — or landing days later on a history card — must
     // refuse instead of driving keys into live work (shape heuristics
@@ -71,11 +76,13 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                     let Some(num) = opt_tap_num(i) else {
                         return TapCall::Unknown;
                     };
-                    if !before.is_empty() {
-                        let live = crate::handlers::dialog::parse_options(probe);
-                        if !live.is_empty() && i >= live.len() {
-                            return TapCall::Unknown;
-                        }
+                    // Bounds against the live dialog: a stale index into
+                    // a narrower turned-over dialog stays silent, and an
+                    // option-less live screen refuses (never drive keys
+                    // blind into turned-over work).
+                    let live = crate::handlers::dialog::parse_options(probe);
+                    if i >= live.len() {
+                        return TapCall::Unknown;
                     }
                     let (full, confirm) = if crate::handlers::dialog::has_numbered_options(probe) {
                         (vec![num], vec!["enter"])
@@ -97,12 +104,10 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                     // (parsed options or a question) on screen, Enter / Esc
                     // / Right would land in live work. (B:type arming never
                     // reaches here — it sends no keys.)
-                    if !before.is_empty() {
-                        let live = crate::handlers::dialog::parse_options(probe);
-                        let sig = crate::handlers::dialog::dialog_sig(probe);
-                        if live.is_empty() && !sig.contains('?') {
-                            return TapCall::Unknown;
-                        }
+                    let live = crate::handlers::dialog::parse_options(probe);
+                    let sig = crate::handlers::dialog::dialog_sig(probe);
+                    if live.is_empty() && !sig.contains('?') {
+                        return TapCall::Unknown;
                     }
                     (Vec::new(), keys.to_vec(), action.to_string())
                 }

@@ -6,8 +6,8 @@ use crate::{
     state::{
         AppState,
         guard::{
-            BLOCKOP_STALE_SECS, KEYWAIT_STALE_SECS, MODELOP_STALE_SECS, RUNWAIT_STALE_SECS,
-            SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS, TYPEWAIT_STALE_SECS, claim_stale, reap_stale,
+            BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS,
+            claim_stale, reap_stale,
         },
     },
 };
@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "hygiene_panes.rs"]
 mod hygiene_panes;
-pub(crate) use hygiene_panes::panes_once;
+pub(crate) use hygiene_panes::{panes_once, prune_age};
 
 /// Confirm suspected deaths against a fresh read (pure, tested): panes
 /// missing from both reads are truly dead; panes the first read
@@ -67,34 +67,10 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // as a shell command. Fail-closed expiry, same corpse bound style
     // as the op guards. Key/type waiters expire by age too (a stale K
     // arm keys into live work, a stale Type arm answers a dead question)
-    // — pane-death reap above still applies first.
-    {
-        let now = std::time::Instant::now();
-        s.runwait
-            .lock()
-            .await
-            .retain(|_, (_, at)| !claim_stale(*at, now, RUNWAIT_STALE_SECS));
-        s.keywait
-            .lock()
-            .await
-            .retain(|_, (_, at)| !claim_stale(*at, now, KEYWAIT_STALE_SECS));
-        s.typewait
-            .lock()
-            .await
-            .retain(|_, (_, at)| !claim_stale(*at, now, TYPEWAIT_STALE_SECS));
-        // Chat-keyed notice stamps self-prune on access with their own
-        // bounds — but access-only pruning grows unbounded across chats
-        // (new map needs expiry + prune). Same bounds here, never
-        // pane-liveness: daily nag vs 10-min stale.
-        s.nagged
-            .lock()
-            .await
-            .retain(|_, at| !claim_stale(*at, now, crate::types::NAGGED_SECS));
-        s.stale_nagged
-            .lock()
-            .await
-            .retain(|_, at| !claim_stale(*at, now, crate::types::STALE_SECS));
-    }
+    // — pane-death reap above still applies first. Split to `prune_age`
+    // (300-line file limit): waiters, notice stamps, debounce arms, and
+    // done stamps all prune there.
+    prune_age(s).await;
     // Guard-only wedges pin too: a tap that consumed its waiter (no
     // job, no intent) must still reach the reap below, never idle-skip.
     // NOTE: `spawnop` is deliberately EXCLUDED — its keys are synthetic
@@ -123,11 +99,29 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     }
     known.extend(s.blockop.lock().await.keys().cloned());
     known.extend(s.modelop.lock().await.keys().cloned());
+    // Blocked-only corpses pin too: a DM pane with only a blocked
+    // card (no job, no intent) must still reach the reap below, or its
+    // dead ⛔ buttons stay tappable forever (the live-only retains
+    // further down would prune tracking without stripping).
+    known.extend(s.blocked_sig.lock().await.keys().cloned());
+    let blocked_keys: Vec<String> = s.blocked_card.lock().await.keys().cloned().collect();
+    for p in blocked_keys {
+        if !known.contains(&p) {
+            known.push(p);
+        }
+    }
     // No early return on empty `known`: an idle bot (no jobs, intents,
     // waiters, or guards) must still prune live-only maps below, or dead
     // panes leak their seen/history/status/typing entries forever. The
     // per-pane retire loop simply no-ops while the retains still run.
     let reaping = !known.is_empty();
+    // Injected lists (tests) skip the double-confirm RPC: the caller
+    // already supplied the authoritative live set, and a forced fresh
+    // read would hit a nonexistent socket (fail-open keeps all, so no
+    // injected death could ever reap). Prod enters with None (the tick
+    // resets the shared cache before this call) so suspected deaths
+    // always re-confirm fresh.
+    let injected = pane_list.is_some();
     match panes_once(s, pane_list).await {
         Some(live) if live.is_empty() => {
             eprintln!("[reconcile] pane list empty, keeping intents");
@@ -141,15 +135,16 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                 // miss retires the job + clears the pane, leaving the
                 // intent watcherless until restart. Re-fetch fresh (cache
                 // bypass) and retire only panes missing twice. A transient
-                // empty confirm fails OPEN (keep all); a failed confirm
-                // (Err) falls back to the first affirmative read (Err/empty
-                // FIRST reads already no-op above/below).
+                // empty confirm AND a failed confirm both fail OPEN (keep
+                // all); only panes missing from BOTH reads retire. Falling
+                // back to the first read on confirm-Err would retire a
+                // live pane the first read transiently missed.
                 let dying: Vec<String> = known
                     .iter()
                     .filter(|p| !live.contains(*p))
                     .cloned()
                     .collect();
-                let dying = if dying.is_empty() {
+                let dying = if dying.is_empty() || injected {
                     dying
                 } else {
                     let first = live.clone();
@@ -165,12 +160,18 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                         Some(_) => {
                             eprintln!("[reconcile] confirm empty, keeping all");
                             *pane_list = Some(first);
-                            Vec::new()
+                            // Fail-open includes the retains below: `live`
+                            // is the suspect first read, so pruning maps
+                            // against it would wipe live panes' baselines
+                            // and repost scrollback as fresh. Skip the tick.
+                            return;
                         }
                         _ => {
-                            eprintln!("[reconcile] confirm read failed, using first read");
+                            eprintln!("[reconcile] confirm read failed, keeping all");
                             *pane_list = Some(first.clone());
-                            dying
+                            // Same fail-open as above: never prune on a
+                            // single partial read.
+                            return;
                         }
                     }
                 };
@@ -179,7 +180,9 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                     // reporter for dead panes — a loud retire would wipe it
                     // the same tick the forum branch restored it. Waiters
                     // die via clear_pane, maps via the retains; lingering
-                    // intent is bounded by the 24h stale drop.
+                    // intent is bounded by the 24h stale drop. Strip dead
+                    // ⛔ buttons first (contention-silent, shared helper).
+                    crate::handlers::dialog::resolve_cards_unless_held(s, pane).await;
                     s.cancel_job_only_for(pane).await;
                     s.clear_pane(pane).await;
                 }

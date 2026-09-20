@@ -35,6 +35,11 @@ pub async fn reconcile_tail(
 
     // Mode-independent dead-pane hygiene (jobs, intent, per-pane maps
     // for externally-closed panes). Fail-open on Err/empty (see hygiene).
+    // Fresh cache: the forum block above (and the DM flip) already spent
+    // this tick's shared `list_panes` read — reusing it here would enter
+    // reap_orphans with Some and skip its double-confirm RPC, retiring
+    // live jobs on a single transient miss. One extra RPC buys the safety.
+    *pane_list = None;
     reap_orphans(s, pane_list).await;
 
     // 1:1 tab↔topic titles (herdr tab names win; native TG renames

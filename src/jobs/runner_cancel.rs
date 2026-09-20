@@ -9,12 +9,7 @@ use crate::{
 };
 use std::sync::Arc;
 
-pub(crate) async fn cancel_watch(
-    s: &AppState,
-    pane: &str,
-    job: &Arc<Job>,
-    live: &mut LiveSlot,
-) {
+pub(crate) async fn cancel_watch(s: &AppState, pane: &str, job: &Arc<Job>, live: &mut LiveSlot) {
     cancel_watch_parts(s, pane, job, &mut live.mid, &mut live.dest).await;
 }
 

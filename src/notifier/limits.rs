@@ -4,9 +4,8 @@
 use crate::{
     herdr::client::read_screen_for_limits,
     jobs::notices::{detect_limit, limit_card_text, needs_stuck_gate},
-    notifier::limit_decide::{
-        alert_suppressed, detect_tail_with_context, kind_flipped, scan_tail, send_cooled,
-    },
+    notifier::limit_claim::try_claim,
+    notifier::limit_decide::{detect_tail_with_context, kind_flipped, scan_tail, send_cooled},
     state::AppState,
 };
 use std::time::{Duration, Instant};
@@ -14,15 +13,11 @@ use std::time::{Duration, Instant};
 /// Re-remind while a limit stall persists (shared with prompt watchers —
 /// either path's alert suppresses the other per kind, so handoffs buzz once).
 pub const LIMIT_REMIND_SECS: u64 = 1800;
-/// Gated (`rate-limit`/`provider`/`error`/WEAK-`auth`) banners must
-/// persist this long before the watchdog buzzes: transient upstream
-/// blips (timeout → retry succeeds) and 429/auto-retry flashes stay
-/// silent, stuck stalls page once.
-const LIMIT_STUCK_SECS: u64 = 90;
-/// Consecutive confirmed-clean 60s ticks before a limit episode clears —
-/// matches the watcher hysteresis so handoffs never double-page or
-/// swallow a refire. A single scroll/RPC flap never re-arms the alert.
-const LIMIT_CLEAR_MISSES: u32 = 3;
+// Stuck/clear hysteresis is single-sourced on the watcher episode
+// (`jobs::episode::STUCK_SECS` / `CLEAR_MISSES`): the values below are
+// aliases, never independent knobs — a one-sided edit silently desyncs
+// the watcher↔watchdog handoff (double-page or swallowed refire).
+use crate::jobs::episode::{CLEAR_MISSES as LIMIT_CLEAR_MISSES, STUCK_SECS as LIMIT_STUCK_SECS};
 
 /// Buzz once per limit episode — plus a backstop for prompt-owned panes
 /// whose watcher is parked (backoff), settling, or retired: stuck stalls
@@ -145,6 +140,18 @@ pub(crate) async fn scan_limits(s: &AppState) {
                 continue;
             }
         }
+        // Moved-on re-check (spontaneous/stall parity): a quit-to-shell
+        // landing between the snapshot and the send must not page the
+        // stale ❗ into the shelled topic. State preserves; next tick
+        // re-evaluates.
+        if s.status
+            .lock()
+            .await
+            .get(&pane)
+            .is_some_and(|v| v == "shell")
+        {
+            continue;
+        }
         // Reply dest from the live map (prompt-owned panes report into
         // their own chat, exactly where their watcher would). No dest
         // anywhere ⇒ nothing to claim, nothing to send.
@@ -184,26 +191,12 @@ pub(crate) async fn scan_limits(s: &AppState) {
         }
         // Atomic check-and-claim under one guard: concurrent watcher ticks
         // see the claim and stay silent (no double-page). Same-kind only —
-        // a provider blip never hides later quota. Pre-send, but REMOVED
-        // on failure below, so drops never arm the 30-min suppress.
-        let dup = {
-            let mut map = s.limit_alert.lock().await;
-            let prev = map.get(&pane).map(|(k, t)| (k.clone(), *t));
-            if alert_suppressed(
-                hit.kind,
-                prev.as_ref().map(|(k, t)| (k.as_str(), *t)),
-                now,
-                LIMIT_REMIND_SECS,
-            ) {
-                true
-            } else {
-                map.insert(pane.clone(), (hit.kind.to_string(), now));
-                false
-            }
-        };
-        if dup {
+        // a provider blip never hides later quota. Drop-guarded: the 50s
+        // watchdog timeout drops this tick mid-send, and without the guard
+        // the leaked claim would suppress the stall for 30 min undelivered.
+        let Some(claim) = try_claim(s, &pane, hit.kind, now).await else {
             continue;
-        }
+        };
         let text = limit_card_text(&pane, &hit);
         // All-or-nothing claim: partial delivery (some owners) still
         // retries next tick — a duplicate card to a healthy owner beats a
@@ -234,6 +227,7 @@ pub(crate) async fn scan_limits(s: &AppState) {
         // Screen excerpts stay out of the log (terminal content can hold
         // secrets); kind + length are enough for stall forensics.
         if delivered {
+            claim.keep();
             s.limit_send_cool.lock().await.remove(&pane);
             println!(
                 "[alert] limit stall {pane}: {} ({} chars)",
@@ -241,15 +235,10 @@ pub(crate) async fn scan_limits(s: &AppState) {
                 hit.excerpt.chars().count()
             );
         } else {
-            // Release the claim IFF still ours (a concurrent success must
-            // survive) and cool down: the next tick retries, nothing
-            // suppresses, nothing storms.
-            {
-                let mut map = s.limit_alert.lock().await;
-                if matches!(map.get(&pane), Some((k, t)) if k == hit.kind && *t == now) {
-                    map.remove(&pane);
-                }
-            }
+            // Release iff still ours (a concurrent success must survive)
+            // and cool down: the next tick retries, nothing suppresses,
+            // nothing storms.
+            claim.release().await;
             s.limit_send_cool
                 .lock()
                 .await

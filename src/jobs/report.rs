@@ -103,7 +103,8 @@ pub async fn report_done(
 /// (minutes) — a parked finalize stalls settle + /cancel past the tick.
 /// A timeout reads as undelivered (the existing retry path keeps the
 /// intent), never as loss. Live edits use the shorter shared bound.
-const FINAL_SEND_TIMEOUT_SECS: u64 = 90;
+/// Shared with the identity-pin mint (same orphan-on-truncate tradeoff).
+pub(crate) const FINAL_SEND_TIMEOUT_SECS: u64 = 90;
 
 /// Send + delivery-track, without any reaction: `report` (plain cards)
 /// and `report_done` (✅ finals) share it so failure logging and intent
@@ -142,10 +143,22 @@ pub async fn retire_live(
 ) {
     if let Some(mid) = live_mid.take() {
         if let Some((chat, _)) = live_dest.take() {
-            if s.tg.delete_msg(chat, mid).await {
-                return;
-            }
-            let _ = s.tg.try_edit_msg(chat, mid, "✅ done", None).await;
+            // Bounded like every other live-card op above: delete_msg
+            // (10s) + try_edit_msg (flood-wait sleeps) would else park
+            // the watcher inside finalize past the 2s tick, stalling
+            // settle retire + /cancel handoff. One bounded attempt total
+            // — a transient failure just leaves the fold for the next
+            // turn's adopt, never a parked finalize.
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
+                async {
+                    if s.tg.delete_msg(chat, mid).await {
+                        return;
+                    }
+                    let _ = s.tg.try_edit_msg(chat, mid, "✅ done", None).await;
+                },
+            )
+            .await;
         }
     } else {
         live_dest.take();

@@ -15,14 +15,22 @@ pub async fn event_task(s: AppState) {
     let mut fails: u64 = 0;
     loop {
         let start = tokio::time::Instant::now();
-        match run_stream(&s).await {
-            Ok(reason) => println!("[events] resubscribe ({reason})"),
-            Err(e) => eprintln!(
-                "[events] stream error: {}",
-                crate::types::mask_home(&e.to_string())
-            ),
-        }
-        if start.elapsed() < Duration::from_secs(10) {
+        let failed = match run_stream(&s).await {
+            Ok(reason) => {
+                println!("[events] resubscribe ({reason})");
+                false
+            }
+            Err(e) => {
+                eprintln!(
+                    "[events] stream error: {}",
+                    crate::types::mask_home(&e.to_string())
+                );
+                true
+            }
+        };
+        // Slow failures must still back off: resetting on any long cycle
+        // retries a sick herdr every ~30s with a full reconcile each time.
+        if failed || start.elapsed() < Duration::from_secs(10) {
             fails += 1;
         } else {
             fails = 0;

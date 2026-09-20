@@ -68,6 +68,15 @@ pub async fn recover_pending(s: &AppState) {
     for (pane, pp) in entries {
         if !recoverable(pp.started_unix, now) {
             println!("[recover] dropping stale {pane}");
+            // Ownership-guarded like the shell/gone paths below: a fresh
+            // resubmit racing boot owns the slot — our stale copy must
+            // neither report its drop nor wipe the live intent.
+            if !s
+                .pending_matches(&pane, pp.chat, pp.thread, &pp.prompt)
+                .await
+            {
+                continue;
+            }
             // Delivery-gated clear (gone/shell parity below): wiping the
             // intent on a Telegram outage loses the reply forever with no
             // notice. Bounded by `stale_drop_should_clear` (7d cap) so a
@@ -166,6 +175,15 @@ pub async fn recover_pending(s: &AppState) {
                                 }
                                 // Undelivered notices keep their intent: wiping
                                 // it on a Telegram outage loses the reply forever.
+                                // Ownership-guarded (quiet-shell parity above): a
+                                // resubmit racing boot owns the slot — clearing
+                                // our stale copy would wipe its live intent.
+                                if !s
+                                    .pending_matches(&pane, pp.chat, pp.thread, &pp.prompt)
+                                    .await
+                                {
+                                    continue;
+                                }
                                 if report(
                                     s,
                                     pp.chat,
@@ -192,6 +210,16 @@ pub async fn recover_pending(s: &AppState) {
                             }
                         }
                     } else {
+                        // Same ownership guard: a resubmit racing boot owns
+                        // the slot — reporting our stale copy as "gone"
+                        // then wiping its intent loses the reply with a
+                        // bogus notice.
+                        if !s
+                            .pending_matches(&pane, pp.chat, pp.thread, &pp.prompt)
+                            .await
+                        {
+                            continue;
+                        }
                         if report(
                             s,
                             pp.chat,

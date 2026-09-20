@@ -62,8 +62,7 @@ impl State {
         } else {
             false
         };
-        if aborted && (self.job_live(pane).await || self.pending.lock().await.contains_key(pane))
-        {
+        if aborted && (self.job_live(pane).await || self.pending.lock().await.contains_key(pane)) {
             self.start_typing(pane).await;
         }
     }
@@ -86,8 +85,7 @@ impl State {
         };
         // Successor won the race after our check: re-mint so the abort
         // above is a blip, not a dark pane.
-        if aborted && self.job_live(pane).await
-        {
+        if aborted && self.job_live(pane).await {
             self.start_typing(pane).await;
         }
     }

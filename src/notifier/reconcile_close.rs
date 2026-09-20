@@ -34,6 +34,29 @@ pub(crate) async fn close_dead_pane(s: &AppState, pane: &str) -> bool {
     ) {
         return true;
     }
+    // Pending race gate (before the blind clear below): a submit landing
+    // during the close RPC above owns the pane now — cancelling would wipe
+    // its fresh intent and the CAS restore would resurrect the corpse over
+    // the vacancy. Fresh (or settled-away) slot skips the retire; the new
+    // watcher's own path serves the reply.
+    match &owed {
+        Some(pp) => {
+            if !s
+                .pending_matches(pane, pp.chat, pp.thread, &pp.prompt)
+                .await
+            {
+                return true;
+            }
+        }
+        None => {
+            if s.pending.lock().await.contains_key(pane) {
+                return true;
+            }
+        }
+    }
+    // Strip dead ⛔ buttons (clear_pane drops tracking without
+    // stripping); contention-silent via shared helper.
+    crate::handlers::dialog::resolve_cards_unless_held(s, pane).await;
     s.cancel_jobs_for_quiet(pane).await;
     // Final generation gate: a remint slipping in during the cancel
     // awaits above keeps its waiters/guards/debounce — clear only the

@@ -24,9 +24,6 @@ const CHROME_MARKERS: &[&str] = &[
     "┃", // TUI frame
     "╹", // frame
     "╻", // frame
-    "─", // turn-separator rule
-    "━", // rule
-    "═", // rule
     "▣", // status card
     "⬝", // bullet
     "⠋", // spinner
@@ -103,6 +100,17 @@ const CHROME_PREFIXES: &[&str] = &[
     "[alert]",
 ];
 
+/// Full-width box-rule turn separator (segment::is_rule parity, kept
+/// local to avoid a filter↔segment module cycle): only a full rule is
+/// chrome — a lone ─/━/═ inside prose is content.
+fn is_rule_line(line: &str) -> bool {
+    let t = line.trim();
+    t.chars().count() >= 8
+        && t.chars()
+            .all(|c| c.is_whitespace() || matches!(c, '─' | '━' | '═' | '╍'))
+        && t.contains(['─', '━', '═', '╍'])
+}
+
 /// Spinner braille frames (⠋⠙⠹… / ⡿⣟⣯…) — pure progress, never content.
 fn is_spinner(line: &str) -> bool {
     let t = line.trim();
@@ -141,6 +149,11 @@ pub fn is_chrome(line: &str) -> bool {
     // tail and let stale turns resurface as the "answer".
     if super::notices::is_provider_failure_line(line) {
         return false;
+    }
+    // Full-width box rules are chrome only as a full rule (segment parity:
+    // a lone ─ in prose like `foo ─ bar` is content, never chrome).
+    if is_rule_line(line) {
+        return true;
     }
     if is_spinner(line) {
         return true;
@@ -191,9 +204,14 @@ pub fn deframe(line: &str) -> String {
 
 /// In blocked dialogs, '←' heads the requested action or header (← Access ...,
 /// ← ☐ Partial ...), never tool echoes, so it survives as content.
+/// Numbered ❯ options (❯ 1. foo) survive too — segment keeps them in the
+/// same dialog block, so filtering them here would empty the question.
 pub fn is_dialog_chrome(line: &str) -> bool {
     let t = line.trim();
     if t.starts_with('←') {
+        return false;
+    }
+    if super::segment::is_numbered_option_line(line) {
         return false;
     }
     is_chrome(line)

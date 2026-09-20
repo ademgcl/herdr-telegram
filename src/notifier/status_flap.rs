@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 /// are legitimate sampled completions.
 pub(crate) const FLAP_WINDOW_SECS: u64 = 15;
 
-/// Pure verdict (tested): collapse rapid done↔idle oscillation up front —
-/// a perpetual fast flap suppresses forever by design (it never did work
-/// between samples). Slow sampled bounces are legitimate completions.
+/// Pure verdict (tested): collapse rapid done↔idle oscillation up front.
+/// Time-bounded: the caller leaves last_change untouched on collapse, so
+/// a perpetual fast flap goes quiet for at most one window, never forever.
+/// Slow sampled bounces are legitimate completions.
 pub(crate) fn collapse_flap(
     old: Option<&str>,
     new_status: &str,

@@ -102,13 +102,10 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
             // Row-miss is shell only with confirmation (watchdog parity
             // in `titles::sync_titles_with`): a transient `agent.list`
             // dropout over a live agent must refuse, never write herdr
-            // under the wrong kind's chrome rules. Boot (no last kind)
-            // still defaults shell — same as the watchdog.
+            // under the wrong kind's chrome rules — boot included.
             let kind = match agents.iter().find(|a| a.pane == pane) {
                 Some(a) => a.kind.clone(),
-                None if s.topics.kind_changed(&pane, "shell")
-                    && !super::shell::confirmed_shell(&s, &pane).await =>
-                {
+                None if !super::shell::confirmed_shell(&s, &pane).await => {
                     s.tg.send_msg(chat, thread, STATE_READ_ERR, None).await;
                     return;
                 }

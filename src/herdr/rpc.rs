@@ -77,12 +77,14 @@ pub fn is_not_found(msg: &str) -> bool {
         || m.contains("unknown pane")
         || m.contains("unknown_pane")
 }
-/// Timeout classifier (single source): herdr timeout wording varies in
-/// case (`timed out` / `Timed out`), so match case-insensitively. Used by
-/// the visible-fallback guards below — a missed match doubles a
-/// sick-herdr read to ~60s on the path budgeted to stay ~30s.
+/// Timeout classifier (single source): herdr timeout wording varies
+/// (`timed out` / `Timed out` / `timeout` / `deadline exceeded`), so match
+/// case-insensitively on the shared stem. Used by the visible-fallback
+/// guards below — a missed match doubles a sick-herdr read to ~60s on
+/// the path budgeted to stay ~30s.
 pub fn is_timeout(msg: &str) -> bool {
-    msg.to_lowercase().contains("timed out")
+    let m = msg.to_lowercase();
+    m.contains("timed out") || m.contains("timeout") || m.contains("deadline")
 }
 /// Alternate-screen fallback verdict (single source): blocked/working
 /// panes reject `recent_unwrapped`, so readers fall back to `visible`.

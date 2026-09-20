@@ -219,14 +219,15 @@ impl TelegramClient {
 
     /// True when a Telegram error means the token is dead (revoked/
     /// invalid), never a transient fault. Matches the `Unauthorized`
-    /// description Telegram sends for bad tokens and the `Not Found`
-    /// description it sends for any method against a revoked/malformed
-    /// token (HTTP 404 — the revoked path arrives as 401, the deleted
-    /// path as 404, both are certain-death). Never a bare `"401"`
-    /// substring, which also appears in retry intervals, message text,
-    /// and chat ids and would FATAL-exit a healthy daemon.
+    /// description Telegram sends for bad tokens and the bare `Not Found`
+    /// body it sends for a deleted/revoked token (HTTP 404). The bare
+    /// match is deliberate: contextual "…not found" (message/thread/chat
+    /// corpses) must never FATAL-exit a healthy daemon into a stop.
     pub(crate) fn is_unauthorized(msg: &str) -> bool {
-        msg.contains("Unauthorized") || msg.contains("unauthorized") || msg.contains("Not Found")
+        msg.contains("Unauthorized")
+            || msg.contains("unauthorized")
+            || msg.trim() == "Not Found"
+            || msg.contains(": Not Found")
     }
     /// Fire-and-forget menu registration: the menu persists server-side
     /// once set, so a blip at boot must not fail the boot (fail-dead =

@@ -38,9 +38,9 @@ impl TopicStorage {
         }
     }
 
-    /// One-time heal for DM-era orphans: `last_msgs` without a mapping
+    /// One-time heal for orphans: `last_msgs` without a mapping
     /// is write-only (only topic resets read it). Called at boot in
-    /// DM mode only — forum mode keeps unmapped entries until remap.
+    /// every mode — DM→forum switches orphan the same way.
     pub fn prune_orphan_msgs(&self) {
         let mut s = self.lock();
         let orphans: Vec<String> = s

@@ -38,12 +38,18 @@ pub(crate) async fn handle_keys_arm(
             }
         }
     }
-    s.runwait.lock().await.remove(&(chat, thread));
-    s.typewait.lock().await.remove(&(chat, thread));
-    s.keywait
+    s.runwait
         .lock()
         .await
-        .insert((chat, thread), (pane.to_string(), Instant::now()));
+        .remove(&super::forum::waiter_key(chat, thread));
+    s.typewait
+        .lock()
+        .await
+        .remove(&super::forum::waiter_key(chat, thread));
+    s.keywait.lock().await.insert(
+        super::forum::waiter_key(chat, thread),
+        (pane.to_string(), Instant::now()),
+    );
     // No arm-time focus: focus follows successful SENDS only (an
     // abandoned or expired waiter must not pin routing at arm time).
     s.tg.edit_msg(
@@ -78,12 +84,18 @@ pub(crate) async fn handle_run_arm(
         s.forget_target(chat, msg_id).await;
         return;
     }
-    s.keywait.lock().await.remove(&(chat, thread));
-    s.typewait.lock().await.remove(&(chat, thread));
-    s.runwait
+    s.keywait
         .lock()
         .await
-        .insert((chat, thread), (ws.to_string(), Instant::now()));
+        .remove(&super::forum::waiter_key(chat, thread));
+    s.typewait
+        .lock()
+        .await
+        .remove(&super::forum::waiter_key(chat, thread));
+    s.runwait.lock().await.insert(
+        super::forum::waiter_key(chat, thread),
+        (ws.to_string(), Instant::now()),
+    );
     let label = ws_label(&spaces, ws);
     s.tg.edit_msg(
         chat,

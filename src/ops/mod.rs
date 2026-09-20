@@ -10,6 +10,7 @@ mod console;
 mod launchd;
 mod mask;
 pub mod proc;
+mod proc_kill;
 
 pub(crate) use cmd::rotate_log_if_huge;
 pub(crate) use mask::mask_line as mask_display_line;

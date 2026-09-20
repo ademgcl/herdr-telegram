@@ -30,7 +30,9 @@ pub async fn handle_unchanged(
         let mut shown = send.nav.clone();
         shown.extend(send.confirm.iter().cloned());
         let sent = shown.join("+");
-        let text = if parse_options(before).is_empty() {
+        // Fresh `after`, never stale `before`: a resumed turn (working
+        // prose) must not claim the question is still up.
+        let text = if parse_options(after).is_empty() {
             format!("⌨️ sent {sent} — check the pane")
         } else {
             format!(
@@ -47,10 +49,11 @@ pub async fn handle_unchanged(
         return;
     }
     // Stuck on the same dialog: converge the tapped card itself back to
-    // live buttons (edit in place, never a fresh post — nothing new to
-    // buzz). A failed edit falls back to one fresh card with buttons;
-    // anything else keeps the slot for the heal below.
-    let (q, opts) = live_card(before);
+    // live buttons from the FRESH read (before is seconds stale), edit in
+    // place, never a fresh post — nothing new to buzz. A failed edit
+    // falls back to one fresh card with buttons; anything else keeps
+    // the slot for the heal below.
+    let (q, opts) = live_card(after);
     let text = blocked_card_text(&q, &opts);
     let kb = Some(blocked_kb(pane, &opts));
     match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {

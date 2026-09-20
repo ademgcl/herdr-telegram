@@ -71,14 +71,18 @@ impl TopicManager {
             .len()
     }
 
+    fn is_creating(&self, pane: &str) -> bool {
+        self.creating
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(pane)
+    }
+
     /// Single-lock compare-and-delete (storage guard): only drops when
     /// the thread still matches — a stale probe must never delete a
-    /// fresh remint. Aux kind memory dies with the mapping (a remint
-    /// must re-observe, never inherit a stale flip; dead panes must not
-    /// accumulate here unbounded). `creating` is deliberately UNTOUCHED:
-    /// a racing ensure may hold it mid-RPC (its CreatingGuard RAII owns
-    /// the lifecycle) — clearing here would let a second ensure claim
-    /// and double-mint an orphan topic.
+    /// fresh remint. Aux kind memory dies with the mapping; `creating`
+    /// is UNTOUCHED (a racing ensure may hold it mid-RPC — clearing
+    /// here would let a second ensure claim and double-mint an orphan).
     pub fn remove_mapping_if_thread(&self, pane: &str, thread: i64) -> bool {
         if !self.storage.remove_if_thread(pane, thread) {
             return false;
@@ -106,10 +110,7 @@ impl TopicManager {
 
     /// Ensure the pane's topic exists and return its thread. New topics
     /// open under the herdr pane id; the watchdog's 1:1 title sync
-    /// renames to the pane label when one is set. Manual renames are
-    /// never overwritten blindly — they flow back as pane labels
-    /// (`forum_topic_edited` → `pane.rename`), and the stored title
-    /// absorbs our own sync echoes.
+    /// renames to the pane label, manual renames flow back as labels.
     ///
     /// Plus prune signal: true when a just-minted mapping was pruned
     /// this call (a human delete raced the create — caller retires its
@@ -132,10 +133,8 @@ impl TopicManager {
         if let Some(t) = self.storage.get_thread(pane) {
             return (Some(t), false);
         }
-        // Single-flight: a concurrent ensure for this same new pane may
-        // already be creating. Loser waits up to ~20s (winner budget:
-        // 15s timeout × retries + flood-waits); early-None just defers
-        // to the next tick, never double-mints.
+        // Single-flight loser: wait for the winner (early-None defers
+        // to the next tick, never double-mints).
         if !self
             .creating
             .lock()
@@ -151,6 +150,11 @@ impl TopicManager {
                 }
                 if let Some(t) = self.storage.get_thread(pane) {
                     return (Some(t), false);
+                }
+                // Winner failed fast (guard dropped, no thread): stop
+                // idling the ~20s budget; the next tick re-claims + mints.
+                if !self.is_creating(pane) {
+                    break;
                 }
             }
             return (self.storage.get_thread(pane), false);
@@ -240,11 +244,8 @@ impl TopicManager {
     }
 
     /// Sync topic: ensure the pane's topic exists (creation stamps the
-    /// kind icon; flips converge on the watchdog tick). Status is not
-    /// reflected on the icon — it surfaces in cards and the typing
-    /// indicator instead. Returns the thread plus prune signal: true
-    /// when the mapping was pruned this call (caller retires its dialog
-    /// generation — every call site does).
+    /// kind icon; flips converge on the watchdog tick). Returns the
+    /// thread and a prune flag for dialog-guard call sites.
     pub async fn sync_topic_prune(
         &self,
         pane: &str,

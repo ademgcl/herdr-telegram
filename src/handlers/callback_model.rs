@@ -92,8 +92,7 @@ pub(crate) async fn handle_model_tap(
     // queued taps must not both paint progress with last-writer-wins on
     // the terminal card.
     if s.model_held(pane).await {
-        s.tg
-            .send_msg(chat, thread, crate::ui::TAP_MODEL_IN_FLIGHT, None)
+        s.tg.send_msg(chat, thread, crate::ui::TAP_MODEL_IN_FLIGHT, None)
             .await;
         return;
     }
@@ -128,8 +127,7 @@ pub(crate) async fn handle_model_tap(
             // Routing follows delivery (M:list parity above): a deleted
             // card (edit_gone) must not pin DM focus/routing to a dead
             // msg_id.
-            if s
-                .tg
+            if s.tg
                 .try_edit_msg(
                     chat,
                     msg_id,

@@ -51,7 +51,10 @@ pub(crate) async fn inspect_pane(s: &AppState, pane: &str) -> String {
     // Fail-closed on sick herdr: unknown kind/status read stale, never a
     // healthy `shell`/`ready` (that fakes a live shell over an outage).
     let kind = agent.as_ref().map(|a| a.kind.as_str()).unwrap_or("?");
-    let status = agent.as_ref().map(|a| a.status.as_str()).unwrap_or("? (stale)");
+    let status = agent
+        .as_ref()
+        .map(|a| a.status.as_str())
+        .unwrap_or("? (stale)");
     let space = pf.map(|f| ws_label(&spaces, &f.ws)).unwrap_or("?");
     let multi = !tab_id.is_empty()
         && tab_id != "-"

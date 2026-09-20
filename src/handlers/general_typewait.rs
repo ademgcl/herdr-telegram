@@ -84,13 +84,22 @@ pub(crate) async fn probe_typewait(
             ProbeOut::Handled
         }
         TypewaitProbe::StaleShell => {
-            s.typewait.lock().await.remove(&(chat, thread_id));
+            // Normalized (forum::waiter_key parity): General None and
+            // Some(1) are one conversation — a raw remove would leave
+            // the armed key behind to brick later input.
+            s.typewait
+                .lock()
+                .await
+                .remove(&super::forum::waiter_key(chat, thread_id));
             s.tg.send_msg(chat, thread_id, crate::ui::STALE_TYPEWAIT_SHELL, None)
                 .await;
             ProbeOut::Handled
         }
         TypewaitProbe::DeadPane => {
-            s.typewait.lock().await.remove(&(chat, thread_id));
+            s.typewait
+                .lock()
+                .await
+                .remove(&super::forum::waiter_key(chat, thread_id));
             ProbeOut::Degraded
         }
     }

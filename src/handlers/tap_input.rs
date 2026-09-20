@@ -37,7 +37,6 @@ impl std::fmt::Display for TypeError {
 /// buttons.
 pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeError> {
     let socket = &s.cfg.socket;
-    let before = read_screen_visible(socket, pane, 30).await;
     // Own the card through send + verify: a same-`blocked` observation
     // mid-sleep must not post a duplicate card or race the baseline.
     // Single-flight like button taps: concurrent types interleave.
@@ -59,6 +58,11 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
         }
         _ => {}
     }
+    // Fresh snapshot AFTER the claim + status gate: the options gate and
+    // the send below must share one baseline, or a dialog turnover in the
+    // window types the answer into the wrong dialog (button path re-reads
+    // live post-claim; typed path must too).
+    let before = read_screen_visible(socket, pane, 30).await;
     // 1:1 with the card (which hides Type on option dialogs): free text
     // has nowhere to land there — typed keys + Enter can confirm the
     // wrong highlight. Refuse before sending anything; a stale waiter
@@ -131,12 +135,8 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
     // sibling waiters is live work — dropping it for a refused arm
     // loses the command and misroutes the next message as a prompt.
     // Same-pane re-arms refresh the instant and proceed.
-    let occupant = s
-        .typewait
-        .lock()
-        .await
-        .get(&(chat, thread))
-        .map(|(p, _)| p.clone());
+    let key = super::forum::waiter_key(chat, thread);
+    let occupant = s.typewait.lock().await.get(&key).map(|(p, _)| p.clone());
     if let Some(other) = occupant
         && other != pane
     {
@@ -153,15 +153,15 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
     }
     // Exclusive waiter: drop sibling run/key waiters for this key so
     // the next message types instead of running.
-    s.runwait.lock().await.remove(&(chat, thread));
-    s.keywait.lock().await.remove(&(chat, thread));
-    s.typewait.lock().await.insert(
-        (chat, thread),
-        (pane.to_string(), std::time::Instant::now()),
-    );
-    let mid = s
-        .tg
-        .send_silent(
+    let key = super::forum::waiter_key(chat, thread);
+    s.runwait.lock().await.remove(&key);
+    s.keywait.lock().await.remove(&key);
+    s.typewait
+        .lock()
+        .await
+        .insert(key, (pane.to_string(), std::time::Instant::now()));
+    let mid =
+        s.tg.send_silent(
             chat,
             thread,
             "⌨️ type your answer as the next message (⏎ sends it)",
@@ -174,7 +174,8 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
 /// text as a shell command in-topic, keywait sends it as keys to the pane
 /// (agent keys when it holds an agent, pane keys otherwise).
 pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: &str) -> bool {
-    if let Some((ws, at)) = s.runwait.lock().await.remove(&(chat, thread)) {
+    let key = super::forum::waiter_key(chat, thread);
+    if let Some((ws, at)) = s.runwait.lock().await.remove(&key) {
         // Fail-closed expiry at consume (not just the 60s hygiene tick):
         // a corpse waiter firing arbitrarily later would execute stale
         // input as a shell command. Swallowed with a notice, never run.
@@ -194,7 +195,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
     // peek and the keys send must win — get-then-remove sent keys after
     // a cancel. Stay-armed paths below re-insert with the ORIGINAL
     // instant (never re-stamp now, which would immortalize the waiter).
-    if let Some((pane, at)) = s.keywait.lock().await.remove(&(chat, thread)) {
+    if let Some((pane, at)) = s.keywait.lock().await.remove(&key) {
         // Same corpse bound for keys: stale keys executing into a live
         // session is the dangerous half of waiter staleness.
         if crate::state::guard::claim_stale(
@@ -211,7 +212,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         // until it lands. The waiter re-arms — the retry is just
         // sending the message again (a stale corpse self-evicts here).
         if s.block_held(&pane).await || s.model_held(&pane).await {
-            s.keywait.lock().await.insert((chat, thread), (pane, at));
+            s.keywait.lock().await.insert(key, (pane, at));
             s.tg.send_msg(chat, thread, crate::ui::TAP_MODEL_IN_FLIGHT, None)
                 .await;
             return true;
@@ -242,7 +243,7 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                         // parity) — the corpse bound above evicts it, and
                         // consuming here would silently reroute the next
                         // message instead of repeating the visible error.
-                        s.keywait.lock().await.insert((chat, thread), (pane, at));
+                        s.keywait.lock().await.insert(key, (pane, at));
                         s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_TARGET, None)
                             .await;
                         return true;
@@ -250,8 +251,10 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
                     Err(_) => {
                         // Double outage: fail-closed — re-arm with the
                         // original instant, refuse visibly, never consume
-                        // on an ambiguous read.
-                        s.keywait.lock().await.insert((chat, thread), (pane, at));
+                        // on an ambiguous read. Normalized key (the
+                        // upfront consume above): a raw re-insert would
+                        // fork a second entry beside the original.
+                        s.keywait.lock().await.insert(key, (pane, at));
                         s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                             .await;
                         return true;

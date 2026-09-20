@@ -39,6 +39,15 @@ fn test_is_unauthorized_matches_token_death_only() {
     assert!(!TelegramClient::is_unauthorized(
         "message to edit not found"
     ));
+    assert!(!TelegramClient::is_unauthorized(
+        "Bad Request: message thread not found"
+    ));
+    assert!(!TelegramClient::is_unauthorized(
+        "Bad Request: Message thread not found"
+    ));
+    assert!(!TelegramClient::is_unauthorized(
+        "Bad Request: chat not found"
+    ));
 }
 
 #[test]

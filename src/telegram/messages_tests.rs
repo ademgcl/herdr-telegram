@@ -34,10 +34,25 @@ fn test_edit_fatal_errors_fail_fast_not_retried() {
             !TelegramClient::is_transient_msg(fatal),
             "fatal must fail fast: {fatal}"
         );
+    }
+    // Token death needs no gone-card (handled at the session layer);
+    // rights loss without a gone thread keeps the slot for retry.
+    for fatal in ["Unauthorized", "Forbidden: CHAT_ADMIN_REQUIRED"] {
         assert!(
             !super::edit_gone(fatal),
             "fatal needs no gone-card: {fatal}"
         );
+    }
+    // Kicked / chat-gone means the card is definitely uneditable:
+    // callers must post fresh (then prune) instead of retrying a corpse
+    // edit every tick forever.
+    for gone in [
+        "Forbidden: bot was kicked from the group chat",
+        "Forbidden: bot is not a member of the chat",
+        "Bad Request: chat not found",
+        "Bad Request: CHAT_NOT_FOUND",
+    ] {
+        assert!(super::edit_gone(gone), "gone must retire: {gone}");
     }
     // Transients still retry through the gate.
     for t in ["Internal Server Error", "Bad Gateway", "timed out"] {

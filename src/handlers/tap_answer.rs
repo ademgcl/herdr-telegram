@@ -3,7 +3,6 @@ use super::tap_keys::{TapCall, tap_keys};
 use super::tap_refresh::delayed_refresh;
 use crate::{
     handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card},
-    herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
 use serde_json::Value;
@@ -43,13 +42,13 @@ pub async fn answer_tap(
     // contended tap must not eat the waiter) and only on pane match —
     // DM shares one (chat,None) key across panes.
     {
+        // Normalized (forum::waiter_key parity): a tap from the General
+        // panel (thread Some(1)) must meet an arm keyed None, or the
+        // stale waiter eats the next message.
+        let wk = super::forum::waiter_key(chat, thread);
         let mut tw = s.typewait.lock().await;
-        if tw
-            .get(&(chat, thread))
-            .map(|(p, _)| p == pane)
-            .unwrap_or(false)
-        {
-            tw.remove(&(chat, thread));
+        if tw.get(&wk).map(|(p, _)| p == pane).unwrap_or(false) {
+            tw.remove(&wk);
         }
     }
     // Stale-card identity gate: turnover repoints tracking (old card
@@ -83,104 +82,7 @@ pub async fn answer_tap(
     };
     match call {
         TapCall::Unknown => {
-            // Narrowed/turned-over dialog: refresh the card in place with
-            // the live option set instead of stranding dead buttons. But
-            // a stale tap on a LIVE pane must strip, never ghost: posting
-            // blocked buttons for working output invites blind taps (the
-            // gate already refuses them, but the card must not offer).
-            // Fail-closed: an unreadable status posts no buttons and no
-            // buzz — an outage must never mint live buttons from a guess.
-            let live_blocked = match get_agent(&s.cfg.socket, pane).await {
-                Ok(a) => a.status == "blocked",
-                Err(_) => {
-                    s.tg.strip_buttons(chat, msg_id).await;
-                    s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
-                        .await;
-                    return;
-                }
-            };
-            if !live_blocked {
-                s.blocked_sig.lock().await.remove(pane);
-                let no_kb = Some(Value::Array(Vec::new()));
-                s.tg.edit_msg(
-                    chat,
-                    msg_id,
-                    &format!("↩️ already moved on [{pane}] — buttons removed"),
-                    no_kb,
-                )
-                .await;
-                s.remember(chat, Some(msg_id), pane).await;
-                // Sibling surfaces (DM owners) may still show this dead
-                // dialog with live buttons — the heal below resolves them.
-                delayed_refresh(s, pane).await;
-                return;
-            }
-            let screen =
-                read_screen_visible(&s.cfg.socket, pane, crate::handlers::dialog::DIALOG_READ_LINES)
-                    .await;
-            if screen.is_empty() {
-                // Edit in place (no fresh-message accumulation): every
-                // other tap arm converges the tapped card via edit first.
-                // Fresh post only when the card is definitely gone
-                // (edit_gone parity with Resumed/NewDialog) — transient
-                // keeps the slot for the heal below.
-                let no_kb = Some(Value::Array(Vec::new()));
-                match s
-                    .tg
-                    .try_edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, no_kb)
-                    .await
-                {
-                    Ok(()) => {
-                        s.remember(chat, Some(msg_id), pane).await;
-                    }
-                    Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
-                        let mid =
-                            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
-                                .await;
-                        s.remember(chat, mid, pane).await;
-                        // Unverifiable tap keeps no buttons: heal re-renders below.
-                        s.tg.strip_buttons(chat, msg_id).await;
-                    }
-                    Err(_) => {
-                        s.tg.strip_buttons(chat, msg_id).await;
-                    }
-                }
-            } else {
-                let (q, opts) = live_card(&screen);
-                let text = format!(
-                    "⚠️ that button expired — current question:\n\n{}",
-                    blocked_card_text(&q, &opts)
-                );
-                let kb = Some(blocked_kb(pane, &opts));
-                match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
-                    Ok(()) => {
-                        s.blocked_sig
-                            .lock()
-                            .await
-                            .insert(pane.to_string(), dialog_sig(&screen));
-                        s.remember(chat, Some(msg_id), pane).await;
-                        // This card is current — strip sibling surfaces.
-                        crate::handlers::dialog::settle_card(s, pane, chat, msg_id).await;
-                    }
-                    Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
-                        if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
-                            s.blocked_sig
-                                .lock()
-                                .await
-                                .insert(pane.to_string(), dialog_sig(&screen));
-                            s.remember(chat, Some(mid), pane).await;
-                            // Settle the fresh surface; the tapped card may be
-                            // untracked (pre-restart post) — strip it too.
-                            crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
-                            s.tg.strip_buttons(chat, msg_id).await;
-                        }
-                    }
-                    Err(_) => {
-                        s.tg.strip_buttons(chat, msg_id).await;
-                    }
-                }
-            }
-            delayed_refresh(s, pane).await;
+            super::tap_unknown::handle_unknown(s, chat, msg_id, thread, pane).await;
         }
         TapCall::KeysFailed => {
             let mid =
