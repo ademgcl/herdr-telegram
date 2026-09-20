@@ -31,20 +31,38 @@ pub async fn run_shell_fallback(s: &AppState, chat: i64, pane: String, text: &st
             status: a.status,
             ws: a.ws,
         }),
-        Err(_) => match list_agents(&s.cfg.socket).await {
-            Err(_) => {
+        Err(e) => {
+            // Fail-closed: only a confirmed-dead lookup reads as shell —
+            // a blip (timeout/unreachable) retries instead of injecting
+            // shell text into live agent work. A partial-but-Ok
+            // agent.list omission must never prove shell either.
+            if crate::herdr::rpc::should_retry_agent_lookup(&e.to_string()) {
                 s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                     .await;
                 return;
             }
-            Ok(rows) => rows.into_iter().find(|r| r.pane == p),
-        },
+            match list_agents(&s.cfg.socket).await {
+                Err(_) => {
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                }
+                Ok(rows) => rows.into_iter().find(|r| r.pane == p),
+            }
+        }
     };
     match row {
         Some(row) => {
             enqueue_prompt(s.clone(), chat, None, row, text.to_string()).await;
         }
-        None => run_shell_cmd(s, chat, None, &p, text).await,
+        None => {
+            // Shell-ness is only provable via pane.list: a dropout
+            // between the reads above still slips through without this
+            // (probe_shell_live refuses visibly on gone/unreadable).
+            if probe_shell_live(s, chat, None, &p).await {
+                run_shell_cmd(s, chat, None, &p, text).await;
+            }
+        }
     }
 }
 

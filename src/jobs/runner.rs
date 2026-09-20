@@ -152,11 +152,13 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // /cancel (or a supersede, via the epoch check next iteration)
         // must not wait behind up to 10s of dial.
         if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
-            last_open = Instant::now();
             let opened = tokio::select! {
                 _ = job.cancel.notified() => None,
                 r = EvStream::open_bounded(&s.cfg.socket, &pane, 10) => Some(r),
             };
+            // Count the dial toward the cooldown (a 10s hung dial must
+            // not retry immediately — next attempt 5s after it ends).
+            last_open = Instant::now();
             match opened {
                 None => {
                     cancel_watch(&s, &pane, &job, &mut live).await;
@@ -198,7 +200,13 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 }
             } => match e {
                 Some(w) => w,
-                None => { ev = None; continue; }
+                // Stream death must still run a poll cycle below (a
+                // settle landing exactly on death else waits a full extra
+                // tick per flap) — clear and fall through as output.
+                None => {
+                    ev = None;
+                    WatchEvent::Output
+                }
             },
         };
 

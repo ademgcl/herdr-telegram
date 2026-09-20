@@ -3,10 +3,26 @@ use crate::state::AppState;
 
 /// Waiter outcome: handled (caller returns), resumed-as-prompt (caller
 /// enqueues text as a prompt, never control), or pass-through.
+/// The resume carries the waiter identity so an unreadable re-read can
+/// restore it (DM parity) instead of dropping the answer.
 pub(crate) enum WaitOut {
     Handled,
-    ResumedPrompt,
+    ResumedPrompt(String, std::time::Instant),
     Pass,
+}
+
+/// Resume-identity verdict (pure, tested): the just-removed map value
+/// wins — it is the freshest waiter truth (a concurrent re-arm may have
+/// replaced the snapshot's generation). Falls back to the snapshot only
+/// when the map no longer holds the key (concurrent consume won). Single
+/// source for the resume path so the caller can restore the ORIGINAL
+/// instant on an unreadable re-read instead of dropping the answer.
+pub(crate) fn pick_resume(
+    prev: Option<(String, std::time::Instant)>,
+    wpane: String,
+    at: std::time::Instant,
+) -> (String, std::time::Instant) {
+    prev.unwrap_or((wpane, at))
 }
 
 /// An armed typed-answer waiter wins over every command except the
@@ -87,14 +103,19 @@ pub(crate) async fn consume_typewait(
             WaitOut::Handled
         }
         Err(super::tap::TypeError::Resumed) => {
-            s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+            let key = (chat, Some(thread_id));
+            let prev = s.typewait.lock().await.remove(&key);
             // Resumed between snapshot and send either way: the text
             // becomes a regular prompt, never control and never a second
             // type attempt — the caller enqueues it as a prompt. (Pass
             // here fell through to the blocked fast-path below, which
             // re-tested a stale snapshot and typed twice: a wasted RPC
             // that error-cards on a blip instead of prompting.)
-            WaitOut::ResumedPrompt
+            // Carry the waiter identity (DM parity): an unreadable
+            // re-read restores it with the ORIGINAL instant instead of
+            // dropping the answer.
+            let (wpane, at) = pick_resume(prev, wpane, at);
+            WaitOut::ResumedPrompt(wpane, at)
         }
         Err(e) => {
             s.tg.send_msg(
@@ -109,5 +130,27 @@ pub(crate) async fn consume_typewait(
             .await;
             WaitOut::Handled
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pick_resume_removed_value_wins() {
+        // The just-removed map value is the freshest truth: a
+        // concurrent re-arm replaced the snapshot's generation, so the
+        // caller restores THAT pane+instant, never the stale snapshot.
+        let at = std::time::Instant::now();
+        let later = at + std::time::Duration::from_secs(1);
+        let (p, t) = pick_resume(Some(("w1:p2".into(), later)), "w1:p1".into(), at);
+        assert_eq!(p, "w1:p2");
+        assert_eq!(t, later);
+        // No map value left (concurrent consume won): the snapshot still
+        // carries the answer's waiter identity instead of dropping it.
+        let (p, t) = pick_resume(None, "w1:p1".into(), at);
+        assert_eq!(p, "w1:p1");
+        assert_eq!(t, at);
     }
 }

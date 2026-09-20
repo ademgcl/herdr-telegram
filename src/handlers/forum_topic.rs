@@ -114,17 +114,20 @@ pub(crate) async fn handle_topic_agent_message(
     // `forum_typewait` (split for the 300-line cap).
     match super::forum_typewait::consume_typewait(&s, chat, thread_id, text).await {
         super::forum_typewait::WaitOut::Handled => return,
-        super::forum_typewait::WaitOut::ResumedPrompt => {
-            // Raced resume: answer text must never become control —
-            // a literal "/kill" becomes a prompt (fail-closed). Re-read
-            // the agent (DM parity): the pre-waiter snapshot may be a
-            // stale kind; an unreadable re-read refuses, never enqueues
-            // stale.
-            match get_agent(&s.cfg.socket, pane).await {
+        super::forum_typewait::WaitOut::ResumedPrompt(wpane, armed_at) => {
+            // Raced resume: answer text never becomes control (DM
+            // parity: re-read the WAITER pane — the routing snapshot
+            // may point elsewhere after a re-arm; `pane` prompts wrong).
+            // Unreadable re-read restores the ORIGINAL instant, never drops.
+            match get_agent(&s.cfg.socket, &wpane).await {
                 Ok(fresh) => {
                     enqueue_prompt(s, chat, Some(thread_id), fresh.into(), text.to_string()).await;
                 }
                 Err(_) => {
+                    s.typewait
+                        .lock()
+                        .await
+                        .insert((chat, Some(thread_id)), (wpane, armed_at));
                     s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                 }

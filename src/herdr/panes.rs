@@ -53,7 +53,7 @@ pub async fn read_shell_output(socket: &str, pane: &str, lines: u32) -> Res<Stri
         // A timeout already spent the full RPC budget: falling back
         // doubles a sick-herdr read to ~60s on the settle path. Bound
         // it — the next tick retries.
-        Err(e) if e.to_string().contains("timed out") => Err(e),
+        Err(e) if super::rpc::is_timeout(&e.to_string()) => Err(e),
         Err(_) => {
             let r = rpc(
                 socket,

@@ -9,10 +9,15 @@ pub(crate) fn bare_cmd(cmd: &str) -> &str {
 
 /// Orphan-thread verdict (pure, tested): `true` when a threaded
 /// message maps to nothing — a reset/remint orphan or a user-made
-/// topic, never General traffic (General carries no thread id).
-/// Single source for the refuse below so the shape can never drift.
+/// topic, never General traffic (General carries no thread id; thread
+/// 1 is General when Telegram includes it). Single source for the
+/// refuse below so the shape can never drift.
 pub(crate) fn is_orphan_thread(thread_id: Option<i64>, pane_found: bool) -> bool {
-    thread_id.is_some() && !pane_found
+    match thread_id {
+        // Thread 1 is the General topic — never an orphan.
+        Some(1) | None => false,
+        Some(_) => !pane_found,
+    }
 }
 
 pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
@@ -90,13 +95,17 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     // Inside General topic or non-agent thread:
     // Orphan refuse (status/model parity): a threaded message whose
     // thread maps to nothing is a reset/remint orphan or a user-made
-    // topic — never General traffic (General carries no thread id).
+    // topic — never General traffic (no thread id, or thread 1).
     // General control (`/reset`, `/spawn`, …) must never fire from a
     // corpse replay, and bare prompts must never route with the wrong
     // id for follow-ups. Posted in-thread: dead threads fail the send
     // silently (same as a drop), live ones get guidance (no silent
     // loss). Never falls through to General routing.
-    if is_orphan_thread(thread_id, false) {
+    // Mapped threads returned early above: feed the live lookup into
+    // the verdict (single source) instead of a hardcoded flag, so the
+    // two can never drift apart.
+    let pane_found = thread_id.is_some_and(|th| s.topics.pane_of_thread(th).is_some());
+    if is_orphan_thread(thread_id, pane_found) {
         s.tg.send_msg(chat, thread_id, crate::ui::UNKNOWN_TOPIC, None)
             .await;
         return;
@@ -119,8 +128,9 @@ mod tests {
     fn test_is_orphan_thread_live_only() {
         // Threaded + unmapped (remint orphan / user-made): refuse.
         assert!(is_orphan_thread(Some(7), false));
-        // General (no thread) never refuses, even unmapped.
+        // General (no thread, or thread 1) never refuses, even unmapped.
         assert!(!is_orphan_thread(None, false));
+        assert!(!is_orphan_thread(Some(1), false));
         // Mapped agent/shell threads route to their topic, never refuse.
         assert!(!is_orphan_thread(Some(7), true));
         assert!(!is_orphan_thread(None, true));

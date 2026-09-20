@@ -176,7 +176,16 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // ate it every tick, so long runs posted only
                             // their start card and never the follow-up.
                             let owed = s.pending.lock().await.get(&pane).cloned();
-                            let has_job = s.jobs.lock().await.contains_key(&pane);
+                            // Live-only: a stopped corpse between
+                            // mark_stopped() and map removal must not
+                            // read as an active watcher (else Ignore
+                            // misroutes to CancelJob/RetireVanished).
+                            let has_job = s
+                                .jobs
+                                .lock()
+                                .await
+                                .get(&pane)
+                                .is_some_and(|j| !j.is_stopped());
                             match classify_shell_reuse(was_shell, owed.is_some(), has_job) {
                                 ShellReuse::Ignore => {
                                     s.status

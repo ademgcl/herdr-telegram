@@ -40,6 +40,17 @@ pub fn should_advance_offset(id: u64, off: u64) -> bool {
     id > 0 && id >= off
 }
 
+/// Ack-after-handling (single source for main's poll loop): bump the
+/// offset only past the poison guard above (at-least-once — bumping
+/// before the handler acked a never-handled update on TERM is a silent
+/// prompt loss; a malformed id 0 never advances, so it can't poison).
+pub async fn ack_update(s: &crate::state::AppState, id: u64) {
+    let mut off = s.offset.lock().await;
+    if should_advance_offset(id, *off) {
+        *off = id + 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

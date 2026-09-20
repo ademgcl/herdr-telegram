@@ -19,6 +19,8 @@ mod refresh;
 mod surfaces;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_cards;
 
 pub use options::{has_numbered_options, parse_options};
 pub use refresh::refresh_blocked_card;

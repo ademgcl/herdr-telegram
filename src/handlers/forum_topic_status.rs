@@ -17,6 +17,14 @@ pub(crate) fn topic_guard_allows(
     }
 }
 
+/// Mapping-currency verdict (pure, tested): only the live mapping
+/// thread serves — a reset/remint between any two RPCs drops instead of
+/// editing/sending into the wrong generation. Single source for the
+/// guard + both post-RPC re-validations below so they can never drift.
+pub(crate) fn mapping_current(mapped: Option<i64>, thread_id: i64) -> bool {
+    mapped == Some(thread_id)
+}
+
 /// `/status` in-topic: re-render this pane's identity card in place.
 /// Parity with `notifier/status.rs:98-122` (same builder, same pin slot,
 /// same overwrite-only rule): a divergent format here flaps against the
@@ -27,7 +35,7 @@ pub(crate) async fn handle_status_topic(
     chat: i64,
     thread_id: i64,
     pane: &str,
-    agent: &AgentDetail,
+    _agent: &AgentDetail,
 ) {
     // Forum-only pin slot (router guarantees this, defense-in-depth:
     // thread ids collide across chats — a foreign-chat mid must never
@@ -47,7 +55,7 @@ pub(crate) async fn handle_status_topic(
         return;
     }
     // Stale replay drop: only the live mapping thread serves.
-    if s.topics.all_mappings().get(pane).copied() != Some(thread_id) {
+    if !mapping_current(s.topics.all_mappings().get(pane).copied(), thread_id) {
         return;
     }
     let spaces = crate::herdr::client::list_workspaces(&s.cfg.socket)
@@ -58,22 +66,33 @@ pub(crate) async fn handle_status_topic(
     if crate::handlers::reset::is_resetting() {
         return;
     }
-    if s.topics.all_mappings().get(pane).copied() != Some(thread_id) {
+    if !mapping_current(s.topics.all_mappings().get(pane).copied(), thread_id) {
         return;
     }
-    let space = crate::ui::ws_label(&spaces, &agent.ws);
-    let title_opt = if agent.title.trim().is_empty() {
+    // Re-fetch the agent after the RPC (observe_status parity): a death
+    // or kind flip in the window must not post a stale identity card
+    // over the pin. Fail-closed: an unreadable re-read refuses visibly.
+    let fresh = match crate::herdr::client::get_agent(&s.cfg.socket, pane).await {
+        Ok(a) => a,
+        Err(_) => {
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        }
+    };
+    let space = crate::ui::ws_label(&spaces, &fresh.ws);
+    let title_opt = if fresh.title.trim().is_empty() {
         None
     } else {
-        Some(agent.title.as_str())
+        Some(fresh.title.as_str())
     };
     let text = crate::ui::build_identity_card_text(
-        &agent.kind,
+        &fresh.kind,
         pane,
         space,
-        &agent.status,
+        &fresh.status,
         title_opt,
-        agent.branch.as_deref(),
+        fresh.branch.as_deref(),
     );
     // Overwrite-only (report.rs parity): repeated taps edit the pinned
     // identity card — a fresh post only when it is definitely gone, or
@@ -167,6 +186,15 @@ mod tests {
         // Stale replay (reminted thread) and unmapped pane: never.
         assert!(!topic_guard_allows(Some(1), 1, Some(8), 7));
         assert!(!topic_guard_allows(Some(1), 1, None, 7));
+    }
+
+    #[test]
+    fn test_mapping_current_live_only() {
+        // Live mapping thread serves; remint/unmapped never injects
+        // into the wrong generation.
+        assert!(mapping_current(Some(7), 7));
+        assert!(!mapping_current(Some(8), 7));
+        assert!(!mapping_current(None, 7));
     }
 
     #[test]

@@ -7,6 +7,8 @@ use crate::{
     ui::{chunks, emoji},
 };
 
+pub(crate) use super::spontaneous_gate::{arm_superseded, part_blocked};
+
 /// Per-owner completion for DM multi-owner pushes: complete when at
 /// least one owner received every part. All-or-nothing across ALL
 /// owners reposts to healthy owners up to 3× (15s apart) when one
@@ -35,33 +37,6 @@ pub(crate) fn liveness(live: Option<&Vec<String>>, pane: &str) -> Liveness {
         Some(l) if l.iter().any(|p| p == pane) => Liveness::Allow,
         Some(_) => Liveness::Dead,
     }
-}
-
-/// Settle-arm currency (single source for forum + DM inside-post
-/// re-checks): missing means cancelled, any status/instant mismatch means
-/// superseded. Pure for tests.
-pub(crate) fn arm_superseded(
-    cur: Option<(&str, &std::time::Instant)>,
-    settled: &str,
-    armed_at: &std::time::Instant,
-) -> bool {
-    cur.map(|(st, at)| st != settled || at != armed_at)
-        .unwrap_or(true)
-}
-
-/// DM arm currency (single source for the DM inside-post re-check):
-/// DM mode never inserts debounce arms (status.rs returns before the
-/// forum arm), so a missing arm proceeds — only a present-but-stale
-/// arm aborts. The `last_done` check below still suppresses stale
-/// duplicates when a final retired during the screen RPC. Pure for
-/// tests.
-pub(crate) fn dm_arm_blocks(
-    cur: Option<(&str, &std::time::Instant)>,
-    settled: &str,
-    armed_at: &std::time::Instant,
-) -> bool {
-    cur.map(|(st, at)| st != settled || at != armed_at)
-        .unwrap_or(false)
 }
 
 /// Answer push: the body alone (never a status-word lead), plus the reply
@@ -143,6 +118,13 @@ pub(crate) async fn post_spontaneous_card(
                 return false;
             }
             for part in &parts {
+                // Per-part retarget (finalize parity): a submit landing
+                // during a slow multi-part flood-wait must stop the stale
+                // tail — the pre-loop check alone still posts part 2+
+                // beside the new prompt's turn.
+                if part_blocked(s, pane, settled, armed_at, false).await {
+                    return false;
+                }
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if let Some(m) = mid {
                     landed += 1;
@@ -164,35 +146,24 @@ pub(crate) async fn post_spontaneous_card(
         }
         // No debounce arm is ever inserted in DM mode, so currency is
         // arm-optional (`dm_arm_blocks`): a missing arm proceeds, a
-        // present-but-mismatched arm still aborts.
-        if s.jobs.lock().await.contains_key(pane) {
-            return false;
-        }
-        if let Some(at) = armed_at {
-            let cur = s.debounce.lock().await.get(pane).cloned();
-            if dm_arm_blocks(cur.as_ref().map(|(st, a)| (st.as_str(), a)), settled, &at) {
-                return false;
-            }
-        }
-        if let Some(at) = armed_at
-            && let Some(t) = s.last_done.lock().await.get(pane)
-            && *t > at
-        {
-            return false;
-        }
-        // Moved-on stays silent (§3): PC-side work starting during the
-        // screen/send RPCs owns the pane — a flip to `working` after the
-        // observe must not buzz the stale settle (forum parity: the
-        // settle_check pre-post + retry guards).
-        if super::retry_guard::moved_on(
-            s.status.lock().await.get(pane).map(String::as_str),
-            settled,
-        ) {
+        // present-but-mismatched arm still aborts. Same verdict as the
+        // per-part loop (single source) — Moved-on stays silent (§3).
+        if part_blocked(s, pane, settled, armed_at, true).await {
             return false;
         }
         let mut per_owner = vec![0usize; s.cfg.owners.len()];
+        // Stale-tail stop (forum parity above): break out and fall
+        // through to the complete+stamp logic — an owner completed
+        // before the supersede still stamps, the rest retry next tick.
+        let mut superseded = false;
         for (oi, id) in s.cfg.owners.iter().enumerate() {
             for part in &parts {
+                // Same per-part retarget as the forum branch above (DM
+                // currency: missing arm proceeds, present-but-stale aborts).
+                if part_blocked(s, pane, settled, armed_at, true).await {
+                    superseded = true;
+                    break;
+                }
                 let mid = s.tg.send_msg(*id, None, part, None).await;
                 if let Some(m) = mid {
                     per_owner[oi] += 1;
@@ -201,6 +172,9 @@ pub(crate) async fn post_spontaneous_card(
                     }
                 }
                 s.remember(*id, mid, pane).await;
+            }
+            if superseded {
+                break;
             }
         }
         // Per-owner (not product): one blocked owner must not hold the
@@ -229,57 +203,5 @@ pub(crate) async fn post_spontaneous_card(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dm_complete_per_owner() {
-        // One healthy owner completes despite a blocked one — no
-        // retry-spam to the healthy, no cross-settle repeats.
-        assert!(dm_complete(&[2, 0], 2));
-        assert!(dm_complete(&[1], 1));
-        assert!(dm_complete(&[2, 2], 2));
-        // Nobody whole: partials must not stamp (retry reposts full).
-        assert!(!dm_complete(&[1, 1], 2));
-        assert!(!dm_complete(&[1, 0], 2));
-        assert!(!dm_complete(&[], 1));
-        assert!(!dm_complete(&[0], 0));
-        assert!(!dm_complete(&[], 0));
-    }
-
-    #[test]
-    fn test_liveness_fail_closed() {
-        // Live pane posts; dead pane never re-mints (resurrection);
-        // Err/empty reads post nothing (next tick retries).
-        let live = vec!["w1:p1".to_string(), "w1:p2".to_string()];
-        assert_eq!(liveness(Some(&live), "w1:p1"), Liveness::Allow);
-        assert_eq!(liveness(Some(&live), "w9:p9"), Liveness::Dead);
-        assert_eq!(liveness(None, "w1:p1"), Liveness::Ambiguous);
-        assert_eq!(liveness(Some(&Vec::new()), "w1:p1"), Liveness::Ambiguous);
-    }
-
-    #[test]
-    fn test_arm_superseded_currency() {
-        // Exact arm proceeds; missing means cancelled; any mismatch
-        // (newer arm, status flip) aborts the stale post.
-        let at = std::time::Instant::now();
-        let later = at + std::time::Duration::from_secs(1);
-        assert!(!arm_superseded(Some(("done", &at)), "done", &at));
-        assert!(arm_superseded(None, "done", &at));
-        assert!(arm_superseded(Some(("done", &later)), "done", &at));
-        assert!(arm_superseded(Some(("idle", &at)), "done", &at));
-    }
-
-    #[test]
-    fn test_dm_arm_blocks_missing_arm_proceeds() {
-        // DM mode never inserts debounce arms: missing proceeds so
-        // spontaneous answers actually deliver; a present-but-stale
-        // arm still aborts the superseded post.
-        let at = std::time::Instant::now();
-        let later = at + std::time::Duration::from_secs(1);
-        assert!(!dm_arm_blocks(None, "done", &at));
-        assert!(!dm_arm_blocks(Some(("done", &at)), "done", &at));
-        assert!(dm_arm_blocks(Some(("done", &later)), "done", &at));
-        assert!(dm_arm_blocks(Some(("idle", &at)), "done", &at));
-    }
-}
+#[path = "spontaneous_tests.rs"]
+mod tests;

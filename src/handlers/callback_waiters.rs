@@ -4,7 +4,10 @@
 //! win the next message instead of the tapped one.
 use super::callback_parse::{gone_card, pane_live};
 use crate::{
-    herdr::client::{get_agent, list_panes, list_workspaces, read_agent_output, read_pane_output},
+    herdr::client::{
+        get_agent, list_panes, list_workspaces, read_agent_output, read_agent_visible,
+        read_shell_output,
+    },
     state::AppState,
     ui::{pane_output_kb, ws_label},
 };
@@ -103,9 +106,22 @@ async fn read_output_or_gate(
     agent: bool,
 ) -> Option<String> {
     let res = if agent {
-        read_agent_output(&s.cfg.socket, pane, 120).await
+        // Blocked/working alternate-screen panes reject recent_unwrapped
+        // (topic_read parity): fall back to visible, except confirmed
+        // death (wrong-pane output) and timeouts (doubled RPC budget).
+        match read_agent_output(&s.cfg.socket, pane, 120).await {
+            Ok(out) => Ok(out),
+            Err(e) if crate::herdr::rpc::should_fallback_visible(&e.to_string()) => {
+                read_agent_visible(&s.cfg.socket, pane, 120).await
+            }
+            Err(e) => Err(e),
+        }
     } else {
-        read_pane_output(&s.cfg.socket, pane, 120).await
+        // Pane arm serves shells/alt-screen panes: `read_shell_output`
+        // is the single source for recent_unwrapped→visible (topic_read
+        // parity) with death/timeout guards — a raw pane.read here would
+        // edit HERDR_UNREACHABLE where /read succeeds.
+        read_shell_output(&s.cfg.socket, pane, 120).await
     };
     match res {
         Ok(out) => Some(out),

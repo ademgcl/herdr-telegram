@@ -3,6 +3,24 @@ use super::hygiene::panes_once;
 use crate::{herdr::client::get_agent, state::AppState};
 use std::collections::HashSet;
 
+/// Leave-blocked cleanup verdict (pure, tested): a quit while blocked
+/// must retire the content sig (else a same-content re-block after
+/// re-enter stays silent on the stale match) — otherwise the dead card
+/// locations resolve. Single source for the branch below.
+#[derive(Debug, PartialEq)]
+pub(crate) enum LeaveCleanup {
+    Sig,
+    Cards,
+}
+
+pub(crate) fn leave_cleanup(block_held: bool) -> LeaveCleanup {
+    if block_held {
+        LeaveCleanup::Sig
+    } else {
+        LeaveCleanup::Cards
+    }
+}
+
 /// DM-mode shell flip: no topics exist, but `status` still drives the
 /// limit scanner — a PC-side quit would keep its last agent status
 /// forever and quota words in ordinary shell output would buzz false
@@ -45,11 +63,37 @@ pub(crate) async fn flip_dm_shells(
             }
         }
         if panes.contains(&pane) {
+            // Leave-blocked cleanup (reconcile forum parity): a quit
+            // while blocked must retire its sig/cards, else a
+            // same-content re-block after re-enter stays silent on the
+            // stale sig and dead buttons stay tappable.
+            match leave_cleanup(s.block_held(&pane).await) {
+                LeaveCleanup::Sig => {
+                    s.blocked_sig.lock().await.remove(&pane);
+                }
+                LeaveCleanup::Cards => {
+                    crate::handlers::dialog::resolve_cards(s, &pane).await;
+                }
+            }
             s.status
                 .lock()
                 .await
                 .insert(pane.clone(), "shell".to_string());
             s.clear_limit_episode(&pane).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_leave_cleanup_blocked_retires_sig() {
+        // Quit while blocked retires the sig (a same-content re-block
+        // after re-enter must repost, never stay silent on stale sig);
+        // an unblocked quit resolves the dead card locations instead.
+        assert_eq!(leave_cleanup(true), LeaveCleanup::Sig);
+        assert_eq!(leave_cleanup(false), LeaveCleanup::Cards);
     }
 }

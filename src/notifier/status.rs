@@ -13,9 +13,10 @@ use crate::{
 use std::time::{Duration, Instant};
 
 use super::POST_PROMPT_QUIET_SECS;
-/// done↔idle bounces closer than this are flap (collapsed); slower ones
-/// are legitimate sampled completions.
-const FLAP_WINDOW_SECS: u64 = 15;
+
+#[path = "status_flap.rs"]
+mod flap;
+use flap::{collapse_flap, should_anchor_baseline};
 
 pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: bool, src: &str) {
     // Observation instant for debounce-style suppression: a final stamped
@@ -34,18 +35,8 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     };
 
     // Collapse rapid done <-> idle flap up front — before any fetch,
-    // so oscillation never costs RPCs. Collapsed returns skip the
-    // typing touch below: correct (job-owned keeps watcher typing;
-    // job-less has no task), and a perpetual fast flap suppressing
-    // forever is intended (it never did work between samples).
-    // Slow sampled bounces are legitimate completions: the agent did work
-    // between observations, so they flow through.
-    if ((old.as_deref() == Some("done") && new_status == "idle")
-        || (old.as_deref() == Some("idle") && new_status == "done"))
-        && prev_change
-            .map(|t| t.elapsed() < Duration::from_secs(FLAP_WINDOW_SECS))
-            .unwrap_or(false)
-    {
+    // so oscillation never costs RPCs (see flap::collapse_flap).
+    if collapse_flap(old.as_deref(), new_status, prev_change) {
         println!("[alert] collapsed {old:?}→{new_status} for {pane} ({src})");
         return;
     }
@@ -238,7 +229,11 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         && fresh_body.is_empty()
     {
         println!("[alert] suppressed re-enter {new_status} for {pane} ({src})");
-        s.seen.lock().await.insert(pane.to_string(), screen);
+        // Outage must not wipe the baseline (cards.rs parity): an empty
+        // screen reposts scrollback as fresh on the next tick.
+        if should_anchor_baseline(&screen) {
+            s.seen.lock().await.insert(pane.to_string(), screen);
+        }
         return;
     }
 
@@ -260,7 +255,10 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
         && t.elapsed() < Duration::from_secs(POST_PROMPT_QUIET_SECS)
     {
         println!("[alert] suppressed post-prompt {new_status} for {pane} ({src})");
-        s.seen.lock().await.insert(pane.to_string(), screen);
+        // Same outage guard as above: never anchor an empty screen.
+        if should_anchor_baseline(&screen) {
+            s.seen.lock().await.insert(pane.to_string(), screen);
+        }
         return;
     }
 

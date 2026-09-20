@@ -231,6 +231,13 @@ pub async fn answer_tap(
                                 // strip it too.
                                 crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
                                 s.tg.strip_buttons(chat, msg_id).await;
+                            } else {
+                                // Fresh send failed too (e.g. rights loss
+                                // fails both paths): converge like the
+                                // transient arm — strip + heal instead of
+                                // stranding live buttons with no repair.
+                                s.tg.strip_buttons(chat, msg_id).await;
+                                delayed_refresh(s, pane).await;
                             }
                         }
                         Err(_) => {

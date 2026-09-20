@@ -19,9 +19,12 @@ pub async fn transfer_live(
     thread_id: Option<i64>,
     text: &str,
 ) {
+    // Epoch BEFORE the pending bump (enqueue parity): a finalize
+    // capturing epoch-then-count between them must undercount (safe),
+    // never overcount the entry share into the newcomer's cover.
     *target.dest.lock().await = (chat_id, thread_id);
     *target.prompt.lock().await = text.to_string();
-    *target.pending.lock().await += 1;
     target.epoch.fetch_add(1, Ordering::Relaxed);
+    *target.pending.lock().await += 1;
     s.remember_pending(pane, chat_id, thread_id, text).await;
 }

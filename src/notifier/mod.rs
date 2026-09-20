@@ -10,6 +10,7 @@ pub mod reconcile_tail;
 pub mod reconcile_vanished;
 pub mod retry_guard;
 pub mod spontaneous;
+pub mod spontaneous_gate;
 pub mod status;
 
 /// Single source for the post-prompt quiet window (a final card makes a

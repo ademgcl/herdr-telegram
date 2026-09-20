@@ -81,6 +81,7 @@ impl TelegramClient {
             "bad gateway",
             "service unavailable",
             "gateway timeout",
+            "timeout",
             "timed out",
             "connection reset",
         ]

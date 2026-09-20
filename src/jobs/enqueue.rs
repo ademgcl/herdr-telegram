@@ -39,23 +39,28 @@ pub async fn enqueue_prompt(
         Some(j) => j,
         None => {
             let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-            // Re-check under a fresh lock: a concurrent enqueue may have
-            // won the pane while the baseline read yielded — spawning a
-            // second watcher would double-report every alert.
-            if let Some(j) = s
-                .jobs
-                .lock()
-                .await
-                .get(&pane)
-                .cloned()
-                .filter(|j| !j.is_stopped())
-            {
-                j
-            } else {
-                let j = Job::new(baseline, chat_id, thread_id);
-                s.jobs.lock().await.insert(pane.clone(), j.clone());
+            let j = Job::new(baseline, chat_id, thread_id);
+            // Atomic re-check + claim under ONE lock hold (recover
+            // parity): a concurrent enqueue claiming during the baseline
+            // read wins — adopt it, never spawn a second watcher
+            // (double alerts on every tick).
+            let mut map = s.jobs.lock().await;
+            if let Some(w) = map.get(&pane).cloned().filter(|x| !x.is_stopped()) {
+                w
+            } else if super::recover::claim_watcher(&mut map, &pane, j.clone()) {
+                drop(map);
                 tokio::spawn(watch_job(s.clone(), pane.clone(), j.clone()));
                 j
+            } else {
+                // Lost the atomic race after all: adopt the winner.
+                drop(map);
+                s.jobs
+                    .lock()
+                    .await
+                    .get(&pane)
+                    .cloned()
+                    .filter(|x| !x.is_stopped())
+                    .unwrap_or(j)
             }
         }
     };
@@ -151,12 +156,13 @@ pub async fn enqueue_prompt(
     if job.is_stopped() {
         return;
     }
-    // Delivered: last-wins dest/prompt/epoch, durable intent so a restart
-    // re-arms this watcher instead of eating the reply.
+    // Delivered: last-wins books + durable intent. Epoch BEFORE the
+    // pending bump (settle_books captures epoch-then-count: count-first
+    // overcounts into the newcomer's cover, epoch-first only undercounts).
     *job.dest.lock().await = (req.chat_id, req.message_thread_id);
     *job.prompt.lock().await = req.text.clone();
-    *job.pending.lock().await += 1;
     job.epoch.fetch_add(1, Ordering::Relaxed);
+    *job.pending.lock().await += 1;
     s.set_focus(&pane).await;
     s.remember_pending(&pane, req.chat_id, req.message_thread_id, &req.text)
         .await;
@@ -222,10 +228,8 @@ pub async fn enqueue_prompt(
     }
     if rearm {
         let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
-        // Ownership re-check: a /cancel (or quiet retire) landing during
-        // the submit RPC / baseline read cleared the durable slot — minting
-        // a watcher now would resurrect cancelled work with in-memory
-        // cover but no (or a foreign) intent. Cancel won: drop instead.
+        // Ownership re-check: a /cancel landing during the submit RPC /
+        // baseline read cleared the slot — minting now resurrects it.
         if !s
             .pending_matches(&pane, req.chat_id, req.message_thread_id, &req.text)
             .await

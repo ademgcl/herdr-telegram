@@ -155,6 +155,16 @@ pub(crate) async fn scan_limits(s: &AppState) {
         }
         let thread = s.topics.all_mappings().get(&pane).copied();
         let forum_dest = s.cfg.forum.zip(thread);
+        // Remap-safe (stall.rs parity): a paced reset migrates the topic
+        // mid-run — buzzing the corpse thread fails or lands in the
+        // deleted topic. Forum dests follow the live mapping; DM dests
+        // never gain a thread.
+        if let Some((chat, th)) = owned_dest.as_mut()
+            && s.cfg.forum == Some(*chat)
+            && let Some(cur) = thread
+        {
+            *th = Some(cur);
+        }
         if owned_dest.is_none() && forum_dest.is_none() && s.cfg.owners.is_empty() {
             continue;
         }

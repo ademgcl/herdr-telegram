@@ -77,6 +77,28 @@ pub fn is_not_found(msg: &str) -> bool {
         || m.contains("unknown pane")
         || m.contains("unknown_pane")
 }
+/// Timeout classifier (single source): herdr timeout wording varies in
+/// case (`timed out` / `Timed out`), so match case-insensitively. Used by
+/// the visible-fallback guards below — a missed match doubles a
+/// sick-herdr read to ~60s on the path budgeted to stay ~30s.
+pub fn is_timeout(msg: &str) -> bool {
+    msg.to_lowercase().contains("timed out")
+}
+/// Alternate-screen fallback verdict (single source): blocked/working
+/// panes reject `recent_unwrapped`, so readers fall back to `visible`.
+/// Confirmed death must never fall back (wrong-pane output) and timeouts
+/// must not double the sick-herdr RPC budget. Pure for tests.
+pub fn should_fallback_visible(msg: &str) -> bool {
+    !is_not_found(msg) && !is_timeout(msg)
+}
+
+/// Agent-lookup retry verdict (single source for shell-provision):
+/// only a confirmed-dead lookup reads as shell — any blip
+/// (timeout/unreachable) retries visibly instead of injecting shell
+/// text into live agent work. Pure for tests.
+pub fn should_retry_agent_lookup(msg: &str) -> bool {
+    !is_not_found(msg)
+}
 /// Event-subscribe ack rejection: only a parsed non-null `error`
 /// rejects. Success acks may carry `"error": null`, which a substring
 /// match misreads as rejection (tight resubscribe loop). Unparseable
@@ -105,5 +127,29 @@ mod tests {
         assert!(!is_not_found("no agent here"));
         assert!(!is_not_found("herdr unreachable — try again"));
         assert!(!is_not_found("timed out"));
+    }
+
+    #[test]
+    fn test_should_fallback_visible_death_and_timeout_never() {
+        // Alternate-screen fallback only: confirmed death would serve
+        // wrong-pane output, timeouts would double the sick-herdr budget.
+        // Timeout matches case-insensitively (herdr capitalizes it).
+        assert!(should_fallback_visible("herdr unreachable — try again"));
+        assert!(should_fallback_visible("no agent output yet"));
+        assert!(!should_fallback_visible("agent_not_found"));
+        assert!(!should_fallback_visible("unknown_pane w1:p9"));
+        assert!(!should_fallback_visible("herdr agent.prompt timed out"));
+        assert!(!should_fallback_visible("herdr agent.prompt Timed out"));
+        assert!(is_timeout("Timed Out waiting for pane"));
+        assert!(!is_timeout("herdr unreachable"));
+    }
+
+    #[test]
+    fn test_should_retry_agent_lookup_only_confirmed_dead_proceeds() {
+        // Blips retry visibly; only confirmed death reads as shell.
+        assert!(should_retry_agent_lookup("herdr unreachable — try again"));
+        assert!(should_retry_agent_lookup("herdr timed out"));
+        assert!(!should_retry_agent_lookup("agent_not_found"));
+        assert!(!should_retry_agent_lookup("no such pane"));
     }
 }

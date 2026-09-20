@@ -3,6 +3,7 @@ pub mod callback;
 pub mod callback_model;
 pub mod callback_parse;
 pub mod callback_spawn;
+pub mod callback_stale;
 pub mod callback_waiters;
 pub mod dialog;
 pub mod dm;

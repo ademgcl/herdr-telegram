@@ -17,11 +17,9 @@ use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn handle_callback(s: AppState, cbq: &Value) {
-    // Answer the spinner FIRST, even for rejected taps: a hanging spinner
-    // leaks nothing (no info in the ack) and a silent one looks wedged.
-    if let Some(cbq_id) = cbq["id"].as_str() {
-        s.tg.answer_callback(cbq_id).await;
-    }
+    // Answer the spinner FIRST, even for rejected taps (split to
+    // `callback_stale`: spawned, never awaited — see there).
+    super::callback_stale::answer_spinner(&s, cbq);
     let Some(from) = cbq["from"]["id"].as_i64() else {
         return;
     };
@@ -48,30 +46,18 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     // the birth-date gate. Model taps are gated except the read-only list
     // re-render (M:list:<pane>); an M:<idx> switch is a side effect.
     let (head, rest0) = split_head(data);
-    let exempt =
-        head == "B" || (head == "M" && rest0.map(|r| r.starts_with("list:")).unwrap_or(false));
-    if !exempt {
-        let date = cbq["message"]["date"].as_u64().unwrap_or(0);
+    if !super::callback_stale::tap_exempt(head, rest0) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        if now.saturating_sub(date) > crate::types::STALE_SECS {
-            println!("[callback] dropping stale tap");
-            // Spawned, never awaited: send_msg sleeps on flood-wait and
-            // the pump handles updates sequentially — awaiting here would
-            // stall the whole batch past STALE_SECS into a drop cascade
-            // (router.rs stale-notice parity).
-            let tg = s.tg.clone();
-            tokio::spawn(async move {
-                tg.send_msg(
-                    chat,
-                    thread,
-                    "⌛️ that card expired — pick it again from `/agents`",
-                    None,
-                )
-                .await;
-            });
+        // Fail-open: staleness must be proven — a callback without
+        // `message.date` (malformed/channel shape) defaults to now so a
+        // legitimate tap is never dropped as a day-0 relic (0 is always
+        // stale under `tap_stale`).
+        let date = cbq["message"]["date"].as_u64().unwrap_or(now);
+        if super::callback_stale::tap_stale(date, now) {
+            super::callback_stale::notify_stale_card(&s, chat, thread);
             return;
         }
     }

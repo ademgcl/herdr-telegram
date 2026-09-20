@@ -167,8 +167,8 @@ pub async fn finalize(
                 if done {
                     live_mid.take();
                     live_dest.take();
+                    let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
                 }
-                let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
             } else {
                 live_mid.take();
             }

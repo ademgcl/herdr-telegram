@@ -22,7 +22,7 @@ use crate::{
     herdr::{event_task, ping},
     jobs::recover_pending,
     notifier::reconcile,
-    shutdown::{should_advance_offset, shutdown_signal, sleep_or_shutdown},
+    shutdown::{shutdown_signal, sleep_or_shutdown},
     state::State,
     telegram::{get_updates, handle_update},
     types::{HERDR_PROTOCOL, Res, TG_POLL_SECS, home_masked},
@@ -227,6 +227,12 @@ async fn main() -> Res<()> {
                         }
                         for u in list {
                             let id = u["update_id"].as_u64().unwrap_or(0);
+                            // Poison id 0 (no update_id) would re-submit
+                            // every poll forever — drop before handling.
+                            if id == 0 {
+                                eprintln!("[tg] dropping update with no update_id");
+                                continue;
+                            }
                             // Shutdown-aware: a long handler (spawn) must
                             // not starve TERM into a SIGKILL + replay.
                             tokio::select! {
@@ -237,17 +243,9 @@ async fn main() -> Res<()> {
                                 }
                                 _ = handle_update(s.clone(), &u) => {}
                             }
-                            // Ack AFTER handling (at-least-once): bumping
-                            // before the handler acked a never-handled
-                            // update on TERM — a silent prompt loss.
-                            // Poison guard (single source:
-                            // [`crate::shutdown::should_advance_offset`]).
-                            {
-                                let mut off = s.offset.lock().await;
-                                if should_advance_offset(id, *off) {
-                                    *off = id + 1;
-                                }
-                            }
+                            // Ack AFTER handling (single source:
+                            // [`crate::shutdown::ack_update`]).
+                            crate::shutdown::ack_update(&s, id).await;
                             // Durable ack per update (at-least-once otherwise:
                             // a mid-batch crash would replay handled prompts
                             // as duplicate submits).
