@@ -1,11 +1,6 @@
 //! Delivery helpers for live prompts and reports. Split from finalize.rs.
 use crate::{state::AppState, types::LIVE_RPC_TIMEOUT_SECS};
 
-/// Live-card head: the streaming card shows fresh output under it —
-/// instant feedback before any output lands is the typing indicator,
-/// never an empty card (a content-free "working…" row is a message
-/// about nothing).
-pub const WORKING_HEAD: &str = "🔄 working…";
 /// Quiet retire text: never freeze a live "working…" card.
 pub const RUN_ENDED: &str = "⏹️ run ended";
 /// User-cancel text: cancel branches edit the live card in place, posting
