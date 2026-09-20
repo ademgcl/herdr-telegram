@@ -26,22 +26,27 @@ pub fn should_start_follow(has_live_job: bool, status: &str) -> bool {
 /// Stands down when a live job owns the pane or the pane is still
 /// blocked/unreadable (the card path owns those).
 pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i64>, hint: &str) {
+    // A tap/type answer resumes with status lag: herdr still samples
+    // `blocked` for seconds after the resume, and RPC blips read the
+    // same. Poll up to ~6s instead of abandoning the resumed turn
+    // watcherless after one beat (the race this follower exists for:
+    // taps classified Unchanged on lagging status never even called us).
+    for _ in 0..6 {
+        if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
+            return;
+        }
+        match get_agent(&s.cfg.socket, pane).await {
+            Ok(a) if should_start_follow(false, &a.status) => break,
+            _ => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
     if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
         return;
     }
     match get_agent(&s.cfg.socket, pane).await {
         Ok(a) if should_start_follow(false, &a.status) => {}
-        // A tap/type answer resumes with status lag: herdr still samples
-        // `blocked` for a beat after the resume, and one RPC blip reads
-        // the same. Recheck once after a beat instead of abandoning the
-        // resumed turn watcherless (the race this follower exists for).
-        _ => {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            match get_agent(&s.cfg.socket, pane).await {
-                Ok(a) if should_start_follow(false, &a.status) => {}
-                _ => return,
-            }
-        }
+        _ => return,
     }
     let baseline = read_screen(&s.cfg.socket, pane, 400).await;
     let job = Job::new(baseline, chat, thread);

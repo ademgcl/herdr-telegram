@@ -52,6 +52,16 @@ pub fn dialog_stalled(before: &[String], after: &[String]) -> bool {
     !before.is_empty() && !after.is_empty() && dialog_sig(after) == dialog_sig(before)
 }
 
+/// True when the screen moved off the tapped dialog: the tap resumed the
+/// agent but herdr status still samples `blocked` (lag), so `classify_tap`
+/// errs to `Unchanged` (no ghost buttons) while the resumed turn goes
+/// watcherless with no final. The caller speculatively follows (which
+/// stands down when still blocked), so only vanished turns gain a watcher.
+/// Pure for tests.
+pub fn dialog_moved(before: &[String], after: &[String]) -> bool {
+    !after.is_empty() && dialog_sig(after) != dialog_sig(before)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +192,21 @@ mod tests {
         // Unreadable screens never fail the send.
         assert!(!dialog_stalled(&[], &dlg));
         assert!(!dialog_stalled(&dlg, &[]));
+    }
+
+    #[test]
+    fn test_dialog_moved_vanished_vs_stuck() {
+        // Resumed but status lags blocked: screen left the dialog (working
+        // prose) — the caller must speculatively follow for the final.
+        let dlg = v(&[
+            "△ Permission required",
+            "Allow once   Allow always   Reject",
+        ]);
+        let working = v(&["⠋ working…", "editing src/main.rs"]);
+        assert!(dialog_moved(&dlg, &working));
+        // Same dialog: stuck, no follow.
+        assert!(!dialog_moved(&dlg, &dlg));
+        // Unreadable after: never follow on a blip.
+        assert!(!dialog_moved(&dlg, &[]));
     }
 }

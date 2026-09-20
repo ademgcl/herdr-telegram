@@ -43,6 +43,7 @@ pub mod tap_classify;
 pub mod tap_input;
 pub mod tap_keys;
 pub mod tap_refresh;
+pub mod tap_unchanged;
 pub mod target;
 pub mod title_rules;
 pub mod titles;

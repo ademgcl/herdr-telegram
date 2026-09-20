@@ -2,7 +2,7 @@ use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use super::tap_refresh::delayed_refresh;
 use crate::{
-    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card, parse_options},
+    handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card},
     herdr::client::{get_agent, read_screen_visible},
     state::AppState,
 };
@@ -273,23 +273,10 @@ pub async fn answer_tap(
                     delayed_refresh(s, pane).await;
                 }
                 TapResult::Unchanged => {
-                    let mut shown = send.nav.clone();
-                    shown.extend(send.confirm.iter().cloned());
-                    let sent = shown.join("+");
-                    let before_opts = parse_options(&before);
-                    let text = if before_opts.is_empty() {
-                        format!("⌨️ sent {sent} — check the pane")
-                    } else {
-                        format!(
-                            "⚠️ sent {sent} but the question is still up — /card for fresh buttons, /esc to dismiss, or answer on the PC"
-                        )
-                    };
-                    let mid = s.tg.send_msg(chat, thread, &text, None).await;
-                    s.remember(chat, mid, pane).await;
-                    // Dead-end card keeps no live buttons: the explainer
-                    // above carries the way out, heal re-renders below.
-                    s.tg.strip_buttons(chat, msg_id).await;
-                    delayed_refresh(s, pane).await;
+                    super::tap_unchanged::handle_unchanged(
+                        s, chat, msg_id, thread, pane, &send, &before, &after, _op,
+                    )
+                    .await;
                 }
             }
         }
