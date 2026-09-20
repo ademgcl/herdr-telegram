@@ -37,7 +37,7 @@ pub async fn handle_unchanged(
                 "⚠️ sent {sent} but the question is still up — /card for fresh buttons, /esc to dismiss, or answer on the PC"
             )
         };
-        let mid = s.tg.send_msg(chat, thread, &text, None).await;
+        let mid = s.tg.send_silent(chat, thread, &text).await;
         s.remember(chat, mid, pane).await;
         s.tg.strip_buttons(chat, msg_id).await;
         s.blocked_sig.lock().await.remove(pane);

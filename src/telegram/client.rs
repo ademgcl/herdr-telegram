@@ -196,6 +196,27 @@ impl TelegramClient {
         Ok(())
     }
 
+    /// Best-effort message delete (working-card retire after the final
+    /// lands): true when gone. Single attempt, failures stay silent —
+    /// the caller falls back to folding the card in place, so a lost
+    /// delete right never strands a frozen "working…" corpse.
+    pub async fn delete_msg(&self, chat_id: i64, message_id: i64) -> bool {
+        match self
+            .call(
+                "deleteMessage",
+                json!({"chat_id": chat_id, "message_id": message_id}),
+                Duration::from_secs(10),
+            )
+            .await
+        {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("deleteMessage failed: {}", self.redact(&e.to_string()));
+                false
+            }
+        }
+    }
+
     /// True when a Telegram error means the token is dead (revoked/
     /// invalid), never a transient fault. Matches the `Unauthorized`
     /// description Telegram sends for bad tokens and the `Not Found`

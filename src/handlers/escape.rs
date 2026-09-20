@@ -111,9 +111,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             // The dialog is gone — strip posted buttons (topic + DM
             // cards); the plain message below carries the outcome.
             crate::handlers::dialog::resolve_cards(s, pane).await;
-            let mid =
-                s.tg.send_msg(chat, thread, "✅ dismissed — agent resumed", None)
-                    .await;
+            let mid = s.tg.send_silent(chat, thread, "✅ dismissed — agent resumed").await;
             if let Some(m) = mid {
                 let _ = s.tg.set_reaction(chat, m, Some("✅")).await;
             }
@@ -124,26 +122,14 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
         }
         TapResult::NewDialog => {
-            s.tg.send_msg(
-                chat,
-                thread,
-                "🚫 dismissed — it asked something else:",
-                None,
-            )
-            .await;
+            s.tg.send_silent(chat, thread, "🚫 dismissed — it asked something else:").await;
             // Release the claim first: post_card refuses while blockop
             // is held, and this tap already landed (nothing left to own).
             drop(_op);
             post_card(s, chat, thread, pane).await;
         }
         TapResult::Unchanged => {
-            s.tg.send_msg(
-                chat,
-                thread,
-                "still blocked — /card for fresh buttons, or /kill",
-                None,
-            )
-            .await;
+            s.tg.send_silent(chat, thread, "still blocked — /card for fresh buttons, or /kill").await;
             // Dead-end buttons stay off (tap Unchanged parity): the
             // explainer above carries the way out, heal re-renders below.
             // Vanished-dialog race (tap parity): Esc resumed the agent

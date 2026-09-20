@@ -123,6 +123,28 @@ async fn send_remembered(
     mid
 }
 
+/// Working-card retire after the final lands: DELETE it so no "✅ done"
+/// corpse buzzes beside the reply (the final is the tombstone). Falls
+/// back to the in-place fold when deletion fails (lost rights, gone
+/// thread) — never a frozen "working…" card. Address from the slot,
+/// never job.dest (remap race), same as `fold_live`.
+pub async fn retire_live(
+    s: &AppState,
+    live_dest: &mut Option<(i64, Option<i64>)>,
+    live_mid: &mut Option<i64>,
+) {
+    if let Some(mid) = live_mid.take() {
+        if let Some((chat, _)) = live_dest.take() {
+            if s.tg.delete_msg(chat, mid).await {
+                return;
+            }
+            let _ = s.tg.try_edit_msg(chat, mid, "✅ done", None).await;
+        }
+    } else {
+        live_dest.take();
+    }
+}
+
 /// Best-effort fold of a live card with NO fallback post: quiet retire
 /// paths (dead pane / shell flip) must never buzz a new message — the
 /// frozen "working…" card just resolves in place, or stays if the

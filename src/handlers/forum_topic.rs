@@ -255,7 +255,7 @@ pub(crate) async fn handle_topic_agent_message(
         match super::tap::type_text(&s, pane, text).await {
             Ok(()) => {
                 s.set_focus(pane).await;
-                s.tg.send_msg(chat, Some(thread_id), &crate::ui::typed_ack(pane), None)
+                s.tg.send_silent(chat, Some(thread_id), &crate::ui::typed_ack(pane))
                     .await;
                 // Resumed work owns no job — follow it to the final reply.
                 crate::jobs::follow::follow_answer(&s, pane, chat, Some(thread_id), text).await;

@@ -159,12 +159,12 @@ pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>
         (chat, thread),
         (pane.to_string(), std::time::Instant::now()),
     );
-    let mid =
-        s.tg.send_msg(
+    let mid = s
+        .tg
+        .send_silent(
             chat,
             thread,
             "⌨️ type your answer as the next message (⏎ sends it)",
-            None,
         )
         .await;
     s.remember(chat, mid, pane).await;

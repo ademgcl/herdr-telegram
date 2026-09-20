@@ -79,7 +79,7 @@ pub(crate) async fn handle_general_forum_message(
                 match super::tap::type_text(&s, &wpane, text).await {
                     Ok(()) => {
                         s.typewait.lock().await.remove(&(chat, thread_id));
-                        s.tg.send_msg(chat, thread_id, &crate::ui::typed_ack(&wpane), None)
+                        s.tg.send_silent(chat, thread_id, &crate::ui::typed_ack(&wpane))
                             .await;
                         // Resumed work owns no job — follow it to the final reply.
                         crate::jobs::follow::follow_answer(&s, &wpane, chat, thread_id, text).await;

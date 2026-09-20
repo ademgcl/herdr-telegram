@@ -201,7 +201,7 @@ pub(crate) async fn handle_bare_prompt(
         match super::tap::type_text(s, &row.pane, &prompt_text).await {
             Ok(()) => {
                 s.set_focus(&row.pane).await;
-                s.tg.send_msg(chat, None, &crate::ui::typed_ack(&row.pane), None)
+                s.tg.send_silent(chat, None, &crate::ui::typed_ack(&row.pane))
                     .await;
                 // Resumed work owns no job — follow it to the final reply.
                 crate::jobs::follow::follow_answer(s, &row.pane, chat, None, &prompt_text).await;

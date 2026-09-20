@@ -69,7 +69,7 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
             s.typewait.lock().await.remove(&(chat, None));
-            s.tg.send_msg(chat, None, &crate::ui::typed_ack(&wpane), None)
+            s.tg.send_silent(chat, None, &crate::ui::typed_ack(&wpane))
                 .await;
             // Resumed work owns no job — follow it to the final reply.
             crate::jobs::follow::follow_answer(s, &wpane, chat, None, text).await;

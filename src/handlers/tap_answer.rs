@@ -262,7 +262,7 @@ pub async fn answer_tap(
                             s.remember(chat, Some(msg_id), pane).await;
                         }
                         Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
-                            let mid = s.tg.send_msg(chat, thread, &done, None).await;
+                            let mid = s.tg.send_silent(chat, thread, &done).await;
                             s.remember(chat, mid, pane).await;
                             s.tg.strip_buttons(chat, msg_id).await;
                         }

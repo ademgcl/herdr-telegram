@@ -10,7 +10,7 @@ use crate::{
         books::settle_books,
         finalize_blocked::try_finalize_blocked,
         job::Job,
-        report::{RUN_ENDED, fold_live},
+        report::{RUN_ENDED, fold_live, retire_live},
     },
     notifier::observe_status,
     state::AppState,
@@ -218,10 +218,11 @@ pub async fn finalize(
         parts.len(),
         body.len()
     );
-    // Finals buzz; progress stayed silent in place. Fold the working
-    // card only after a part lands — a total failure keeps the slot for
-    // retry, a mid-post supersede leaves it for the handoff's retire
-    // instead of stranding a "✅ done" corpse with no reply.
+    // Finals buzz; progress stayed silent in place. The working card is
+    // DELETED once a part lands (the reply is the tombstone — no "✅ done"
+    // corpse beside it); a total failure keeps the slot for retry, a
+    // mid-post supersede leaves it for the handoff's retire instead of
+    // stranding a done stamp with no reply.
     let mut delivered = false;
     for part in parts.iter() {
         if report_done(s, chat, th, pane, part).await {
@@ -244,8 +245,9 @@ pub async fn finalize(
         println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
         return true;
     }
-    // Working card retires only now that the finish landed.
-    fold_live(s, live_dest, live_mid, "✅ done").await;
+    // Working card retires only now that the finish landed: deleted,
+    // with an in-place "✅ done" fold only when deletion fails.
+    retire_live(s, live_dest, live_mid).await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.
