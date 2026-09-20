@@ -285,8 +285,16 @@ mod tests {
         assert!(!stale_drop_should_clear(false, stale, now));
         // …but a 7d+ corpse clears even when Telegram is dead (no
         // endless retry), both directions of the clock.
-        assert!(stale_drop_should_clear(false, now - STALE_KEEP_MAX_SECS - 1, now));
-        assert!(stale_drop_should_clear(false, now + STALE_KEEP_MAX_SECS + 1, now));
+        assert!(stale_drop_should_clear(
+            false,
+            now - STALE_KEEP_MAX_SECS - 1,
+            now
+        ));
+        assert!(stale_drop_should_clear(
+            false,
+            now + STALE_KEEP_MAX_SECS + 1,
+            now
+        ));
         // Inside the keep window, future-jump corpses still wait.
         assert!(!stale_drop_should_clear(false, now + 7200, now));
     }

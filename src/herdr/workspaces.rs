@@ -58,17 +58,10 @@ pub async fn ensure_tg_space(socket: &str) -> Res<(String, bool)> {
 }
 
 /// Fresh tab in a known workspace id, returning its root pane.
-/// Shared by spawns that must not reuse (existing spaces).
+/// Single-sourced on `panes::create_tab` (same RPC, same fail-closed
+/// empty-pane guard) — a duplicated literal here re-drifts.
 async fn create_tab_pane(socket: &str, ws: &str) -> Res<String> {
-    let tab = rpc_t(socket, "tab.create", json!({"workspace_id": ws}), 30).await?;
-    let pane = tab["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    if pane.is_empty() {
-        return Err("tab.create returned no pane".into());
-    }
-    Ok(pane)
+    super::panes::create_tab(socket, ws).await
 }
 
 pub async fn spawn_agent(socket: &str, kind: &str, target_ws: Option<&str>) -> Res<AgentRow> {
@@ -154,7 +147,9 @@ mod tests {
         // Transient blips keep the pane (fail-closed): the agent is
         // plausibly healthy, and retry must adopt it, not kill it.
         assert!(!verify_failure_reaps("herdr agent.start timed out"));
-        assert!(!verify_failure_reaps("herdr closed connection (empty reply)"));
+        assert!(!verify_failure_reaps(
+            "herdr closed connection (empty reply)"
+        ));
         assert!(!verify_failure_reaps("no agent output yet"));
     }
 }

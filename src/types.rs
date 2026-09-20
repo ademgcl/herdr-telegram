@@ -193,13 +193,19 @@ pub(crate) fn chmod_private(path: &std::path::Path) {
 
 /// Pane-id shape for `focus.state` (fail-closed load: garbage, torn
 /// writes, and hand-edits must never become the DM routing focus).
-/// Herdr pane ids are `ws:pane` (`w8:p1`) — the colon is the shape.
+/// Herdr pane ids are `ws:pane` (`w8:p1`) — exactly one colon with a
+/// non-empty side on each end (colon-bearing garbage like `:::` or
+/// `a:b:c` hits the backup+None path instead of live routing).
 /// Pure so it is unit-tested.
 pub fn valid_focus(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 256
-        && s.contains(':')
-        && !s.chars().any(|c| c.is_whitespace() || c.is_control())
+    if s.is_empty() || s.len() > 256 {
+        return false;
+    }
+    if s.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let mut parts = s.split(':');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(a), Some(b), None) if !a.is_empty() && !b.is_empty())
 }
 
 #[cfg(test)]
@@ -256,6 +262,10 @@ mod tests {
         assert!(!valid_focus("w8:p1\nw8:p2"));
         assert!(!valid_focus("w8 p1:x"));
         assert!(!valid_focus(&"w".repeat(300)));
+        assert!(!valid_focus(":::"));
+        assert!(!valid_focus("a:b:c"));
+        assert!(!valid_focus(":p1"));
+        assert!(!valid_focus("w8:"));
     }
 
     #[test]

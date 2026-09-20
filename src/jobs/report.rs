@@ -1,5 +1,5 @@
 //! Delivery helpers for live prompts and reports. Split from finalize.rs.
-use crate::state::AppState;
+use crate::{state::AppState, types::LIVE_RPC_TIMEOUT_SECS};
 
 /// Live-card head: the streaming card shows fresh output under it —
 /// instant feedback before any output lands is the typing indicator,
@@ -8,7 +8,10 @@ use crate::state::AppState;
 pub const WORKING_HEAD: &str = "🔄 working…";
 /// Quiet retire text: never freeze a live "working…" card.
 pub const RUN_ENDED: &str = "⏹️ run ended";
-/// User-cancel text: every cancel branch edits in place, never posts fresh.
+/// User-cancel text: cancel branches edit the live card in place, posting
+/// fresh only when no card ever streamed (nothing to edit) or the card is
+/// definitely gone — never on a transient failure (that would orphan a
+/// frozen card with no retry, or duplicate like the stream path refuses).
 pub const CANCELLED: &str = "✋ cancelled";
 
 /// Cancel ownership verdict (pure, tested): a superseding enqueue owns
@@ -24,8 +27,9 @@ pub(crate) fn cancel_owns_intent(
 /// Cancel edit: retires the live card where it lives (live_dest), never
 /// job.dest (remap race). Falls back to a fresh post at the current dest
 /// only when the card is definitely gone — a transient edit failure
-/// posts nothing (a fresh send then would orphan-duplicate like the
-/// stream path refuses to), the frozen card heals on the next turn.
+/// keeps the slot for the next turn to adopt (a taken slot would orphan
+/// a frozen card with no retry), never posts fresh (that would
+/// orphan-duplicate like the stream path refuses to).
 pub async fn edit_live(
     s: &AppState,
     chat_id: i64,
@@ -35,23 +39,38 @@ pub async fn edit_live(
     live_dest: &mut Option<(i64, Option<i64>)>,
     text: &str,
 ) {
-    if let Some(mid) = live_mid.take() {
-        // Fail-closed: mid without dest cannot happen (set together);
-        // drop without editing rather than guessing job.dest and
-        // clobbering the wrong thread after a remap.
-        let Some((lchat, _)) = live_dest.take() else {
-            return;
-        };
-        match s.tg.try_edit_msg(lchat, mid, text, None).await {
-            Ok(()) => {}
-            Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
-                report(s, chat_id, thread_id, pane, text).await;
-            }
-            Err(_) => {}
-        }
-    } else {
+    let Some(mid) = *live_mid else {
         live_dest.take();
         report(s, chat_id, thread_id, pane, text).await;
+        return;
+    };
+    // Fail-closed: mid without dest cannot happen (set together);
+    // drop without editing rather than guessing job.dest and
+    // clobbering the wrong thread after a remap.
+    let Some((lchat, _)) = *live_dest else {
+        live_mid.take();
+        return;
+    };
+    // Bounded like every other live-card edit (live.rs, repoint,
+    // finalize): try_edit_msg sleeps on flood-wait, which would park the
+    // watcher mid-exit. A timeout is transient — the slot stays for the
+    // next turn to adopt, exactly like any other non-gone error.
+    let edit = tokio::time::timeout(
+        std::time::Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
+        s.tg.try_edit_msg(lchat, mid, text, None),
+    )
+    .await;
+    match edit {
+        Ok(Ok(())) => {
+            live_mid.take();
+            live_dest.take();
+        }
+        Ok(Err(e)) if crate::telegram::messages::edit_gone(&e.to_string()) => {
+            live_mid.take();
+            live_dest.take();
+            report(s, chat_id, thread_id, pane, text).await;
+        }
+        Ok(Err(_)) | Err(_) => {}
     }
 }
 
@@ -107,19 +126,40 @@ async fn send_remembered(
 /// Best-effort fold of a live card with NO fallback post: quiet retire
 /// paths (dead pane / shell flip) must never buzz a new message — the
 /// frozen "working…" card just resolves in place, or stays if the
-/// thread is already gone (edit fails silently).
+/// thread is already gone (edit fails silently). Take the slot only on
+/// landed/gone (live.rs retire_for_handoff parity): a transient failure
+/// keeps it for the next turn to adopt instead of freezing the old card.
 pub async fn fold_live(
     s: &AppState,
     live_dest: &mut Option<(i64, Option<i64>)>,
     live_mid: &mut Option<i64>,
     text: &str,
 ) {
-    if let Some(mid) = live_mid.take() {
-        if let Some((chat, _)) = live_dest.take() {
-            let _ = s.tg.try_edit_msg(chat, mid, text, None).await;
-        }
-    } else {
+    let Some(mid) = *live_mid else {
         live_dest.take();
+        return;
+    };
+    let Some((chat, _)) = *live_dest else {
+        live_mid.take();
+        return;
+    };
+    // Bounded like edit_live above: an unbounded fold parks the watcher
+    // at its loop top on flood-wait. Timeout keeps the slot (transient).
+    let edit = tokio::time::timeout(
+        std::time::Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
+        s.tg.try_edit_msg(chat, mid, text, None),
+    )
+    .await;
+    match edit {
+        Ok(Ok(())) => {
+            live_mid.take();
+            live_dest.take();
+        }
+        Ok(Err(e)) if crate::telegram::messages::edit_gone(&e.to_string()) => {
+            live_mid.take();
+            live_dest.take();
+        }
+        Ok(Err(_)) | Err(_) => {}
     }
 }
 

@@ -54,12 +54,8 @@ pub async fn finalize(
             // Cancellable grace wait (settle.rs parity): a submit or
             // /cancel landing mid-wait owns the pane at once, never after
             // up to 4s of dead sleep.
-            super::settle::sleep_or_superseded(
-                job,
-                entry_epoch,
-                std::time::Duration::from_secs(2),
-            )
-            .await;
+            super::settle::sleep_or_superseded(job, entry_epoch, std::time::Duration::from_secs(2))
+                .await;
             // Superseded during the grace wait: drop like any mid-finalize
             // retarget below instead of posting stale. Cancel counts too:
             // /cancel bumps epoch AND marks stopped — the mark covers a
@@ -153,16 +149,28 @@ pub async fn finalize(
         // Address from the slot (remap-safe); mid without dest drops
         // without editing (fail-closed, never wrong thread).
         // Bounded like the blocked-path retire: a slow Telegram must not
-        // stall settle past the tick — a timeout keeps the slot for the
-        // next tick instead of blocking the retire.
-        if let Some(mid) = live_mid.take() {
-            if let Some((lchat, _)) = live_dest.take() {
-                let _ = tokio::time::timeout(
+        // stall settle past the tick — take the slot only on landed/gone
+        // (finalize_blocked parity): a timeout keeps the slot for the
+        // next tick instead of orphaning a frozen card.
+        if let Some(mid) = *live_mid {
+            if let Some((lchat, _)) = *live_dest {
+                let retire = tokio::time::timeout(
                     std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
                     s.tg.try_edit_msg(lchat, mid, "✅ settled — no fresh output", None),
                 )
                 .await;
+                let done = match retire {
+                    Ok(Ok(())) => true,
+                    Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
+                    Err(_) => false,
+                };
+                if done {
+                    live_mid.take();
+                    live_dest.take();
+                }
                 let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
+            } else {
+                live_mid.take();
             }
         } else {
             live_dest.take();

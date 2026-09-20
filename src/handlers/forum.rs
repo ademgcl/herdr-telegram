@@ -97,7 +97,8 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     // silently (same as a drop), live ones get guidance (no silent
     // loss). Never falls through to General routing.
     if is_orphan_thread(thread_id, false) {
-        s.tg.send_msg(chat, thread_id, crate::ui::UNKNOWN_TOPIC, None).await;
+        s.tg.send_msg(chat, thread_id, crate::ui::UNKNOWN_TOPIC, None)
+            .await;
         return;
     }
     super::general::handle_general_forum_message(s, chat, thread_id, text).await;

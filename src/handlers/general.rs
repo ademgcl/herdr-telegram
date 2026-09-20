@@ -67,13 +67,12 @@ pub(crate) async fn handle_general_forum_message(
             // waiter drops visibly, a dead pane degrades to normal
             // routing below (waiter already evicted — never a type
             // attempt), a blip keeps + refuses.
-            let degraded = match super::general_typewait::probe_typewait(&s, chat, thread_id, &wpane)
-                .await
-            {
-                ProbeOut::Handled => return,
-                ProbeOut::Degraded => true,
-                ProbeOut::Proceed => false,
-            };
+            let degraded =
+                match super::general_typewait::probe_typewait(&s, chat, thread_id, &wpane).await {
+                    ProbeOut::Handled => return,
+                    ProbeOut::Degraded => true,
+                    ProbeOut::Proceed => false,
+                };
             // A dead pane degrades to normal routing below (waiter
             // already evicted above — never a type attempt into it).
             if !degraded {
@@ -94,8 +93,7 @@ pub(crate) async fn handle_general_forum_message(
                         // must not wipe topics). Fail-closed: an unreadable
                         // re-read keeps the waiter (original instant, never
                         // re-stamped) + refuses instead of dropping input.
-                        match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await
-                        {
+                        match crate::herdr::client::get_agent(&s.cfg.socket, &wpane).await {
                             Ok(a) => {
                                 crate::jobs::enqueue_prompt(
                                     s.clone(),

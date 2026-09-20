@@ -121,11 +121,7 @@ pub(crate) async fn post_spontaneous_card(
             }
             if let Some(at) = armed_at {
                 let cur = s.debounce.lock().await.get(pane).cloned();
-                if arm_superseded(
-                    cur.as_ref().map(|(st, a)| (st.as_str(), a)),
-                    settled,
-                    &at,
-                ) {
+                if arm_superseded(cur.as_ref().map(|(st, a)| (st.as_str(), a)), settled, &at) {
                     return false;
                 }
             }
@@ -259,10 +255,7 @@ mod tests {
         assert_eq!(liveness(Some(&live), "w1:p1"), Liveness::Allow);
         assert_eq!(liveness(Some(&live), "w9:p9"), Liveness::Dead);
         assert_eq!(liveness(None, "w1:p1"), Liveness::Ambiguous);
-        assert_eq!(
-            liveness(Some(&Vec::new()), "w1:p1"),
-            Liveness::Ambiguous
-        );
+        assert_eq!(liveness(Some(&Vec::new()), "w1:p1"), Liveness::Ambiguous);
     }
 
     #[test]

@@ -58,13 +58,20 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             .as_secs();
         if now.saturating_sub(date) > crate::types::STALE_SECS {
             println!("[callback] dropping stale tap");
-            s.tg.send_msg(
-                chat,
-                thread,
-                "⌛️ that card expired — pick it again from `/agents`",
-                None,
-            )
-            .await;
+            // Spawned, never awaited: send_msg sleeps on flood-wait and
+            // the pump handles updates sequentially — awaiting here would
+            // stall the whole batch past STALE_SECS into a drop cascade
+            // (router.rs stale-notice parity).
+            let tg = s.tg.clone();
+            tokio::spawn(async move {
+                tg.send_msg(
+                    chat,
+                    thread,
+                    "⌛️ that card expired — pick it again from `/agents`",
+                    None,
+                )
+                .await;
+            });
             return;
         }
     }
@@ -94,7 +101,11 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             // pump awaits each update: a transient guard drops between
             // queued taps). Stamped on success only — a pre-mint failure
             // keeps the same card retappable (the error edit explains).
-            let key = format!("spawn:{chat}:{msg_id}");
+            // N and k mint different resources from the same card (a new
+            // space edits the card to a menu that k taps follow): one
+            // shared `spawn:` key would refuse the legitimate k after an
+            // N, so keys carry the action.
+            let key = format!("spawn:N:{chat}:{msg_id}");
             {
                 let done = s.spawndone.lock().await;
                 if let Some(at) = done.get(&key)
@@ -116,7 +127,10 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             }
         }
         ("k", Some(r)) => {
-            let key = format!("spawn:{chat}:{msg_id}");
+            // Action-scoped like N above, plus the target: a replay of
+            // the same tap still stands down while a different kind stays
+            // tappable.
+            let key = format!("spawn:k:{r}:{chat}:{msg_id}");
             {
                 let done = s.spawndone.lock().await;
                 if let Some(at) = done.get(&key)
@@ -153,8 +167,17 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             handle_pane_output(&s, chat, msg_id, thread, pane).await;
         }
         ("m", None) => {
-            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-            let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
+            let (spaces, agents) = match (
+                list_workspaces(&s.cfg.socket).await,
+                list_agents(&s.cfg.socket).await,
+            ) {
+                (Ok(spaces), Ok(agents)) => (spaces, agents),
+                _ => {
+                    s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                }
+            };
             s.tg.edit_msg(
                 chat,
                 msg_id,
@@ -165,8 +188,17 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.forget_target(chat, msg_id).await;
         }
         ("w", Some(ws)) => {
-            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-            let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
+            let (spaces, agents) = match (
+                list_workspaces(&s.cfg.socket).await,
+                list_agents(&s.cfg.socket).await,
+            ) {
+                (Ok(spaces), Ok(agents)) => (spaces, agents),
+                _ => {
+                    s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                        .await;
+                    return;
+                }
+            };
             let my_agents: Vec<_> = agents.into_iter().filter(|a| a.ws == *ws).collect();
             s.tg.edit_msg(
                 chat,

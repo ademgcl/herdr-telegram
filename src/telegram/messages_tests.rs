@@ -34,7 +34,10 @@ fn test_edit_fatal_errors_fail_fast_not_retried() {
             !TelegramClient::is_transient_msg(fatal),
             "fatal must fail fast: {fatal}"
         );
-        assert!(!super::edit_gone(fatal), "fatal needs no gone-card: {fatal}");
+        assert!(
+            !super::edit_gone(fatal),
+            "fatal needs no gone-card: {fatal}"
+        );
     }
     // Transients still retry through the gate.
     for t in ["Internal Server Error", "Bad Gateway", "timed out"] {

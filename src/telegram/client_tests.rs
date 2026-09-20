@@ -36,7 +36,9 @@ fn test_is_unauthorized_matches_token_death_only() {
     assert!(!TelegramClient::is_unauthorized("connection reset"));
     // Contextual "not found" inside an otherwise-live error (the title's
     // text) is not a dead token — only Telegram's bare Not Found body is.
-    assert!(!TelegramClient::is_unauthorized("message to edit not found"));
+    assert!(!TelegramClient::is_unauthorized(
+        "message to edit not found"
+    ));
 }
 
 #[test]

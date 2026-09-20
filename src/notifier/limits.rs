@@ -210,9 +210,7 @@ pub(crate) async fn scan_limits(s: &AppState) {
             // only none-landed releases the claim + cools down for retry.
             let mut per_owner = Vec::with_capacity(s.cfg.owners.len());
             for id in &s.cfg.owners {
-                per_owner.push(usize::from(
-                    send_one(s, *id, None, &text, &pane).await,
-                ));
+                per_owner.push(usize::from(send_one(s, *id, None, &text, &pane).await));
             }
             delivered = crate::notifier::spontaneous::dm_complete(&per_owner, 1);
         }

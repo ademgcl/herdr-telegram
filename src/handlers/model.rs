@@ -136,7 +136,9 @@ pub async fn switch_by_filter(
             if thread.is_none() {
                 s.set_focus(pane).await;
             }
-            let mid = s.tg.send_msg(chat, thread, &switch_done(pane, &footer), None).await;
+            let mid =
+                s.tg.send_msg(chat, thread, &switch_done(pane, &footer), None)
+                    .await;
             s.remember(chat, mid, pane).await;
         }
         Err(e) => {

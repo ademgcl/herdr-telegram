@@ -18,7 +18,10 @@ fn test_classify_gone_vs_blip() {
     );
     assert_eq!(classify(Err("no such pane".to_string())), EscGate::Gone);
     // Blips → retryable, never the gone path.
-    assert_eq!(classify(Err("herdr timed out".to_string())), EscGate::Unreachable);
+    assert_eq!(
+        classify(Err("herdr timed out".to_string())),
+        EscGate::Unreachable
+    );
     assert_eq!(
         classify(Err("herdr unreachable — try again".to_string())),
         EscGate::Unreachable

@@ -144,10 +144,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // a dead pane never re-mints its topic (resurrection) nor buzzes
     // post-cancel; an ambiguous read mints/posts nothing (next tick
     // retries). Dead consumes the arm (no retry into a gone pane).
-    match super::spontaneous::liveness(
-        list_panes(&s.cfg.socket).await.ok().as_ref(),
-        &pane,
-    ) {
+    match super::spontaneous::liveness(list_panes(&s.cfg.socket).await.ok().as_ref(), &pane) {
         super::spontaneous::Liveness::Dead => {
             consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
             return;

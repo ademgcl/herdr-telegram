@@ -143,9 +143,7 @@ async fn test_sleep_or_superseded_exits_on_stop_and_epoch() {
     .expect("stopped job must exit the backoff promptly");
     // A superseding epoch bump exits too.
     let job2 = crate::jobs::job::Job::new(Vec::new(), 1, None);
-    job2
-        .epoch
-        .store(1, std::sync::atomic::Ordering::Relaxed);
+    job2.epoch.store(1, std::sync::atomic::Ordering::Relaxed);
     tokio::time::timeout(
         Duration::from_secs(5),
         sleep_or_superseded(&job2, 0, Duration::from_secs(60)),

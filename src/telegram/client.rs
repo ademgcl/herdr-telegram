@@ -92,10 +92,14 @@ impl TelegramClient {
     /// reqwest transport/server faults arrive typed — Telegram API
     /// fatals arrive as plain strings via `call`, gated by
     /// `is_transient_msg`. Shared by `call_retrying` + the edit path.
-    pub(crate) fn is_transport_transient(e: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
+    pub(crate) fn is_transport_transient(
+        e: &(dyn std::error::Error + Send + Sync + 'static),
+    ) -> bool {
         e.downcast_ref::<reqwest::Error>()
             .map(|re| {
-                re.is_connect() || re.is_timeout() || re.status().map(|s| s.is_server_error()).unwrap_or(false)
+                re.is_connect()
+                    || re.is_timeout()
+                    || re.status().map(|s| s.is_server_error()).unwrap_or(false)
             })
             .unwrap_or(false)
     }
@@ -200,9 +204,7 @@ impl TelegramClient {
     /// substring, which also appears in retry intervals, message text,
     /// and chat ids and would FATAL-exit a healthy daemon.
     pub(crate) fn is_unauthorized(msg: &str) -> bool {
-        msg.contains("Unauthorized")
-            || msg.contains("unauthorized")
-            || msg.contains("Not Found")
+        msg.contains("Unauthorized") || msg.contains("unauthorized") || msg.contains("Not Found")
     }
     /// Fire-and-forget menu registration: the menu persists server-side
     /// once set, so a blip at boot must not fail the boot (fail-dead =

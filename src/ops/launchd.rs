@@ -27,6 +27,8 @@ pub fn release_exe(exe: &str) -> bool {
 }
 
 pub fn render_plist(exe: &str, dir: &str) -> String {
+    let exe = xml_escape(exe);
+    let dir = xml_escape(dir);
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -56,6 +58,22 @@ pub fn render_plist(exe: &str, dir: &str) -> String {
          </dict>\n\
          </plist>\n"
     )
+}
+
+/// Minimal XML escape for plist string values: a legal `&`/`<`/`>` in
+/// the repo path would else yield an invalid plist and a failed
+/// bootstrap. Pure so it is unit-tested.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 async fn launchctl(args: &[&str]) -> (bool, String) {
@@ -205,5 +223,12 @@ mod tests {
     fn test_plist_path_suffix() {
         let p = plist_path("/Users/x");
         assert!(p.ends_with("Library/LaunchAgents/dev.herdr.telegram.plist"));
+    }
+
+    #[test]
+    fn test_render_plist_escapes_xml() {
+        let p = render_plist("/r/a&b/herdr-telegram", "/r/a<b>");
+        assert!(p.contains("/r/a&amp;b/herdr-telegram"));
+        assert!(p.contains("/r/a&lt;b&gt;"));
     }
 }

@@ -68,7 +68,9 @@ pub(crate) async fn probe_typewait(
                 TypewaitProbe::Unreachable
             } else {
                 match crate::herdr::client::list_panes(&s.cfg.socket).await {
-                    Ok(l) => classify_typewait_probe(false, true, true, l.iter().any(|p| p == wpane)),
+                    Ok(l) => {
+                        classify_typewait_probe(false, true, true, l.iter().any(|p| p == wpane))
+                    }
                     Err(_) => TypewaitProbe::Unreachable,
                 }
             }

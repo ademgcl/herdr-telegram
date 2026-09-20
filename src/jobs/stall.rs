@@ -52,6 +52,7 @@ pub(crate) async fn watch_stall(
         if was_open && episode.is_fresh() {
             s.limit_alert.lock().await.remove(pane);
             s.limit_seen.lock().await.remove(pane);
+            s.limit_miss.lock().await.remove(pane);
             s.limit_send_cool.lock().await.remove(pane);
         }
         return screen;

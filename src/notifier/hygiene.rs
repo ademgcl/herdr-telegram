@@ -29,10 +29,7 @@ pub(crate) fn confirm_deaths(
     fresh: &HashSet<String>,
     dying: Vec<String>,
 ) -> (Vec<String>, HashSet<String>) {
-    let out: Vec<String> = dying
-        .into_iter()
-        .filter(|p| !fresh.contains(p))
-        .collect();
+    let out: Vec<String> = dying.into_iter().filter(|p| !fresh.contains(p)).collect();
     let mut retain: HashSet<String> = first.clone();
     for p in fresh {
         retain.insert(p.clone());

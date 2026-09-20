@@ -134,9 +134,7 @@ impl TelegramClient {
                     // Effect-shaped only: a bare "not allowed" also matches
                     // unrelated fatals (rights/kicked) that must fail fast
                     // below instead of burning a second send that fails too.
-                    if params.get("message_effect_id").is_some()
-                        && is_effect_rejection(&msg)
-                    {
+                    if params.get("message_effect_id").is_some() && is_effect_rejection(&msg) {
                         let Some(obj) = params.as_object_mut() else {
                             break;
                         };

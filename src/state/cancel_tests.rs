@@ -62,8 +62,14 @@ async fn test_quiet_clears_limit_episode_loud_parity() {
     // dead/shell retire (loud parity: cancel_jobs_for clears it).
     let (s, _dir) = isolated_state();
     let now = std::time::Instant::now();
-    s.limit_alert.lock().await.insert("t:p1".into(), ("m".into(), now));
-    s.limit_seen.lock().await.insert("t:p1".into(), ("m".into(), now));
+    s.limit_alert
+        .lock()
+        .await
+        .insert("t:p1".into(), ("m".into(), now));
+    s.limit_seen
+        .lock()
+        .await
+        .insert("t:p1".into(), ("m".into(), now));
     let job = Job::new(vec![], 1, None);
     s.jobs.lock().await.insert("t:p1".into(), job.clone());
     assert!(s.cancel_jobs_for_quiet("t:p1").await);
@@ -88,18 +94,41 @@ async fn test_job_only_preserves_pending_intent() {
 }
 
 #[tokio::test]
-async fn test_clear_pending_if_matches_is_exact() {
-    // Match-guarded clear: only the exact submit triple clears — a
-    // resubmitted successor survives the loser's clear, a vacant slot
-    // clears nothing.
+async fn test_clear_pending_if_epoch_matches_is_exact() {
+    // Match-guarded clear: only the exact submit triple + generation
+    // clears — a resubmitted successor survives the loser's clear, a
+    // vacant slot clears nothing. An identical re-prompt ("continue"×2)
+    // bumps the epoch without changing the text, so text equality alone
+    // must not wipe it.
+    use std::sync::atomic::AtomicU64;
     let (s, _dir) = isolated_state();
+    let epoch = AtomicU64::new(0);
     s.remember_pending("t:p1", 1, None, "make").await;
-    assert!(!s.clear_pending_if_matches("t:p1", 1, None, "other").await);
-    assert!(!s.clear_pending_if_matches("t:p1", 2, None, "make").await);
+    assert!(
+        !s.clear_pending_if_epoch_matches("t:p1", 1, None, "other", 0, &epoch)
+            .await
+    );
+    assert!(
+        !s.clear_pending_if_epoch_matches("t:p1", 2, None, "make", 0, &epoch)
+            .await
+    );
     assert!(s.pending.lock().await.contains_key("t:p1"));
-    assert!(s.clear_pending_if_matches("t:p1", 1, None, "make").await);
+    // Stale generation (identical text, bumped epoch): keep.
+    epoch.store(1, std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        !s.clear_pending_if_epoch_matches("t:p1", 1, None, "make", 0, &epoch)
+            .await
+    );
+    assert!(s.pending.lock().await.contains_key("t:p1"));
+    assert!(
+        s.clear_pending_if_epoch_matches("t:p1", 1, None, "make", 1, &epoch)
+            .await
+    );
     assert!(!s.pending.lock().await.contains_key("t:p1"));
-    assert!(!s.clear_pending_if_matches("t:p1", 1, None, "make").await);
+    assert!(
+        !s.clear_pending_if_epoch_matches("t:p1", 1, None, "make", 1, &epoch)
+            .await
+    );
 }
 
 #[tokio::test]
@@ -108,11 +137,17 @@ async fn test_job_only_vacant_keeps_live_debounce() {
     let (s, _dir) = isolated_state();
     let live = Job::new(vec![], 9, None);
     s.jobs.lock().await.insert("t:p9".into(), live);
-    s.debounce.lock().await.insert("t:p9".into(), ("idle".into(), std::time::Instant::now()));
+    s.debounce
+        .lock()
+        .await
+        .insert("t:p9".into(), ("idle".into(), std::time::Instant::now()));
     assert!(!s.cancel_job_only_for("t:vacant").await);
     assert!(s.debounce.lock().await.contains_key("t:p9"));
     // Vacant pane's own stale debounce still clears.
-    s.debounce.lock().await.insert("t:vacant".into(), ("idle".into(), std::time::Instant::now()));
+    s.debounce.lock().await.insert(
+        "t:vacant".into(),
+        ("idle".into(), std::time::Instant::now()),
+    );
     assert!(!s.cancel_job_only_for("t:vacant").await);
     assert!(!s.debounce.lock().await.contains_key("t:vacant"));
 }

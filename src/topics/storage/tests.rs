@@ -209,9 +209,10 @@ fn test_recent_msgs_roundtrip_and_bounding() {
 fn test_remove_tag_if_threadless_rolls_back_failed_create() {
     // Failed creates must not leak threadless tags (tag gaps forever):
     // a tag with no thread rolls back, a threaded tag survives.
-    let st = TopicStorage::at(
-        std::env::temp_dir().join(format!("herdr-tg-test-tagrollback-{}.json", std::process::id())),
-    );
+    let st = TopicStorage::at(std::env::temp_dir().join(format!(
+        "herdr-tg-test-tagrollback-{}.json",
+        std::process::id()
+    )));
     let tag = st.assign_tag("w1:p9", "opencode");
     assert_eq!(st.get_tag("w1:p9"), Some(tag));
     assert_eq!(st.get_thread("w1:p9"), None);

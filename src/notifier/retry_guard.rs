@@ -8,8 +8,7 @@ pub(crate) fn moved_on(cur: Option<&str>, settled: &str) -> bool {
     match cur {
         None => true,
         Some(st) => {
-            st != settled
-                && !(matches!(settled, "idle" | "done") && matches!(st, "idle" | "done"))
+            st != settled && !(matches!(settled, "idle" | "done") && matches!(st, "idle" | "done"))
         }
     }
 }
@@ -21,11 +20,7 @@ pub(crate) async fn cur_status(s: &crate::state::AppState, pane: &str) -> Option
 
 /// Post-sleep re-check (window = 15s inter-retry sleep): work starting
 /// mid-sleep owns the pane now — moved-on stays silent.
-pub(crate) async fn moved_on_now(
-    s: &crate::state::AppState,
-    pane: &str,
-    settled: &str,
-) -> bool {
+pub(crate) async fn moved_on_now(s: &crate::state::AppState, pane: &str, settled: &str) -> bool {
     moved_on(cur_status(s, pane).await.as_deref(), settled)
 }
 

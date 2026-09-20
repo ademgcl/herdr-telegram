@@ -46,8 +46,8 @@ pub(crate) const KEYWAIT_STALE_SECS: u64 = 900;
 /// topic the bare-text path types into blocked panes anyway).
 pub(crate) const TYPEWAIT_STALE_SECS: u64 = 3600;
 
-/// Spawn single-flight lifetime: synthetic `spawn:<chat>:<msg>` keys are
-/// never live panes, so they must never sit in the pane-keyed `blockop`
+/// Spawn single-flight lifetime: synthetic `spawn:<action>:…:<chat>:<msg>`
+/// keys are never live panes, so they must never sit in the pane-keyed `blockop`
 /// (hygiene reaps non-live keys). Own map, age-only expiry, same corpse
 /// bound style as tap guards.
 pub(crate) const SPAWNOP_STALE_SECS: u64 = 300;

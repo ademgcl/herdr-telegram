@@ -23,6 +23,7 @@ mod targets;
 mod typing;
 
 pub use self::guard::OpGuard;
+pub(crate) use self::persist_paths::offset_file;
 pub use self::persist_paths::state_dir;
 
 /// Armed shell-run waiter: workspace id + arm instant (see `runwait`).

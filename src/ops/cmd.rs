@@ -42,13 +42,15 @@ fn snapshot(port: u16) -> Status {
         socket_ok: std::fs::metadata(&socket)
             .map(|m| m.file_type().is_socket())
             .unwrap_or(false),
-        offset: std::fs::read_to_string(dir.join("offset.state"))
+        offset: std::fs::read_to_string(crate::state::offset_file())
             .ok()
             .map(|s| s.trim().to_string()),
         topic_titles: std::fs::read_to_string(dir.join("topics.state"))
             .map(|t| count_topics_in_text(&t))
             .unwrap_or(0),
-        log_bytes: std::fs::metadata("bot.log").map(|m| m.len()).unwrap_or(0),
+        log_bytes: std::fs::metadata(proc::log_path())
+            .map(|m| m.len())
+            .unwrap_or(0),
     }
 }
 
@@ -200,7 +202,7 @@ pub(crate) fn rotate_log_if_huge() {
     if meta.len() <= LIMIT {
         return;
     }
-    let bak = std::path::PathBuf::from("bot.log.1");
+    let bak = std::path::PathBuf::from(format!("{}.1", log.display()));
     if std::fs::copy(&log, &bak).is_ok()
         && let Ok(f) = std::fs::OpenOptions::new().write(true).open(&log)
         && f.set_len(0).is_ok()

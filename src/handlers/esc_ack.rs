@@ -67,10 +67,20 @@ pub(crate) fn heal_stripped(s: &AppState, pane: &str) {
 /// Shared get_agent error ack (single source for all gates): classified
 /// death → gone probe, blips → retryable. Never UNKNOWN_TARGET on outage.
 /// Verdict via esc_guard::classify (pinned by test).
-pub(crate) async fn get_err_msg(s: &AppState, chat: i64, thread: Option<i64>, pane: &str, msg: &str) {
+pub(crate) async fn get_err_msg(
+    s: &AppState,
+    chat: i64,
+    thread: Option<i64>,
+    pane: &str,
+    msg: &str,
+) {
     match super::esc_guard::classify(Err(msg.to_string())) {
         super::esc_guard::EscGate::Gone => gone_ack(s, chat, thread, pane).await,
-        _ => _ = s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None).await,
+        _ => {
+            _ =
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                    .await
+        }
     }
 }
 

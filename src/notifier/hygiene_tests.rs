@@ -274,8 +274,7 @@ fn test_confirm_deaths_union_verified() {
     // (pruning on one read's miss would wipe live baselines/dedup);
     // a pane missing from both reads is truly dead.
     let first: HashSet<String> = HashSet::from(["live:p1".to_string()]);
-    let fresh: HashSet<String> =
-        HashSet::from(["live:p1".to_string(), "flap:p2".to_string()]);
+    let fresh: HashSet<String> = HashSet::from(["live:p1".to_string(), "flap:p2".to_string()]);
     let dying = vec!["flap:p2".to_string(), "dead:p9".to_string()];
     let (out, retain) = super::confirm_deaths(&first, &fresh, dying);
     assert_eq!(out, vec!["dead:p9".to_string()]);

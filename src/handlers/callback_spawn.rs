@@ -5,8 +5,8 @@ use crate::{
 };
 use std::{collections::HashMap, time::Instant};
 
-/// Disk copy of the spawn dedup (`spawn:<chat>:<msg>` per line): the
-/// offset acks AFTER handling, so a crash between mint and ack replays
+/// Disk copy of the spawn dedup (`spawn:<action>:…:<chat>:<msg>` per
+/// line): the offset acks AFTER handling, so a crash between mint and ack replays
 /// the tap inside STALE_SECS — RAM-only dedup would double-mint
 /// billable resources. Loaded at boot with every entry counting as
 /// fresh (over-dedup fails safe: the owner retaps a fresh card with a
@@ -80,8 +80,20 @@ pub(crate) async fn handle_new_space(
         }
     };
     super::shell::open_space_shell(s, chat, thread, &ws_id).await;
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
+    // Post-mint render is fail-closed like the pre-mint paths: a herdr
+    // outage after the billable mint must not overwrite the card with an
+    // empty menu (the space exists — the owner retaps a fresh card).
+    let (spaces, agents) = match (
+        list_workspaces(&s.cfg.socket).await,
+        list_agents(&s.cfg.socket).await,
+    ) {
+        (Ok(spaces), Ok(agents)) => (spaces, agents),
+        _ => {
+            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return true;
+        }
+    };
     s.tg.edit_msg(
         chat,
         msg_id,

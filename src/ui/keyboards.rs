@@ -103,7 +103,12 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
         // Space names are user-controlled: cap the FINAL text like the
         // menu arms above, or long names fail sendMessage with
         // BUTTON_TEXT_INVALID (kind is herdr-fed, capped the same way).
-        let label = btn_label(&format!("{} {} @ {}", emoji(&a.status), a.kind, ws_label(spaces, &a.ws)));
+        let label = btn_label(&format!(
+            "{} {} @ {}",
+            emoji(&a.status),
+            a.kind,
+            ws_label(spaces, &a.ws)
+        ));
         kb.push(vec![btn(label, &format!("a:{}", a.pane))]);
     }
 

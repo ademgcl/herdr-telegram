@@ -60,14 +60,14 @@ pub async fn settle_books(
     {
         return;
     }
-    // Final generation re-check at clear time (detached Relaxed loads
-    // above): an identical re-prompt ("continue"×2) landing between the
-    // checks and this clear bumps the epoch without changing the text —
-    // text equality alone would wipe the successor's intent.
-    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-        return;
-    }
-    s.clear_pending_if_matches(pane, chat, th, &prompt).await;
+    // Final generation-checked clear (single critical section inside:
+    // pending lock held across the atomic epoch load): an identical
+    // re-prompt ("continue"×2) landing between a detached check and the
+    // clear bumps the epoch without changing the text — text equality
+    // alone would wipe the successor's intent (silent reply loss).
+    // Shell parity: clear_shell_if_matches.
+    s.clear_pending_if_epoch_matches(pane, chat, th, &prompt, entry_epoch, &job.epoch)
+        .await;
     // Re-check the epoch under the map guard with no await after: reuse
     // keeps the SAME Arc (ptr_eq alone cannot tell a successor apart),
     // so a submit landing between the checks above and this remove

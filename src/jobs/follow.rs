@@ -11,7 +11,11 @@
 //! In-memory only (no durable intent): the turn is seconds-long; a
 //! restart mid-turn loses it like spontaneous already did. Skipping the
 //! disk write also avoids last-wins races with a concurrent new prompt.
-use crate::{herdr::client::{get_agent, read_screen}, jobs::job::Job, state::AppState};
+use crate::{
+    herdr::client::{get_agent, read_screen},
+    jobs::job::Job,
+    state::AppState,
+};
 
 /// Pure stand-down rule (tested): a live (non-stopped) job owns the pane,
 /// or the agent never resumed (still `blocked`, or the status read failed
@@ -32,7 +36,12 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
     // watcherless after one beat (the race this follower exists for:
     // taps classified Unchanged on lagging status never even called us).
     for _ in 0..6 {
-        if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
+        if s.jobs
+            .lock()
+            .await
+            .get(pane)
+            .is_some_and(|j| !j.is_stopped())
+        {
             return;
         }
         match get_agent(&s.cfg.socket, pane).await {
@@ -41,7 +50,12 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
-    if s.jobs.lock().await.get(pane).is_some_and(|j| !j.is_stopped()) {
+    if s.jobs
+        .lock()
+        .await
+        .get(pane)
+        .is_some_and(|j| !j.is_stopped())
+    {
         return;
     }
     match get_agent(&s.cfg.socket, pane).await {

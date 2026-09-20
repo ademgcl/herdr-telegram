@@ -266,8 +266,14 @@ fn test_is_blank_card_guards_outage_keeps_pick() {
 #[test]
 fn test_parse_options_numbered_caps_at_8() {
     // Scrollback lists never mint unreachable buttons (card+tap bound 8).
-    let names = ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
-    let lines: Vec<String> = names.iter().enumerate().map(|(i, n)| format!("{}. {n}", i + 1)).collect();
+    let names = [
+        "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+    ];
+    let lines: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("{}. {n}", i + 1))
+        .collect();
     let opts = parse_options(&lines);
     assert_eq!(opts.len(), 8, "uncapped parse: {opts:?}");
     assert_eq!(opts[7], "Eight");

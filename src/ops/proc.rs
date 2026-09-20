@@ -65,6 +65,11 @@ pub fn port_busy(port: u16) -> bool {
 /// PIDs that look like bot binaries (display only, never control
 /// ground truth — macOS has no /proc; one read-only pgrep). Excludes
 /// our own process (its argv matches the pattern while running `dev`).
+/// pgrep -f over-matches one-shot CLI invocations (`herdr-telegram ctl
+/// …`, `dev …`), so every candidate is re-validated through
+/// `looks_like_bot` (bare daemon argv only) — discovery and kill
+/// validation never disagree, or `dev status` reports a transient CLI
+/// pid as a running bot.
 pub(crate) fn bot_pids() -> Vec<u32> {
     let me = std::process::id();
     let out = std::process::Command::new("pgrep")
@@ -75,6 +80,7 @@ pub(crate) fn bot_pids() -> Vec<u32> {
         .split_whitespace()
         .filter_map(|p| p.parse().ok())
         .filter(|p| *p != me)
+        .filter(|pid| pid_cmd(*pid).is_some_and(|c| looks_like_bot(&c)))
         .collect()
 }
 

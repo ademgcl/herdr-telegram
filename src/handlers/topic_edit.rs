@@ -126,9 +126,6 @@ mod tests {
             ),
             None
         );
-        assert_eq!(
-            parse_topic_icon_cleared(&json!({"text": "hi"})),
-            None
-        );
+        assert_eq!(parse_topic_icon_cleared(&json!({"text": "hi"})), None);
     }
 }
