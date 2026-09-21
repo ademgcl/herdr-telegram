@@ -225,7 +225,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                             s.tg.edit_msg(
                                 chat,
                                 msg_id,
-                                &format!("{pane} is now a shell pane (agent gone)"),
+                                &crate::ui::shell_gone_text(pane),
                                 None,
                             )
                             .await;

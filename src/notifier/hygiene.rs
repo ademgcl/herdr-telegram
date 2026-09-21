@@ -130,53 +130,46 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // Retain live-only (not live∪known): known includes
             // the just-cleared dead panes, so ∪ would keep
             // everything clear_pane missed.
+            // Double-confirm before ANY live-only retain, even when idle
+            // or dying is empty: the retains below prune idle-only maps
+            // (seen/history/status) for panes that never enter `known`,
+            // so a single transient `list_panes` miss wipes a live
+            // session's baseline and reposts scrollback as fresh. Both
+            // reads must miss to retire; the union joins the retain set.
+            if !injected {
+                let first = live.clone();
+                *pane_list = None;
+                match panes_once(s, pane_list).await {
+                    Some(fresh) if !fresh.is_empty() => {
+                        let (_, union) = confirm_deaths(&live, &fresh, Vec::new());
+                        for p in &union {
+                            live.insert(p.clone());
+                        }
+                    }
+                    Some(_) => {
+                        eprintln!("[reconcile] confirm empty, keeping all");
+                        *pane_list = Some(first);
+                        // Fail-open includes the retains below: `live`
+                        // is the suspect first read, so pruning maps
+                        // against it would wipe live panes' baselines
+                        // and repost scrollback as fresh. Skip the tick.
+                        return;
+                    }
+                    _ => {
+                        eprintln!("[reconcile] confirm read failed, keeping all");
+                        *pane_list = Some(first.clone());
+                        // Same fail-open as above: never prune on a
+                        // single partial read.
+                        return;
+                    }
+                }
+            }
             if reaping {
-                // Double-confirm before ANY live-only retain, even when
-                // dying is empty: the retains below prune idle-only maps
-                // (seen/history/status) for panes outside `known`, so a
-                // single transient miss wipes a live baseline and reposts
-                // scrollback as fresh. Both reads must miss to retire.
                 let dying: Vec<String> = known
                     .iter()
                     .filter(|p| !live.contains(*p))
                     .cloned()
                     .collect();
-                // Double-confirm before ANY live-only retain, even when
-                // dying is empty: the retains below prune idle-only maps
-                // (seen/history/status) for panes that never enter known,
-                // so a single transient `list_panes` miss wipes a live
-                // session's baseline and reposts scrollback as fresh.
-                let dying = if injected {
-                    dying
-                } else {
-                    let first = live.clone();
-                    *pane_list = None;
-                    match panes_once(s, pane_list).await {
-                        Some(fresh) if !fresh.is_empty() => {
-                            let (out, union) = confirm_deaths(&live, &fresh, dying);
-                            for p in &union {
-                                live.insert(p.clone());
-                            }
-                            out
-                        }
-                        Some(_) => {
-                            eprintln!("[reconcile] confirm empty, keeping all");
-                            *pane_list = Some(first);
-                            // Fail-open includes the retains below: `live`
-                            // is the suspect first read, so pruning maps
-                            // against it would wipe live panes' baselines
-                            // and repost scrollback as fresh. Skip the tick.
-                            return;
-                        }
-                        _ => {
-                            eprintln!("[reconcile] confirm read failed, keeping all");
-                            *pane_list = Some(first.clone());
-                            // Same fail-open as above: never prune on a
-                            // single partial read.
-                            return;
-                        }
-                    }
-                };
                 for pane in &dying {
                     // Job-only retire: the durable intent is boot-recover's
                     // reporter for dead panes — a loud retire would wipe it

@@ -39,8 +39,8 @@ const RETRIES: u32 = 2;
 
 /// Spontaneous screen read (single source for `cards` + the retry below):
 /// `recent_unwrapped` first (80-line settle window), visible-viewport
-/// fallback for busy alt-screen TUIs (finalize parity — `read_screen`
-/// alone errors there and the reply would be lost with no new transition
+/// fallback for busy alt-screen TUIs (finalize parity — recent-only
+/// reads error there and the reply would be lost with no new transition
 /// to re-fire the arm). Empty means outage/unknown on both sources.
 pub(crate) async fn read_screen_spontaneous(s: &AppState, pane: &str) -> Vec<String> {
     let recent: Vec<String> = read_agent_output(&s.cfg.socket, pane, 80)
@@ -92,6 +92,51 @@ pub(crate) async fn read_screen_retry(
         }
     }
     None
+}
+
+/// Stray/empty settle arm (split from `cards`, 300-line file limit):
+/// single stray chars never page, but the baseline must still advance or
+/// the same stray re-RPCs every settle forever. Post-RPC re-checks (a
+/// prompt/final, moved-on work, or a newer arm landing during the reads
+/// above): anchoring would wipe the fresh delta into the baseline (lost
+/// reply) — consume the arm only, never the baseline. Checked BEFORE
+/// sync_topic_prune: strays post nothing, so they must neither mint a
+/// card-less topic nor retire the blocked dialog.
+pub(crate) async fn settle_stray(
+    s: &AppState,
+    pane: &str,
+    settled: &str,
+    armed_at: Instant,
+    screen: Vec<String>,
+) {
+    // Newer arm superseding in the read window owns the reply (pre-post
+    // parity: exact-arm match, arm left for the new owner).
+    if s.debounce
+        .lock()
+        .await
+        .get(pane)
+        .map(|(st, at)| st != settled || at != &armed_at)
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let raced = s.job_live(pane).await
+        || s.last_done
+            .lock()
+            .await
+            .get(pane)
+            .map(|t| *t > armed_at)
+            .unwrap_or(false)
+        || super::retry_guard::moved_on(
+            s.status.lock().await.get(pane).map(String::as_str),
+            settled,
+        );
+    if raced {
+        consume_reset_arm(&mut *s.debounce.lock().await, pane, armed_at);
+        return;
+    }
+    consume_reset_arm(&mut *s.debounce.lock().await, pane, armed_at);
+    s.seen.lock().await.insert(pane.to_string(), screen);
 }
 
 /// Re-poll an ambiguous liveness verdict. `None` = caller returns at

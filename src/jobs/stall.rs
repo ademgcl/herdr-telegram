@@ -4,7 +4,7 @@
 //! edits never buzz. Scans the raw screen every tick and posts one NEW
 //! (buzzing) card per episode.
 use crate::{
-    herdr::client::read_screen_for_limits,
+    herdr::client::{get_agent, read_screen_for_limits},
     jobs::episode::BuzzEpisode,
     jobs::job::Job,
     jobs::notices::{detect_limit, limit_card_text},
@@ -99,6 +99,29 @@ pub(crate) async fn watch_stall(
     // screen read above owns the pane — buzzing the old screen into the
     // new prompt's thread is stale. Release the claim, unfire, stay silent.
     if job.epoch.load(Ordering::Relaxed) != epoch_before {
+        release_claim(s, pane, hit.kind, now).await;
+        episode.unfire();
+        return screen;
+    }
+    // Moved-on re-check (watchdog parity): a quit-to-shell landing
+    // between the snapshot and the send must not page the stale ❗ into
+    // the shelled topic. `None` (pruned/dead) is moved-on too — never
+    // buzz into the unknown. Fresh read, not the watchdog-cached status
+    // (up to 60s old): a PC-side quit inside the screen-read→send window
+    // still shows the old status and pages the corpse thread.
+    // Fail-closed: any non-agent verdict (shell, dead, unreadable)
+    // releases the claim and stays silent — the next tick retries.
+    let cur = s.status.lock().await.get(pane).cloned();
+    if !matches!(cur.as_deref(), Some(v) if v != "shell") {
+        release_claim(s, pane, hit.kind, now).await;
+        episode.unfire();
+        return screen;
+    }
+    if get_agent(&s.cfg.socket, pane).await.is_err() {
+        // Fail-closed (send_keys parity): only a confirmed agent takes
+        // the buzz — shell flips, dead panes and blips all stay silent
+        // and retry next tick. list_panes is not consulted: a live shell
+        // pane would read as "present" and page the corpse thread.
         release_claim(s, pane, hit.kind, now).await;
         episode.unfire();
         return screen;

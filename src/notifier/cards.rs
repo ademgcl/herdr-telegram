@@ -71,8 +71,7 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // wipe a good baseline and repost scrollback. Bounded retry (split:
     // `cards_retry`): a one-shot return here loses the reply forever —
     // no new transition re-fires this arm.
-    let mut screen: Vec<String> =
-        super::cards_retry::read_screen_spontaneous(&s, &pane).await;
+    let mut screen: Vec<String> = super::cards_retry::read_screen_spontaneous(&s, &pane).await;
     if screen.is_empty() {
         let Some(retry) = super::cards_retry::read_screen_retry(&s, &pane, armed_at).await else {
             return;
@@ -157,47 +156,15 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     let spaces_ok = kind == "?" || spaces.iter().any(|w| w.id == ws_id);
     // Single stray chars (picker echoes, vim residue) never page; real
     // shorts ("ok", "done") do. Empty stays silent but advances the
-    // baseline so the stray doesn't haunt future settles.
-    // Checked BEFORE sync_topic_prune: strays post nothing, so they must
-    // neither mint a card-less topic nor retire the blocked dialog.
+    // baseline so the stray doesn't haunt future settles (split:
+    // `settle_stray` — 300-line file limit).
     if body.chars().count() < 2 {
-        // Post-RPC re-check (window = get_agent/spaces above): a
-        // prompt/final landing during those RPCs owns the pane now —
-        // anchoring would wipe its fresh delta into the baseline (lost
-        // reply). A working flip in the same window is moved-on work in
-        // progress — anchoring folds it into the baseline and shrinks
-        // the next genuine delta. Consume the arm only, never the baseline.
-        let raced = s.job_live(&pane).await
-            || s.last_done
-                .lock()
-                .await
-                .get(&pane)
-                .map(|t| *t > armed_at)
-                .unwrap_or(false)
-            || super::retry_guard::moved_on(
-                s.status.lock().await.get(&pane).map(String::as_str),
-                &settled,
-            );
-        if raced {
-            consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
-            return;
-        }
-        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
-        s.seen.lock().await.insert(pane.clone(), screen);
+        super::cards_retry::settle_stray(&s, &pane, &settled, armed_at, screen).await;
         return;
     }
-    // Pruned (human-deleted) topics retire the dialog before the settle
-    // card posts into the recreated, card-less topic. After the stray
-    // gate above: strays mint/post nothing. Skipped on degraded spaces
-    // (guard above) — never mint a stub on outage.
-    if spaces_ok && s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
-        crate::handlers::dialog::retire_dialog(&s, &pane).await;
-    }
-    // Pre-post re-check (window = read + sync RPCs above): a job/final
-    // that landed during get_agent/spaces/sync owns the reply now — and
-    // PC-side work starting mid-read owns the pane (moved-on stays
-    // silent): same idle↔done collapse as the arm check. A /cancel or a
-    // newer arm in the same window aborts too (exact-arm match).
+    // Pre-post re-check (window = read RPCs above): a job/final, new
+    // work (moved-on), /cancel or newer arm in that window aborts.
+    // Same idle↔done collapse as the arm check; exact-arm match.
     if s.job_live(&pane).await {
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
@@ -230,6 +197,11 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
         return;
     }
+    // Pruned topics retire the dialog before posting into the recreated topic.
+    // After the guards (aborted arms mint/retire nothing); skipped on degraded spaces.
+    if spaces_ok && s.topics.sync_topic_prune(&pane, &kind, raw_space).await.1 {
+        crate::handlers::dialog::retire_dialog(&s, &pane).await;
+    }
     // Bounded retry on SEND outage only (a blip must not eat a one-shot
     // reply). Two extra tries, then the next transition owns it.
     // Refusals (takeover, newer last_done/arm, moved-on) break instead
@@ -246,7 +218,17 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         if i > 0 && super::retry_guard::moved_on_now(&s, &pane, &settled).await {
             break;
         }
-        if post_spontaneous_card(&s, &pane, &kind, raw_space, &settled, &body, Some(armed_at), spaces_ok).await
+        if post_spontaneous_card(
+            &s,
+            &pane,
+            &kind,
+            raw_space,
+            &settled,
+            &body,
+            Some(armed_at),
+            spaces_ok,
+        )
+        .await
         {
             delivered = true;
             break;

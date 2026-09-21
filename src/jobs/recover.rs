@@ -1,6 +1,6 @@
 use super::runner::watch_job;
 use crate::{
-    herdr::client::{get_agent, list_agents, read_screen},
+    herdr::client::{get_agent, list_agents, read_screen_adaptive},
     jobs::finalize::report,
     jobs::job::Job,
     state::AppState,
@@ -239,7 +239,10 @@ pub async fn recover_pending(s: &AppState) {
                 }
             }
         }
-        let baseline = read_screen(&s.cfg.socket, &pane, 400).await;
+        // Adaptive (enqueue parity): blocked alt-screen panes reject the
+        // output source — a plain read baselines `[]` and the full
+        // scrollback arrives as "fresh" (echo/dupe reply).
+        let baseline = read_screen_adaptive(&s.cfg.socket, &pane).await;
         let job = Job::new(baseline, pp.chat, pp.thread);
         *job.prompt.lock().await = pp.prompt.clone();
         // The intent file holds one owed prompt: mirror it in the

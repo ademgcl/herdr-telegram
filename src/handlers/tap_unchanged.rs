@@ -26,7 +26,7 @@ pub async fn handle_unchanged(
     after: &[String],
     op: crate::state::OpGuard<'_>,
 ) {
-    if dialog_moved(before, after) || after.is_empty() {
+    if dialog_moved(before, after) {
         let mut shown = send.nav.clone();
         shown.extend(send.confirm.iter().cloned());
         let sent = shown.join("+");
@@ -43,6 +43,16 @@ pub async fn handle_unchanged(
         s.remember(chat, mid, pane).await;
         s.tg.strip_buttons(chat, msg_id).await;
         s.blocked_sig.lock().await.remove(pane);
+        drop(op);
+        crate::jobs::follow::follow_answer(s, pane, chat, thread, &send.label).await;
+        delayed_refresh(s, pane).await;
+        return;
+    }
+    if after.is_empty() {
+        // Unreadable re-read (blip): never touch the card — the sig stays
+        // so the next refresh reposts nothing new, buttons stay armed, and
+        // the follower (which polls status itself and stands down on
+        // outage) still covers a resume hiding behind the blip.
         drop(op);
         crate::jobs::follow::follow_answer(s, pane, chat, thread, &send.label).await;
         delayed_refresh(s, pane).await;

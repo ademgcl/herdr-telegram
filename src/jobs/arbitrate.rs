@@ -60,6 +60,7 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{types::MAX_MSG_UNITS, ui::chunks};
 
     fn v(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -165,6 +166,56 @@ mod tests {
             select_final_body(&acc, &screen, "status?"),
             "The project has three services, all green and deployed."
         );
+    }
+
+    #[test]
+    fn test_pipeline_transient_noise_yields_single_final_card() {
+        // Finalize-shaped pipeline end to end: streamed deltas + settled
+        // screen, both polluted with tool/progress noise → exactly one
+        // final-only part. This is the reported ✱/~ leak as a whole.
+        let prompt = "fix the guard";
+        let answer = "Found it — the guard was missing in check().";
+        let acc = v(&[
+            "  ┃  fix the guard",
+            "     I'll take a look first.",
+            "✱ Grep \"guard\" in src (5 matches)",
+            "~ Writing command…",
+            "     Found it — the guard was missing in check().",
+        ]);
+        let screen = v(&[
+            "     older turn prose that goes on a bit",
+            "  ┃  fix the guard",
+            "     Thought · 200ms",
+            "✱ Grep \"guard\" in src (5 matches)",
+            "     Found it — the guard was missing in check().",
+            "────────────────────────────────────",
+            ">",
+            "────────────────────────────────────",
+            "? for shortcuts             Gemini 3.8 Flash · high",
+        ]);
+        let body = select_final_body(&acc, &screen, prompt);
+        assert_eq!(body, answer);
+        let parts = chunks(&body, MAX_MSG_UNITS);
+        assert_eq!(parts.len(), 1, "one final card, never chatter + reply");
+        assert_eq!(parts[0], answer);
+    }
+
+    #[test]
+    fn test_pipeline_transient_only_stream_yields_to_settled_answer() {
+        // Starved stream (alt-screen TUI served only noise while working):
+        // the transient must not shadow the real answer — the settled
+        // screen wins instead of posting chatter.
+        let answer = "Found it — the guard was missing in check().";
+        let acc = v(&["✱ Grep \"guard\" in src (9 matches)", "~ Writing command…"]);
+        let screen = v(&[
+            "     Thought · 200ms",
+            "✱ Grep \"guard\" in src (9 matches)",
+            "     Found it — the guard was missing in check().",
+            "────────────────────────────────────",
+            ">",
+        ]);
+        let body = select_final_body(&acc, &screen, "fix the guard");
+        assert_eq!(body, answer);
     }
 
     #[test]

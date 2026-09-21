@@ -23,14 +23,16 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
 
     // Shell topics never consume typewaits (no blocked dialogs here): a
     // waiter stranded on this thread (stale/crafted B:type) would sit
-    // forever, so drop it on entry. Fail-closed: a dropped waiter means
+    // forever, so drop it on entry. Normalized key (consume parity with
+    // `forum::waiter_key`: General None and Some(1) are one conversation).
+    // Fail-closed: a dropped waiter means
     // the text was typed as a dialog answer across an agent→shell flip —
     // never run it as a shell command blind (no write on ambiguous).
     let had_typewait = s
         .typewait
         .lock()
         .await
-        .remove(&(chat, Some(thread_id)))
+        .remove(&super::forum::waiter_key(chat, Some(thread_id)))
         .is_some();
 
     if cmd == "/help" || cmd == "/start" {

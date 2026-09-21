@@ -156,6 +156,12 @@ pub const RESET_NO_PERM: &str = "⚠️ reset aborted: bot lacks 'can_manage_top
 /// it — dup'd literals re-drift).
 pub const RESET_FORUM_ONLY: &str = "⚠️ Reset is only available in forum supergroup mode";
 
+/// Single source for the agent-gone shell notice (callback `a:` arm +
+/// DM `/status` share it — dup'd literals re-drift).
+pub fn shell_gone_text(pane: &str) -> String {
+    format!("{pane} is now a shell pane (agent gone)")
+}
+
 /// Single source for the spawn-failure ack (`/spawn` + button-spawn
 /// share it — dup'd literals re-drift).
 pub fn spawn_failed(e: &str) -> String {

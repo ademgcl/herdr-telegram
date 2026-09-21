@@ -69,12 +69,17 @@ pub(crate) async fn prune_age(s: &AppState) {
         .await
         .retain(|_, at| !claim_stale(*at, now, crate::types::STALE_SECS));
     // Debounce arms own a 15s task + bounded retries: older owns no live
-    // task (or a wedged one). Done stamps past the quiet window are inert.
+    // task (or a wedged one). Done stamps live as long as the arms that
+    // consult them: settle cards suppress on `last_done > armed_at` for
+    // arms up to DEBOUNCE_STALE_SECS old — pruning on the shorter quiet
+    // window forgot delivered finals while a stale arm still lived and
+    // let one stale duplicate card through.
     s.debounce
         .lock()
         .await
         .retain(|_, (_, at)| !claim_stale(*at, now, DEBOUNCE_STALE_SECS));
-    s.last_done.lock().await.retain(|_, t| {
-        t.elapsed() < std::time::Duration::from_secs(crate::notifier::POST_PROMPT_QUIET_SECS)
-    });
+    s.last_done
+        .lock()
+        .await
+        .retain(|_, t| t.elapsed() < std::time::Duration::from_secs(DEBOUNCE_STALE_SECS));
 }

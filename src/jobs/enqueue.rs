@@ -105,8 +105,12 @@ pub async fn enqueue_prompt(
         );
         // The submitter always hears the truth about their own submit,
         // even when older work stays covered by the running watcher.
+        // Case-insensitive: herdr ships the marker in varying case and a
+        // missed blocked-submit strands the user with a dead error card
+        // instead of the answerable question (and vice versa on coincidental
+        // prose matches — the marker stays narrow by construction).
         let msg = e.to_string();
-        if msg.contains("blocked") {
+        if msg.to_lowercase().contains("blocked") {
             super::enqueue_blocked::report_blocked_submit(
                 &s,
                 req.chat_id,

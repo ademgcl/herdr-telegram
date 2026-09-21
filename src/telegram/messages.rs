@@ -146,11 +146,10 @@ impl TelegramClient {
                             break;
                         };
                         obj.remove("message_effect_id");
-                        used += 1;
-                        if used > 6 {
-                            eprintln!("sendMessage failed: {}", self.redact(&msg));
-                            break;
-                        }
+                        // Local fallback, not a server retry: the strip is
+                        // guaranteed-sendable, so it must not consume the
+                        // shared budget — after 6 floods the stripped send
+                        // below would else break unsent and drop the buzz.
                         continue;
                     }
                     // Telegram 5xx arrives as plain strings via `call`

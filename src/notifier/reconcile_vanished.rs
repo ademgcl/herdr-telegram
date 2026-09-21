@@ -8,6 +8,22 @@ use crate::{
     state::AppState,
 };
 
+/// Undo the report-slot claim when the pane turned over mid-flight: the
+/// `shell` stamp belongs to the dead turn, never the live successor.
+async fn restore_status(s: &AppState, pane: &str, prev: Option<String>) {
+    let mut st = s.status.lock().await;
+    if st.get(pane).map(|v| v == "shell").unwrap_or(false) {
+        match prev {
+            Some(p) => {
+                st.insert(pane.to_string(), p);
+            }
+            None => {
+                st.remove(pane);
+            }
+        }
+    }
+}
+
 /// Retire the watcher of a vanished agent and report the shell tail.
 /// Consumes `owed` (the pre-flip intent, if any). Never returns early
 /// with the intent dropped: success clears it via the quiet retire
@@ -39,8 +55,11 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
     }
     // Turned-over intent (submit raced the flip): retire the dead
     // watcher only, preserving the new pending — quiet would wipe it
-    // with no restore.
+    // with no restore. Restore the pre-claim status first: the `shell`
+    // stamp above would else cover the new turn, and the limit scanner
+    // skips `shell` while spontaneous suppresses it as moved-on.
     if !mine {
+        restore_status(s, pane, prev_status).await;
         s.cancel_job_only_for(pane).await;
         return;
     }
@@ -53,10 +72,12 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
             .pending_matches(pane, pp.chat, pp.thread, &pp.prompt)
             .await
     {
+        restore_status(s, pane, prev_status).await;
         s.cancel_job_only_for(pane).await;
         return;
     }
     if owed.is_none() && s.pending.lock().await.contains_key(pane) {
+        restore_status(s, pane, prev_status).await;
         s.cancel_job_only_for(pane).await;
         return;
     }

@@ -83,9 +83,11 @@ impl Drop for LimitClaim<'_> {
         if !self.armed {
             return;
         }
-        // Best-effort only: a contested lock keeps the claim (loud dup
-        // next tick) rather than blocking shutdown-time teardown. The
-        // live paths always release explicitly above.
+        // Best-effort only: no await in `Drop`. A contested lock keeps
+        // the claim, which SUPPRESSES the same kind for the remind
+        // window (silence, not a loud dup — see module docs). The live
+        // paths always release explicitly above; every critical section
+        // here is synchronous map ops, so contention is near-impossible.
         if let Ok(mut map) = self.s.limit_alert.try_lock()
             && matches!(map.get(&self.pane), Some((k, t)) if k == &self.kind && *t == self.at)
         {

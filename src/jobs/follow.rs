@@ -12,7 +12,7 @@
 //! restart mid-turn loses it like spontaneous already did. Skipping the
 //! disk write also avoids last-wins races with a concurrent new prompt.
 use crate::{
-    herdr::client::{get_agent, read_screen},
+    herdr::client::{get_agent, read_screen_adaptive},
     jobs::job::Job,
     state::AppState,
 };
@@ -34,7 +34,10 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
     // during the ~6s wait would else land inside the baseline and the
     // delta would come back empty (reply never lands, and the empty arm
     // anchors `seen` over it, suppressing the spontaneous debounce too).
-    let pre_baseline = read_screen(&s.cfg.socket, pane, 400).await;
+    // Adaptive (enqueue parity): blocked alt-screen panes reject the
+    // output source, so a plain read baselines `[]` and the full
+    // scrollback arrives as "fresh".
+    let pre_baseline = read_screen_adaptive(&s.cfg.socket, pane).await;
     // A tap/type answer resumes with status lag: herdr still samples
     // `blocked` for seconds after the resume, and RPC blips read the
     // same. Poll up to ~6s instead of abandoning the resumed turn
@@ -71,7 +74,7 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
     // when it came back empty (outage — `anchor_baseline` never anchors
     // empties, so the stream adopts the first real screen instead).
     let baseline = if pre_baseline.is_empty() {
-        read_screen(&s.cfg.socket, pane, 400).await
+        read_screen_adaptive(&s.cfg.socket, pane).await
     } else {
         pre_baseline
     };

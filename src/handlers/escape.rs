@@ -157,9 +157,14 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             // explainer above carries the way out, heal re-renders below.
             // Vanished-dialog race (tap parity): Esc resumed the agent
             // but status still samples `blocked` — follow the turn to
-            // its final, still-blocked stands down inside.
-            if dialog_moved(&before, &after) || after.is_empty() {
+            // its final, still-blocked stands down inside. An unreadable
+            // re-read keeps the sig (never touch the card on a blip);
+            // the follower polls status itself and stands down on outage.
+            if dialog_moved(&before, &after) {
                 s.blocked_sig.lock().await.remove(pane);
+                drop(_op);
+                crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
+            } else if after.is_empty() {
                 drop(_op);
                 crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
             }

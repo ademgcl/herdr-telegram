@@ -120,12 +120,20 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
             }
         };
     if !nav.is_empty() {
-        if send_agent_keys(socket, pane, &nav).await.is_err() {
+        if let Err(e) = send_agent_keys(socket, pane, &nav).await {
+            // Confirmed death (quit-to-shell race) is a stale tap —
+            // "already moved on", never "keys failed".
+            if crate::herdr::rpc::is_not_found(&e.to_string()) {
+                return TapCall::Unknown;
+            }
             return TapCall::KeysFailed;
         }
         tokio::time::sleep(Duration::from_millis(1200)).await;
     }
-    if send_agent_keys(socket, pane, &confirm).await.is_err() {
+    if let Err(e) = send_agent_keys(socket, pane, &confirm).await {
+        if crate::herdr::rpc::is_not_found(&e.to_string()) {
+            return TapCall::Unknown;
+        }
         return TapCall::KeysFailed;
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -140,6 +148,9 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
     // converges (strip + heal) and the retry re-validates live.
     let still_blocked = match get_agent(socket, pane).await {
         Ok(a) => a.status == "blocked",
+        // Pre-send-gate parity: confirmed death is a stale tap ("already
+        // moved on" + strip), only a blip reads as keys-failed + heal.
+        Err(e) if crate::herdr::rpc::is_not_found(&e.to_string()) => return TapCall::Unknown,
         Err(_) => return TapCall::KeysFailed,
     };
     TapCall::Landed(

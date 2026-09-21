@@ -1,18 +1,8 @@
 //! Terminal screen snapshots over herdr socket RPC.
 use super::agents::{read_agent_output, read_agent_visible};
 
-/// Terminal snapshot as trimmed lines (delta baseline / report source).
-pub async fn read_screen(socket: &str, pane: &str, lines: u32) -> Vec<String> {
-    read_agent_output(socket, pane, lines)
-        .await
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim_end().to_string())
-        .collect()
-}
-
-/// Visible-viewport snapshot — works on blocked panes where `read_screen`
-/// errors out.
+/// Visible-viewport snapshot — works on blocked panes where the
+/// `recent_unwrapped` source errors out.
 pub async fn read_screen_visible(socket: &str, pane: &str, lines: u32) -> Vec<String> {
     read_agent_visible(socket, pane, lines)
         .await

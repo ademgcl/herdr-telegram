@@ -10,8 +10,16 @@ use super::{
 };
 
 /// Tool-call echo prefixes across providers (opencode →/←, claude ●/○/⏺/⎿,
-/// codex/pi ☰/❯ …): after one of these, prior prose is intermediate work.
-const TOOL_PREFIXES: &[&str] = &["→", "←", "●", "○", "⏺", "⎿", "☰", "❯", "›"];
+/// codex/pi ☰/❯ …, agy ✻/※/⏵ …): after one of these, prior prose is
+/// intermediate work.
+/// "✱" is the heavy-asterisk tool echo (filter ✻ parity); "~ " is the
+/// tilde progress glyph (trailing space so ~/paths never split).
+/// "✻" (codex Cooked), "※" (recap) and "⏵" (auto-mode footer) strip as
+/// chrome in filter.rs, so they split here too — else old-turn prose
+/// merges into the final card.
+const TOOL_PREFIXES: &[&str] = &[
+    "→", "←", "●", "○", "⏺", "⎿", "☰", "❯", "›", "✱", "~ ", "✻", "※", "⏵",
+];
 
 /// A full-width box-rule turn separator (────…): turns are wrapped in these,
 /// so the fresh reply follows the last one. ASCII "---" is deliberately NOT
@@ -35,16 +43,11 @@ pub(crate) fn is_numbered_option_line(s: &str) -> bool {
     }
 }
 
-fn is_continuation_numbered_option(s: &str) -> bool {
-    let t = s.trim().trim_start_matches('❯').trim_start();
-    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if let Ok(num) = digits.parse::<usize>()
-        && num > 1
-    {
-        let rest = &t[digits.len()..];
-        return rest.starts_with('.') || rest.starts_with(')');
-    }
-    false
+fn is_continuation_thought(t: &str) -> bool {
+    // Bare "Thought"/"Thinking" prefixes ate genuine prose ("Thoughtful
+    // review…", "Thinking it over…"): only real TUI headers split —
+    // "Thought ·/:/for", sigiled "+/▸ Thought", ellipsis "Thinking…/...".
+    t.starts_with("Thought ") || t.starts_with("Thought:") || t.starts_with("Thought for")
 }
 
 /// A line that opens a new output cycle: tool-call echoes, reasoning
@@ -63,12 +66,15 @@ pub fn is_boundary(line: &str) -> bool {
     if TOOL_PREFIXES.iter().any(|p| t.starts_with(p)) {
         return true;
     }
-    if t.starts_with("Thought")
+    if is_continuation_thought(t)
         || t.starts_with("+ Thought")
         || t.starts_with("▸ Thought")
-        || t.starts_with("Thinking")
+        || t.starts_with("Thinking…")
+        || t.starts_with("Thinking...")
         || t.starts_with("Working…")
         || t.starts_with("Working...")
+        || t.starts_with("Writing…")
+        || t.starts_with("Writing...")
         || t.starts_with("Click to expand")
     {
         return true;
@@ -78,8 +84,11 @@ pub fn is_boundary(line: &str) -> bool {
 
 pub fn is_dialog_boundary(line: &str, next_line: Option<&str>) -> bool {
     if is_rule(line) {
+        // A rule before ANY numbered option keeps the dialog header with
+        // its options (first-option-after-rule is the common shape) —
+        // splitting there cut the question from its buttons.
         if let Some(next) = next_line
-            && is_continuation_numbered_option(next)
+            && is_numbered_option_line(next)
         {
             return false;
         }
@@ -96,12 +105,15 @@ pub fn is_dialog_boundary(line: &str, next_line: Option<&str>) -> bool {
     if TOOL_PREFIXES.iter().any(|p| *p != "←" && t.starts_with(p)) {
         return true;
     }
-    if t.starts_with("Thought")
+    if is_continuation_thought(t)
         || t.starts_with("+ Thought")
         || t.starts_with("▸ Thought")
-        || t.starts_with("Thinking")
+        || t.starts_with("Thinking…")
+        || t.starts_with("Thinking...")
         || t.starts_with("Working…")
         || t.starts_with("Working...")
+        || t.starts_with("Writing…")
+        || t.starts_with("Writing...")
         || t.starts_with("Click to expand")
     {
         return true;
@@ -264,6 +276,9 @@ pub fn dialog_block(lines: &[String]) -> (Vec<String>, Vec<String>) {
     (cleaned, raw)
 }
 
+#[cfg(test)]
+#[path = "segment_bounds_tests.rs"]
+mod bounds_tests;
 #[cfg(test)]
 #[path = "segment_tests.rs"]
 mod tests;

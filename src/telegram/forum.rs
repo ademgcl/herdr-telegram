@@ -119,13 +119,13 @@ impl TelegramClient {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
-                // Corpse propagates so the caller prunes by thread;
-                // already-open states stay Ok.
-                if super::errors::topic_missing(&msg) {
-                    return Err(e);
-                }
-                // Already-open converges (shared helper, close parity).
-                if super::errors::is_close_converged(&msg) {
+                // Corpse propagates so the caller prunes by thread (falls
+                // through to `Err` below like every other non-converged
+                // error); already-open states stay Ok (already-closed does
+                // NOT converge here: the topic is still closed).
+                // Already-open converges (dedicated helper, not the
+                // close one — close parity would mask a failed reopen).
+                if super::errors::is_reopen_converged(&msg) {
                     return Ok(());
                 }
                 Err(e)

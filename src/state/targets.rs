@@ -4,12 +4,22 @@
 use super::State;
 use crate::types::write_private;
 
+/// Pure gate (tested): `last_msgs` serves forum-topic resets
+/// (`copy_msg(forum, forum, mid)`) — only messages posted IN the forum
+/// chat are valid entries. DM cards (same panes, different chat) must
+/// never pollute it: their mids fail the copy AND evict real forum mids
+/// under the cap-3 bound.
+pub(crate) fn should_record_msg(forum: Option<i64>, chat: i64) -> bool {
+    forum == Some(chat)
+}
+
 impl State {
     pub async fn remember(&self, chat: i64, msg_id: Option<i64>, pane: &str) {
         let Some(msg_id) = msg_id else { return };
         // Forum-only: `last_msgs` serves topic resets — in DM mode it is
-        // write-only disk growth (no mapping ever prunes it). Gate here.
-        if self.cfg.forum.is_some() {
+        // write-only disk growth (no mapping ever prunes it), and DM mids
+        // in forum mode poison the reset copy (single source: gate above).
+        if should_record_msg(self.cfg.forum, chat) {
             self.topics.record_msg(pane, msg_id);
         }
         // Lock order (never inverted anywhere): torder → targets.
@@ -42,6 +52,12 @@ impl State {
     }
 
     pub async fn set_focus(&self, pane: &str) {
+        // Fail-closed: only well-shaped pane ids persist — a garbage
+        // focus routes bare DMs into the void until clear/restart.
+        if !crate::types::valid_focus(pane) {
+            eprintln!("[state] refusing invalid focus {pane:?}");
+            return;
+        }
         // Memory first, disk second: concurrent focuses must converge
         // disk vs RAM on the same winner (disk-first can resurrect loser).
         *self.focus.lock().await = Some(pane.to_string());
@@ -60,5 +76,19 @@ impl State {
 
     pub async fn get_focus(&self) -> Option<String> {
         self.focus.lock().await.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_record_msg;
+
+    #[test]
+    fn test_record_gate_forum_chat_only() {
+        // Forum chat records; DM chats never do (reset-copy poison).
+        assert!(should_record_msg(Some(7), 7));
+        assert!(!should_record_msg(Some(7), 9));
+        // DM mode records nothing (write-only disk growth).
+        assert!(!should_record_msg(None, 9));
     }
 }

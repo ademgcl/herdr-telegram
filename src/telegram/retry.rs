@@ -15,8 +15,21 @@ impl TelegramClient {
     pub(crate) const MAX_FLOOD_WAIT_SECS: u64 = 60;
 
     pub(crate) fn retry_after(e: &str) -> Option<Duration> {
-        let low = e.to_lowercase();
-        let (_, tail) = low.split_once("retry after")?;
+        // Normalize first: Telegram ships `retry after N`, `retry_after N`
+        // and bare `FLOOD_WAIT_N` shapes — the underscore/bare forms must
+        // honor the same flood-wait instead of failing fast + dropping.
+        let low = e.to_lowercase().replace('_', " ");
+        if let Some((_, tail)) = low.split_once("retry after") {
+            return Self::retry_after_tail(tail);
+        }
+        // Bare FLOOD_WAIT_30 (underscores already normalized to spaces).
+        if let Some(idx) = low.find("flood wait") {
+            return Self::retry_after_tail(&low[idx + "flood wait".len()..]);
+        }
+        None
+    }
+
+    fn retry_after_tail(tail: &str) -> Option<Duration> {
         // Adjacency only: the digits must follow the marker within an
         // optional ": "/dash run. A bare digit run later in the text
         // ("retry after many (code 123)") is not a flood-wait.
@@ -66,6 +79,11 @@ impl TelegramClient {
             "connection closed",
             "network is unreachable",
             "temporary failure",
+            // A 429 without a parsable `retry after N` (reworded flood
+            // text, em-dash separator, missing number) must retry with
+            // backoff, never fail fast and silently drop the buzz.
+            "too many requests",
+            "flood",
         ]
         .iter()
         .any(|m| low.contains(m))

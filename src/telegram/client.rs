@@ -25,13 +25,33 @@ impl TelegramClient {
 
     pub async fn call(&self, method: &str, body: Value, timeout: Duration) -> Res<Value> {
         let url = format!("https://api.telegram.org/bot{}/{}", self.token, method);
+        // Redact at the source: reqwest::Error's Display embeds the
+        // request URL including the bot token — returning it raw leaks
+        // the token to every caller that logs the error.
         let resp = self
             .http
             .post(&url)
             .json(&body)
             .timeout(timeout)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                // `Res` erases the reqwest type, so the transport verdict
+                // (`is_transport_transient` downcast) can never fire on
+                // send-stage errors — and `e.to_string()` shows only the
+                // outer "error sending request" line, hiding the inner
+                // timeout/connect cause from `is_transient_msg`. Tag
+                // transport faults here so the retry loop sees them.
+                let transient = e.is_connect()
+                    || e.is_timeout()
+                    || e.status().map(|s| s.is_server_error()).unwrap_or(false);
+                let m = self.redact(&e.to_string());
+                if transient {
+                    format!("service unavailable (transient transport): {m}")
+                } else {
+                    m
+                }
+            })?;
         let status = resp.status();
         // `.timeout()` above covers `.send()` (headers) only — a stalled
         // body would hang the poll/watchdog loop inside `json()`. Bound
@@ -55,9 +75,16 @@ impl TelegramClient {
                 format!("telegram http {status}: service unavailable ({m} {e})")
             } else {
                 // Preserve token-death markers ("Unauthorized",
-                // "Not Found") when the body carries them; otherwise
-                // still retryable once via the transient marker.
-                format!("telegram http {status}: service unavailable ({m} {e})")
+                // "Not Found") when the body carries them so
+                // `is_unauthorized` FATALs instead of transient-retrying
+                // a dead token; otherwise still retryable once via the
+                // transient marker.
+                let low = m.to_lowercase();
+                if low.contains("unauthorized") || low.contains("not found") {
+                    format!("telegram http {status}: {m} ({e})")
+                } else {
+                    format!("telegram http {status}: service unavailable ({m} {e})")
+                }
             }
         })?;
         if v["ok"].as_bool() != Some(true) {
@@ -157,11 +184,13 @@ impl TelegramClient {
             || msg.trim() == "Not Found"
             || msg.contains(": Not Found")
             // Non-JSON bare-404 bodies decode-fail inside `call` and get
-            // wrapped as `telegram http 404 Not Found: service
-            // unavailable (…)` — the colon sits AFTER `Not Found`, so
-            // neither arm above fires and token death reads as transient
-            // (backoff forever, squatting the single-instance guard).
-            || msg.contains("http 404")
+            // wrapped as `telegram http 404: Not Found (…)` — the colon
+            // sits AFTER `Not Found`, so neither arm above fires and token
+            // death reads as transient (backoff forever, squatting the
+            // single-instance guard). The `Not Found` marker is required:
+            // a bare proxy-404 wrapper (`telegram http 404: service
+            // unavailable (…)`) is a blip, never token death.
+            || (msg.contains("http 404") && msg.to_lowercase().contains("not found"))
     }
     /// Fire-and-forget menu registration: the menu persists server-side
     /// once set, so a blip at boot must not fail the boot (fail-dead =

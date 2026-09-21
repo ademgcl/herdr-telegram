@@ -159,7 +159,7 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     }
 
     if cmd == "/status" {
-        super::dm_info::handle_status(&s, chat, &rows, arg, &reply_pane).await;
+        super::dm_status::handle_status(&s, chat, &rows, arg, &reply_pane).await;
         return;
     }
 

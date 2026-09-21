@@ -24,6 +24,8 @@ pub mod segment;
 pub mod settle;
 pub mod stall;
 pub mod stream;
+#[cfg(test)]
+pub(crate) mod transient;
 
 pub use enqueue::enqueue_prompt;
 pub use recover::recover_pending;

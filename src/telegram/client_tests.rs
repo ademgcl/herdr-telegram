@@ -49,10 +49,18 @@ fn test_is_unauthorized_matches_token_death_only() {
         "Bad Request: chat not found"
     ));
     // Wrapped non-JSON 404: `call` maps decode failures to
-    // `telegram http 404 Not Found: service unavailable (…)` — the
-    // colon sits after `Not Found`, so only the http-404 arm fires.
+    // `telegram http 404: Not Found (…)` — matched via the `: Not Found`
+    // arm and the http-404+marker arm alike.
+    assert!(TelegramClient::is_unauthorized(
+        "telegram http 404: Not Found (cannot parse response)"
+    ));
     assert!(TelegramClient::is_unauthorized(
         "telegram http 404 Not Found: service unavailable ((Not Found error)"
+    ));
+    // A proxy-404 wrapper without a Not Found marker is a blip, never
+    // token death (must not FATAL-exit a healthy daemon into a stop).
+    assert!(!TelegramClient::is_unauthorized(
+        "telegram http 404: service unavailable (<html>proxy error)"
     ));
     // But a bare 404-ish number elsewhere is not token death.
     assert!(!TelegramClient::is_unauthorized("retry after 404s"));
@@ -80,6 +88,15 @@ fn test_is_transient_msg_matches_server_strings() {
     assert!(!TelegramClient::is_transient_msg(
         "message to edit not found"
     ));
+    // A 429 without a parsable retry-after still retries (backoff),
+    // never fails fast and drops the buzz.
+    for s in [
+        "Too Many Requests: retry after in 30s",
+        "Too Many Requests: flood control exceeded",
+        "FLOOD_WAIT_30",
+    ] {
+        assert!(TelegramClient::is_transient_msg(s), "missed: {s}");
+    }
 }
 
 #[test]

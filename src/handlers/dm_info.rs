@@ -1,15 +1,12 @@
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
     herdr::client::{
-        get_agent, list_panes, list_workspaces, read_agent_output, send_agent_keys, send_pane_keys,
+        get_agent, list_panes, read_agent_output, read_agent_visible, send_agent_keys,
+        send_pane_keys,
     },
     state::AppState,
     types::AgentRow,
-    ui::{
-        agent_card_kb, build_agent_card_text,
-        scope_text::{READ_CAP, TOPIC_READ_DEFAULT},
-        ws_label,
-    },
+    ui::scope_text::{READ_CAP, TOPIC_READ_DEFAULT},
 };
 
 pub(crate) async fn handle_keys(
@@ -192,87 +189,38 @@ pub(crate) async fn handle_read(
             s.remember(chat, mid, &row.pane).await;
             s.set_focus(&row.pane).await;
         }
+        // Topic-/callback-parity: blocked/working alt-screen panes reject
+        // recent_unwrapped — visible is the only source there. Confirmed
+        // death and timeouts never fall back (wrong-pane output /
+        // doubled sick-herdr budget).
+        Err(e) if crate::herdr::rpc::should_fallback_visible(&e.to_string()) => {
+            match read_agent_visible(&s.cfg.socket, &row.pane, lines).await {
+                Ok(out) => {
+                    let body = if out.is_empty() {
+                        crate::ui::NO_OUTPUT.into()
+                    } else {
+                        out
+                    };
+                    let mid = s.tg.send_msg(chat, None, &body, None).await;
+                    s.remember(chat, mid, &row.pane).await;
+                    s.set_focus(&row.pane).await;
+                }
+                Err(e) => {
+                    s.tg.send_msg(
+                        chat,
+                        None,
+                        &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
+                        None,
+                    )
+                    .await;
+                }
+            }
+        }
         Err(e) => {
             s.tg.send_msg(
                 chat,
                 None,
                 &format!("⚠️ {}", crate::types::mask_home(&e.to_string())),
-                None,
-            )
-            .await;
-        }
-    }
-}
-
-pub(crate) async fn handle_status(
-    s: &AppState,
-    chat: i64,
-    rows: &[AgentRow],
-    arg: &str,
-    reply_pane: &Option<String>,
-) {
-    // Corpse reply with exactly one live agent: the sole-agent shortcut
-    // would otherwise serve (and refocus) the wrong session. Explicit
-    // targets win over the reply, so only bare replies refuse here.
-    if arg.is_empty() && unmatched_reply(rows, reply_pane) {
-        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-            .await;
-        return;
-    }
-    let mut pane = match resolve_target(rows, if arg.is_empty() { None } else { Some(arg) }) {
-        Some(r) => Some(r.pane),
-        // Explicit but unknown: never show a different agent's card.
-        None if !arg.is_empty() => {
-            s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-                .await;
-            return;
-        }
-        None => reply_pane.clone(),
-    };
-    if pane.is_none() {
-        // Rowless focus must not shadow to sole-agent (cross-pane card).
-        match s.get_focus().await {
-            Some(f) if rows.iter().any(|r| r.pane == f) => {
-                pane = Some(f);
-            }
-            Some(_) => {
-                s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-                    .await;
-                return;
-            }
-            None => {
-                pane = resolve_target(rows, Some("")).map(|r| r.pane);
-            }
-        }
-    }
-    let Some(pane) = pane else {
-        s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)
-            .await;
-        return;
-    };
-    match get_agent(&s.cfg.socket, &pane).await {
-        Ok(agent) => {
-            let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-            let space = ws_label(&spaces, &agent.ws);
-            let mid =
-                s.tg.send_msg(
-                    chat,
-                    None,
-                    &build_agent_card_text(&agent, space),
-                    Some(agent_card_kb(&pane, &agent.ws, space)),
-                )
-                .await;
-            s.remember(chat, mid, &pane).await;
-            s.set_focus(&pane).await;
-        }
-        Err(e) => {
-            s.tg.send_msg(
-                chat,
-                None,
-                &format!(
-                    "⚠️ status failed: {} — try /agents",
-                    crate::types::mask_home(&e.to_string())
-                ),
                 None,
             )
             .await;

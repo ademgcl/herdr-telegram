@@ -198,6 +198,62 @@ fn test_final_block_codex_footer_fallback() {
 }
 
 #[test]
+fn test_transient_inventory_never_posts_answer_always_wins() {
+    use crate::jobs::{
+        filter::is_chrome,
+        transient::{PROSE, TRANSIENT},
+    };
+    // Invariant: every inventoried shape is handled (chrome or boundary).
+    // A future TUI addition fails here until filtered — never as a card.
+    for &t in TRANSIENT {
+        assert!(
+            is_chrome(t) || is_boundary(t),
+            "unhandled transient shape: {t}"
+        );
+    }
+    // Matrix, prompted + spontaneous: alone → nothing posts (the watcher
+    // keeps waiting for the real final); flanking the answer → answer only,
+    // trailing noise never shadows it.
+    let answer = "     The guard was missing — fixed and tested.";
+    for &t in TRANSIENT {
+        assert_eq!(
+            final_block(&v(&[t]), "fix it"),
+            Vec::<String>::new(),
+            "alone posts: {t}"
+        );
+        assert_eq!(
+            final_block(&v(&[t]), ""),
+            Vec::<String>::new(),
+            "spontaneous posts: {t}"
+        );
+        assert_eq!(
+            final_block(&v(&[t, answer]), "fix it"),
+            v(&[answer]),
+            "before leaks: {t}"
+        );
+        assert_eq!(
+            final_block(&v(&[answer, t]), "fix it"),
+            v(&[answer]),
+            "after shadows: {t}"
+        );
+        assert_eq!(
+            final_block(&v(&[answer, t]), ""),
+            v(&[answer]),
+            "spontaneous shadows: {t}"
+        );
+    }
+    // Prose battery survives intact on both paths.
+    for &p in PROSE {
+        assert_eq!(final_block(&v(&[p]), "fix it"), v(&[p]), "prose lost: {p}");
+        assert_eq!(
+            final_block(&v(&[p]), ""),
+            v(&[p]),
+            "spontaneous prose lost: {p}"
+        );
+    }
+}
+
+#[test]
 fn test_final_block_drops_claude_tool_marker() {
     // D3: Claude ⏺ tool marker splits turns just like ●.
     let lines = v(&[

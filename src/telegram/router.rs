@@ -74,6 +74,20 @@ pub async fn handle_update(s: AppState, u: &Value) {
         return; // Silently ignore non-owners
     }
 
+    // Service-edit freshness (icon arms below persist customs — a write):
+    // a redelivered `forum_topic_edited` would re-stamp an old custom
+    // (wedging kind-heal until the next manual clear). Stale or dateless
+    // icon edits drop — fail-closed, no write on ambiguous (renames stay
+    // fresh-agnostic: see below. Text re-checks with its loud notice).
+    let msg_fresh = msg["date"].as_u64().map(|d| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(d)
+            <= STALE_SECS
+    }).unwrap_or(false);
+
     // User customized topic icon in Telegram: persist so bot never overwrites it.
     // Same forum gate as renames below: thread ids are small ints that
     // collide across chats — an icon edit elsewhere must never poison a
@@ -81,7 +95,8 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // like renames (adopt_topic_title): reset_topic preserves customs via
     // icon_needs_update, so a mid-reset custom wedges the mint on the
     // wrong glyph / blocks kind-heal.
-    if !crate::handlers::reset::is_resetting()
+    if msg_fresh
+        && !crate::handlers::reset::is_resetting()
         && let Some((thread, icon)) = crate::handlers::topic_edit::parse_topic_icon_edit(msg)
         && (chat_type == "supergroup" || chat_type == "group")
         && s.cfg.forum == Some(chat_id)
@@ -93,7 +108,8 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // User cleared the custom icon: drop the stored id so the watchdog
     // heals the live kind glyph (a stale custom wedges kind flips).
     // Reset-gated like the custom arm above.
-    if !crate::handlers::reset::is_resetting()
+    if msg_fresh
+        && !crate::handlers::reset::is_resetting()
         && let Some(thread) = crate::handlers::topic_edit::parse_topic_icon_cleared(msg)
         && (chat_type == "supergroup" || chat_type == "group")
         && s.cfg.forum == Some(chat_id)
@@ -105,8 +121,12 @@ pub async fn handle_update(s: AppState, u: &Value) {
 
     // Native forum-topic rename (service message, no text): sync the new
     // name back to the herdr pane label. Must run BEFORE the empty-text
-    // return below. No stale gate: replays are idempotent via the
-    // stored-title compare, and a redelivered rename heals the down-window.
+    // return below. Deliberately fresh-agnostic (unlike the icon arms):
+    // Telegram replays unacked updates in offset order (bot-down renames
+    // arrive stale and must still heal), and adopt's stored-compare +
+    // herdr_moved_on already drop dupes and herdr-side winners — a date
+    // gate here would only destroy legit bot-down renames for the
+    // watchdog to revert.
     if let Some((thread, name)) = crate::handlers::topic_edit::parse_topic_edit(msg)
         && (chat_type == "supergroup" || chat_type == "group")
         && s.cfg.forum == Some(chat_id)

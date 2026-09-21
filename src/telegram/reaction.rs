@@ -43,6 +43,8 @@ impl TelegramClient {
                         || msg.contains("REACTIONS_DISABLED")
                         || msg.contains("REACTION_INVALID")
                         || msg.contains("CHAT_ADMIN_REQUIRED")
+                        || msg.contains("MESSAGE_TO_REACT_NOT_FOUND")
+                        || msg.contains("MESSAGE_NOT_FOUND")
                         || msg.contains("not modified")
                         || msg.contains("message not found")
                         || msg.contains("message to forward not found")
@@ -63,8 +65,8 @@ impl TelegramClient {
                         continue;
                     }
                     sends += 1;
-                    let retryable = Self::is_transport_transient(e.as_ref())
-                        || Self::is_transient_msg(&msg);
+                    let retryable =
+                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
                     if !retryable || sends >= 3 {
                         return Err(e);
                     }

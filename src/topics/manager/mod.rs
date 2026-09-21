@@ -135,15 +135,15 @@ impl TopicManager {
         if let Some(t) = self.storage.get_thread(pane) {
             return (Some(t), false);
         }
-        // Single-flight loser: wait for the winner (early-None defers
-        // to the next tick, never double-mints).
+        // Single-flight loser: brief wait, then defer to the next tick
+        // (never double-mints; ~3s — long sleeps age past STALE_SECS).
         if !self
             .creating
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(pane.to_string())
         {
-            for _ in 0..200 {
+            for _ in 0..30 {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 // A reset starting mid-wait deletes the pre-reset thread:
                 // return nothing (post-reset mint serves it), never an orphan.

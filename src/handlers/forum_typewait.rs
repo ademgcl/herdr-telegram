@@ -35,13 +35,10 @@ pub(crate) async fn consume_typewait(
     thread_id: i64,
     text: &str,
 ) -> WaitOut {
-    let Some((wpane, at)) = s
-        .typewait
-        .lock()
-        .await
-        .get(&(chat, Some(thread_id)))
-        .cloned()
-    else {
+    // Normalized (single source: `forum::waiter_key`): agent threads are
+    // never 1 today, but a General-1 arm must still meet its consume.
+    let key = super::forum::waiter_key(chat, Some(thread_id));
+    let Some((wpane, at)) = s.typewait.lock().await.get(&key).cloned() else {
         return WaitOut::Pass;
     };
     // Corpse bound at consume: a stale arm degrades to normal routing
@@ -53,12 +50,8 @@ pub(crate) async fn consume_typewait(
         crate::state::guard::TYPEWAIT_STALE_SECS,
     ) {
         let mut tw = s.typewait.lock().await;
-        if tw
-            .get(&(chat, Some(thread_id)))
-            .map(|(_, t)| *t == at)
-            .unwrap_or(false)
-        {
-            tw.remove(&(chat, Some(thread_id)));
+        if tw.get(&key).map(|(_, t)| *t == at).unwrap_or(false) {
+            tw.remove(&key);
         }
         return WaitOut::Pass;
     }
@@ -83,13 +76,13 @@ pub(crate) async fn consume_typewait(
             }
             match crate::herdr::client::list_panes(&s.cfg.socket).await {
                 Ok(l) if l.contains(&wpane) => {
-                    s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+                    s.typewait.lock().await.remove(&key);
                     s.tg.send_msg(chat, Some(thread_id), crate::ui::STALE_TYPEWAIT_SHELL, None)
                         .await;
                     return WaitOut::Handled;
                 }
                 Ok(_) => {
-                    s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+                    s.typewait.lock().await.remove(&key);
                     return WaitOut::Pass;
                 }
                 Err(_) => {
@@ -103,12 +96,8 @@ pub(crate) async fn consume_typewait(
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
             let mut tw = s.typewait.lock().await;
-            if tw
-                .get(&(chat, Some(thread_id)))
-                .map(|(_, t)| *t == at)
-                .unwrap_or(false)
-            {
-                tw.remove(&(chat, Some(thread_id)));
+            if tw.get(&key).map(|(_, t)| *t == at).unwrap_or(false) {
+                tw.remove(&key);
             }
             drop(tw);
             s.tg.send_silent(chat, Some(thread_id), &crate::ui::typed_ack(&wpane))
@@ -118,7 +107,6 @@ pub(crate) async fn consume_typewait(
             WaitOut::Handled
         }
         Err(super::tap::TypeError::Resumed) => {
-            let key = (chat, Some(thread_id));
             let prev = s.typewait.lock().await.remove(&key);
             // Resumed between snapshot and send either way: the text
             // becomes a regular prompt, never control and never a second
@@ -173,10 +161,12 @@ pub(crate) async fn serve_resumed_prompt(
             // landing between the consume and this re-read owns
             // the waiter now — a blind insert would clobber it
             // and mistype the next message into the dead pane.
+            // Normalized key (consume parity above).
+            let key = super::forum::waiter_key(chat, Some(thread_id));
             s.typewait
                 .lock()
                 .await
-                .entry((chat, Some(thread_id)))
+                .entry(key)
                 .or_insert((wpane, armed_at));
             s.tg.send_msg(chat, Some(thread_id), crate::ui::HERDR_UNREACHABLE, None)
                 .await;

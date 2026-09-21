@@ -61,6 +61,9 @@ const CHROME_MARKERS: &[&str] = &[
 /// STARTING with one of these (e.g. a reply that itself begins
 /// "Antigravity CLI …") strips — vanishingly rare vs header noise on
 /// every agy turn, and the arbitration merge still recovers the rest.
+/// "✱" is the heavy-asterisk tool echo (✻ parity); "~ " is the tilde
+/// progress glyph (trailing space so ~/paths survive); "Writing…"
+/// is the progress verb (Working… parity).
 const CHROME_PREFIXES: &[&str] = &[
     "→",
     "←",
@@ -73,14 +76,24 @@ const CHROME_PREFIXES: &[&str] = &[
     "›",
     "⏵",
     "✻",
+    "✱",
+    "~ ",
     "※",
     "• OpenCode",
-    "Thought",
+    // Narrow Thought/Thinking headers (segment parity): bare prefixes
+    // ate genuine prose ("Thoughtful review…", "Thinking it over…").
+    // "Thought " covers "Thought ·" + "Thought for"; "Thinking" only
+    // ever ships with an ellipsis in the TUI.
+    "Thought ",
+    "Thought:",
     "+ Thought",
     "▸ Thought",
-    "Thinking",
+    "Thinking…",
+    "Thinking...",
     "Working…",
     "Working...",
+    "Writing…",
+    "Writing...",
     "Click to expand",
     "Todos",
     "# Todos",
@@ -163,7 +176,9 @@ pub fn is_chrome(line: &str) -> bool {
         return true;
     }
     // Bare input-box glyphs (empty prompt line) — never content.
-    if t == ">" || t == "❯" || t == "›" {
+    // "~" is the bare progress glyph ("~ Writing…" lines strip via the
+    // "~ " prefix above; the lone glyph is never a reply).
+    if t == ">" || t == "❯" || t == "›" || t == "~" {
         return true;
     }
     if CHROME_PREFIXES.iter().any(|p| t.starts_with(p)) {

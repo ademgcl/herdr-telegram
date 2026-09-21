@@ -142,14 +142,11 @@ pub(crate) async fn scan_limits(s: &AppState) {
         }
         // Moved-on re-check (spontaneous/stall parity): a quit-to-shell
         // landing between the snapshot and the send must not page the
-        // stale ❗ into the shelled topic. State preserves; next tick
-        // re-evaluates.
-        if s.status
-            .lock()
-            .await
-            .get(&pane)
-            .is_some_and(|v| v == "shell")
-        {
+        // stale ❗ into the shelled topic. `None` (pruned/dead, no status
+        // row) is moved-on too — never buzz into the unknown
+        // (retry_guard parity). State preserves; next tick re-evaluates.
+        let cur = s.status.lock().await.get(&pane).cloned();
+        if !matches!(cur.as_deref(), Some(v) if v != "shell") {
             continue;
         }
         // Reply dest from the live map (prompt-owned panes report into

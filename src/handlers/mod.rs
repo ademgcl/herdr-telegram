@@ -8,6 +8,7 @@ pub mod callback_waiters;
 pub mod dialog;
 pub mod dm;
 pub mod dm_info;
+pub mod dm_status;
 pub mod dm_lifecycle;
 pub mod dm_model;
 pub mod dm_prompt;

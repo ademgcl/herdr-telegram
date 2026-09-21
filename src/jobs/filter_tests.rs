@@ -26,6 +26,16 @@ fn test_chrome_keeps_prose() {
     assert!(!is_chrome("OpenCode is great for this"));
     assert!(!is_chrome("press ctrl+c to stop"));
     assert!(!is_chrome("Hi! I'm Muse Spark. How can I help today?"));
+    // Thought/Thinking-leading prose is content, never a header.
+    assert!(!is_chrome("Thoughtful review — ship it."));
+    assert!(!is_chrome("Thoughts on the design below."));
+    assert!(!is_chrome("Thinking it over, I'd go with B."));
+    assert!(!is_chrome("Thinking about edge cases first"));
+    // …while real TUI headers still strip.
+    assert!(is_chrome("Thought · 359ms"));
+    assert!(is_chrome("Thought: 6.8s"));
+    assert!(is_chrome("Thinking…"));
+    assert!(is_chrome("Thinking..."));
     // Short indented lines are answers, not padding.
     assert!(!is_chrome("     hi"));
     assert!(!is_chrome("     2"));
@@ -101,6 +111,19 @@ fn test_dialog_chrome_keeps_header_arrows() {
         "Enter to select · Tab/Arrow keys to navigate"
     ));
     assert!(is_dialog_chrome("• OpenCode 1.18.31"));
+}
+
+#[test]
+fn test_transient_inventory_all_chrome_prose_all_kept() {
+    // Single-source battery (see jobs::transient): every known
+    // intermediate-work shape strips, every prose shape survives.
+    use crate::jobs::transient::{PROSE, TRANSIENT};
+    for l in TRANSIENT {
+        assert!(is_chrome(l), "transient must strip: {l}");
+    }
+    for p in PROSE {
+        assert!(!is_chrome(p), "prose must survive: {p}");
+    }
 }
 
 #[test]

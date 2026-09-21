@@ -41,6 +41,19 @@ pub async fn repoint_dest_if_remapped(
     if old == cur {
         return;
     }
+    // Migrate the durable BEFORE the dest write below: a settle_books
+    // snapshotting between a split dest-then-durable write sees the new
+    // thread with the old intent and clears nothing (ghost re-arm after
+    // restart). Occupied-only CAS (never vacant-insert): a vacant slot
+    // means cancelled/settled, and minting the corpse text there would
+    // resurrect dead work with a fresh 24h clock. A racing submit's newer
+    // text wins the CAS — never check-then-remember across awaits.
+    let prompt = job.prompt.lock().await.clone();
+    if job.epoch.load(Ordering::Relaxed) != epoch_before {
+        return;
+    }
+    s.migrate_pending_cas(pane, (chat, Some(old), &prompt), (chat, Some(cur), &prompt))
+        .await;
     // Re-validate under the write: a submit racing the reads above wins.
     let mut dest = job.dest.lock().await;
     if job.epoch.load(Ordering::Relaxed) != epoch_before {
@@ -81,15 +94,4 @@ pub async fn repoint_dest_if_remapped(
         live_mid.take();
         live_dest.take();
     }
-    // Migrate the durable only when it still holds the pre-migration
-    // intent (or nothing): a racing submit's newer text wins — atomic
-    // check-and-set, never check-then-remember across awaits. Occupied-
-    // only: a vacant slot means cancelled/settled, and minting the corpse
-    // text there would resurrect dead work with a fresh 24h clock.
-    let prompt = job.prompt.lock().await.clone();
-    if job.epoch.load(Ordering::Relaxed) != epoch_before {
-        return;
-    }
-    s.migrate_pending_cas(pane, (chat, Some(old), &prompt), (chat, Some(cur), &prompt))
-        .await;
 }

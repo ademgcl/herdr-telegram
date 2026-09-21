@@ -243,3 +243,25 @@ fn test_winner_lines_ignores_scrollback_options() {
     );
     assert!(winner_lines(&[]).is_empty());
 }
+
+#[test]
+fn test_winner_lines_ignores_transient_tool_noise() {
+    // Tool/progress chatter around a blocked dialog must not displace the
+    // question: the winner is still the permission block, never the noise.
+    let win = winner_lines(&v(&[
+        "  ┃  ✱ Grep \"x\" in src (3 matches)",
+        "  ┃  △ Permission required",
+        "  ┃    ← Access external directory ~/.config/opencode",
+        "  ┃  Patterns",
+        "  ┃  - /home/user/.config/opencode/*",
+        "  ┃   Allow once   Allow always   Reject",
+        "  ~ Writing command…",
+    ]));
+    let body = win.join("\n");
+    assert!(body.contains("Allow once"), "question kept: {body}");
+    assert!(!body.contains('✱'), "tool noise dropped: {body}");
+    assert!(
+        !body.contains("Writing command"),
+        "progress dropped: {body}"
+    );
+}
