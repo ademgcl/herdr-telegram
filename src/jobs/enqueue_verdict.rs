@@ -10,7 +10,7 @@
 pub(crate) fn rearm_verdict(mapped: Option<(bool, bool)>, self_stopped: bool) -> bool {
     match mapped {
         None => true,
-        Some((is_self, mapped_stopped)) if is_self => self_stopped,
+        Some((is_self, _)) if is_self => self_stopped,
         Some((_, mapped_stopped)) => mapped_stopped,
     }
 }
