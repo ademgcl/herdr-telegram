@@ -22,9 +22,12 @@ pub(crate) fn collapse_flap(
 
 /// Baseline-anchor verdict (single source for both suppression arms):
 /// an outage/empty screen must never wipe the baseline — anchoring it
-/// reposts scrollback as fresh on the next tick. Pure for tests.
+/// reposts scrollback as fresh on the next tick. A cleared pane reads as
+/// non-empty all-blank lines and counts the same (anchor_baseline parity
+/// in jobs::job — anchoring it makes the whole next screen "fresh").
+/// Pure for tests.
 pub(crate) fn should_anchor_baseline(screen: &[String]) -> bool {
-    !screen.is_empty()
+    !screen.is_empty() && !screen.iter().all(|l| l.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -54,5 +57,9 @@ mod tests {
         // next tick reposts scrollback as fresh work.
         assert!(!should_anchor_baseline(&[]));
         assert!(should_anchor_baseline(&["out".to_string()]));
+        // A cleared pane (all-blank lines) is outage, not content —
+        // anchoring it wipes a good baseline the same way.
+        assert!(!should_anchor_baseline(&["".to_string(), "   ".to_string()]));
+        assert!(should_anchor_baseline(&["".to_string(), "out".to_string()]));
     }
 }

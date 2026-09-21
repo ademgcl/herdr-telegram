@@ -9,7 +9,7 @@
 //!   buttons armed over a second dialog.
 use crate::{
     herdr::client::read_screen_visible,
-    jobs::{filter::deframe, segment::dialog_block, stream::join_trimmed},
+    jobs::{filter::deframe, segment_dialog::dialog_block, stream::join_trimmed},
     state::AppState,
 };
 use serde_json::{Value, json};

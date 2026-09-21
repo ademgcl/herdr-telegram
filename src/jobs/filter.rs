@@ -13,6 +13,7 @@
 const CHROME_MARKERS: &[&str] = &[
     "ctrl+p",
     "esc interrupt",
+    "esc to cancel", // agy processing footer (Claude's ⏵ auto-mode twin)
     "Thought ·",
     "Build ·",
     "Plan ·",
@@ -88,6 +89,8 @@ const CHROME_PREFIXES: &[&str] = &[
     "Thought:",
     "+ Thought",
     "▸ Thought",
+    "▸ ", // agy ▸ Subagents group headers (▸ Thought covered too)
+    "▾", // agy expanded ▾ Subagents group header
     "Thinking…",
     "Thinking...",
     "Working…",

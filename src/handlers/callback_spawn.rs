@@ -121,8 +121,6 @@ pub(crate) async fn handle_spawn(
     .await;
     match spawn_agent(&s.cfg.socket, kind, ws).await {
         Ok(row) => {
-            s.remember(chat, Some(msg_id), &row.pane).await;
-            s.set_focus(&row.pane).await;
             if let Ok(agent) = get_agent(&s.cfg.socket, &row.pane).await {
                 let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
                 let space = ws_label(&spaces, &agent.ws);
@@ -137,13 +135,22 @@ pub(crate) async fn handle_spawn(
                         crate::handlers::dialog::retire_dialog(s, &agent.pane).await;
                     }
                 }
-                s.tg.edit_msg(
-                    chat,
-                    msg_id,
-                    &build_agent_card_text(&agent, space),
-                    Some(agent_card_kb(&row.pane, &agent.ws, space)),
-                )
-                .await;
+                // Routing follows delivery (a-arm parity): a deleted card
+                // must not pin focus/routing to a dead msg_id.
+                if s
+                    .tg
+                    .try_edit_msg(
+                        chat,
+                        msg_id,
+                        &build_agent_card_text(&agent, space),
+                        Some(agent_card_kb(&row.pane, &agent.ws, space)),
+                    )
+                    .await
+                    .is_ok()
+                {
+                    s.remember(chat, Some(msg_id), &row.pane).await;
+                    s.set_focus(&row.pane).await;
+                }
             } else {
                 // Spawned but status unreadable (herdr blip): still land
                 // the topic + ack instead of hanging on "starting…".

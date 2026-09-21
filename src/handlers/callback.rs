@@ -1,16 +1,15 @@
-use super::callback_parse::{gone_card, live_target, split_action, split_head};
+use super::callback_parse::{live_target, split_action, split_head};
 use super::callback_waiters::{
     handle_agent_output, handle_keys_arm, handle_pane_output, handle_run_arm,
 };
 use crate::{
-    herdr::client::{get_agent, list_agents, list_panes, list_workspaces},
+    herdr::client::{list_agents, list_workspaces},
     state::{
         AppState, OpGuard,
         guard::{SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS},
     },
     ui::{
-        agent_card_kb, build_agent_card_text, build_menu_text, build_ws_text, main_menu_kb,
-        spawn_kb, workspace_kb, ws_label,
+        build_menu_text, build_ws_text, main_menu_kb, spawn_kb, workspace_kb,
     },
 };
 use serde_json::Value;
@@ -38,7 +37,14 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
     };
 
     // Thread for ack messages (forum topics carry it, DMs don't).
-    let thread = cbq["message"]["message_thread_id"].as_i64();
+    // Normalized once here (single source for every arm below):
+    // General arrives as Some(1) on callbacks but None on messages —
+    // both are the same conversation, and sends must target None, never
+    // thread 1 (waiter_key parity; raw 1 fails the send). Waiter keys
+    // are unaffected (waiter_key normalizes the same way).
+    let thread = cbq["message"]["message_thread_id"]
+        .as_i64()
+        .filter(|t| *t != 1);
     // Stale cards must not re-execute (days-old spawn-confirm/kill taps):
     // one gate (STALE_SECS) covers both relic and merely outdated taps.
     // Dialog (B) taps are exempt — they re-validate against the live
@@ -197,49 +203,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.forget_target(chat, msg_id).await;
         }
         ("a", Some(pane)) => {
-            match get_agent(&s.cfg.socket, pane).await {
-                Ok(agent) => {
-                    s.remember(chat, Some(msg_id), pane).await;
-                    s.set_focus(pane).await;
-                    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-                    let space = ws_label(&spaces, &agent.ws);
-                    s.tg.edit_msg(
-                        chat,
-                        msg_id,
-                        &build_agent_card_text(&agent, space),
-                        Some(agent_card_kb(pane, &agent.ws, space)),
-                    )
-                    .await;
-                }
-                Err(_) => {
-                    // Fail-closed like the K/p/o arms: an unreadable herdr
-                    // never moves focus, remembers routing, or edits a
-                    // shell card (ambiguous read → no write, visible retry).
-                    match list_panes(&s.cfg.socket).await {
-                        Ok(l) if l.contains(&pane.to_string()) => {
-                            // Agent gone but the shell lives: deliberate taps
-                            // may still navigate here — focus moves, but there
-                            // is no agent card to show.
-                            s.remember(chat, Some(msg_id), pane).await;
-                            s.set_focus(pane).await;
-                            s.tg.edit_msg(
-                                chat,
-                                msg_id,
-                                &crate::ui::shell_gone_text(pane),
-                                None,
-                            )
-                            .await;
-                        }
-                        Ok(_) => {
-                            gone_card(&s, chat, msg_id, pane).await;
-                        }
-                        Err(_) => {
-                            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
-                                .await;
-                        }
-                    }
-                }
-            }
+            super::callback_agent::handle_agent_card(&s, chat, msg_id, pane).await;
         }
         ("o", Some(pane)) => {
             handle_agent_output(&s, chat, msg_id, thread, pane).await;

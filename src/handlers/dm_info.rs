@@ -16,7 +16,10 @@ pub(crate) async fn handle_keys(
     arg: &str,
     reply_pane: &Option<String>,
 ) {
-    let (t, keys) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+    let (t_raw, keys) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+    // Trailing punctuation (dm_prompt parity): `w8:p1, y enter` still
+    // addresses `w8:p1` instead of usage-erroring on the comma.
+    let t = super::dm_prompt::strip_addr_punct(t_raw);
     // Explicit `<pane|kind> <keys...>`, else the full arg is keys for the
     // replied-to card. A stale reply never silently reroutes to a
     // different agent: shell/dead panes fail visibly inside send_keys.
@@ -195,7 +198,10 @@ pub(crate) async fn handle_read(
             };
             let mid = s.tg.send_msg(chat, None, &body, None).await;
             s.remember(chat, mid, &row.pane).await;
-            s.set_focus(&row.pane).await;
+            // Focus follows delivery (dm_status parity).
+            if mid.is_some() {
+                s.set_focus(&row.pane).await;
+            }
         }
         // Topic-/callback-parity: blocked/working alt-screen panes reject
         // recent_unwrapped — visible is the only source there. Confirmed
@@ -211,7 +217,10 @@ pub(crate) async fn handle_read(
                     };
                     let mid = s.tg.send_msg(chat, None, &body, None).await;
                     s.remember(chat, mid, &row.pane).await;
-                    s.set_focus(&row.pane).await;
+                    // Focus follows delivery (dm_status parity).
+                    if mid.is_some() {
+                        s.set_focus(&row.pane).await;
+                    }
                 }
                 Err(e) => {
                     s.tg.send_msg(

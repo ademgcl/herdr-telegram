@@ -30,6 +30,28 @@ impl State {
             .unwrap_or(false)
     }
 
+    /// Stamp-pinned match (single source for reconcile's post-RPC
+    /// re-validations): the triple alone can't tell an identical
+    /// re-prompt (same chat/thread/text, fresh `started_unix`) from the
+    /// owed turn — a submit racing the tail/close RPCs would else match
+    /// and post a stale quit card beside live work (or retire fresh
+    /// work as the corpse).
+    pub async fn pending_matches_stamp(
+        &self,
+        pane: &str,
+        chat: i64,
+        thread: Option<i64>,
+        prompt: &str,
+        started_unix: u64,
+    ) -> bool {
+        self.pending.lock().await.get(pane).map(|p| {
+            p.chat == chat
+                && p.thread == thread
+                && p.prompt == prompt
+                && p.started_unix == started_unix
+        }).unwrap_or(false)
+    }
+
     /// Atomic check-and-remember for race-prone restores (reconcile
     /// owed-intent restores): under ONE `pending` guard with no await
     /// inside, remember `set` only when the slot is vacant or still holds

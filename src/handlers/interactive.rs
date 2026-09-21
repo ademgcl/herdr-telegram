@@ -5,7 +5,6 @@ pub fn keys_for(action: &str) -> Option<&'static [&'static str]> {
     match action {
         "allow" => Some(&["enter"]),
         "deny" => Some(&["esc"]),
-        "next" => Some(&["right"]),
         _ => None,
     }
 }
@@ -28,7 +27,9 @@ mod tests {
     fn test_keys_for_actions() {
         assert_eq!(keys_for("allow"), Some(&["enter"][..]));
         assert_eq!(keys_for("deny"), Some(&["esc"][..]));
-        assert_eq!(keys_for("next"), Some(&["right"][..]));
+        // No "next" arm by design: no card emits B:next, so it would be
+        // reachable only via crafted callbacks (fail-closed Unknown).
+        assert_eq!(keys_for("next"), None);
         assert_eq!(keys_for("bogus"), None);
     }
 

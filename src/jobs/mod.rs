@@ -21,6 +21,7 @@ pub mod report;
 pub mod runner;
 pub mod runner_cancel;
 pub mod segment;
+pub mod segment_dialog;
 pub mod settle;
 pub mod stall;
 pub mod stream;

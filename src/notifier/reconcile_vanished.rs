@@ -35,7 +35,10 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
     // check and retire — microseconds, no RPC between.)
     let mine = match &owed {
         Some(pp) => {
-            s.pending_matches(pane, pp.chat, pp.thread, &pp.prompt)
+            // Stamp-pinned: an identical re-prompt racing the flip owns
+            // the slot now (same triple, fresh stamp) — the stale quit
+            // card must not misattribute to the new turn.
+            s.pending_matches_stamp(pane, pp.chat, pp.thread, &pp.prompt, pp.started_unix)
                 .await
         }
         // Job-only flip: no competing intent.
@@ -69,7 +72,7 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
     // post-quiet racers). Same job-only retire as a turned-over intent.
     if let Some(pp) = &owed
         && !s
-            .pending_matches(pane, pp.chat, pp.thread, &pp.prompt)
+            .pending_matches_stamp(pane, pp.chat, pp.thread, &pp.prompt, pp.started_unix)
             .await
     {
         restore_status(s, pane, prev_status).await;
@@ -99,8 +102,13 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
     // (quiet cleared our slot above).
     {
         let cur = s.pending.lock().await.get(pane).cloned();
+        // Stamp-pinned like the gates above: an identical re-prompt
+        // landing during the tail read owns the pane now.
         if let Some(cur) = cur
-            && (cur.chat != pp.chat || cur.thread != pp.thread || cur.prompt != pp.prompt)
+            && (cur.chat != pp.chat
+                || cur.thread != pp.thread
+                || cur.prompt != pp.prompt
+                || cur.started_unix != pp.started_unix)
         {
             return;
         }

@@ -88,22 +88,21 @@ pub async fn report(
         .is_some()
 }
 
-/// Final-card part delivery with ✅ reaction: shared by `finalize`'s
-/// multi-part post (moved here from `finalize` under the file limit).
-pub async fn report_done(
+/// Mid-returning final-card part delivery with ✅ reaction: shared by
+/// `finalize`'s multi-part post (moved here from `finalize` under the
+/// file limit). Returns the mid so `finalize`'s mid-post supersede can
+/// delete delivered heads best-effort (stall.rs parity) instead of
+/// stranding a stale head beside the new prompt's turn.
+pub async fn report_done_mid(
     s: &AppState,
     chat_id: i64,
     thread_id: Option<i64>,
     pane: &str,
     msg: &str,
-) -> bool {
-    match send_remembered(s, chat_id, thread_id, pane, msg).await {
-        Some(m) => {
-            let _ = s.tg.set_reaction(chat_id, m, Some("✅")).await;
-            true
-        }
-        None => false,
-    }
+) -> Option<i64> {
+    let m = send_remembered(s, chat_id, thread_id, pane, msg).await?;
+    let _ = s.tg.set_reaction(chat_id, m, Some("✅")).await;
+    Some(m)
 }
 
 /// Bound for final-card sends: `send_msg` sleeps through flood-waits
@@ -114,7 +113,7 @@ pub async fn report_done(
 pub(crate) const FINAL_SEND_TIMEOUT_SECS: u64 = 90;
 
 /// Send + delivery-track, without any reaction: `report` (plain cards)
-/// and `report_done` (✅ finals) share it so failure logging and intent
+/// and `report_done_mid` (✅ finals) share it so failure logging and intent
 /// tracking can never drift between the two.
 async fn send_remembered(
     s: &AppState,

@@ -9,6 +9,10 @@ pub(crate) async fn handle_general_forum_message(
     thread_id: Option<i64>,
     text: &str,
 ) {
+    // Normalized send (router/stale-notice parity): General arrives as
+    // None on messages but Some(1) on callbacks — both are the same
+    // conversation, so replies must target None, never thread 1.
+    let thread_id = thread_id.filter(|t| *t != 1);
     let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
         None => (text, ""),

@@ -48,8 +48,11 @@ pub(crate) async fn close_dead_pane(s: &AppState, pane: &str) -> bool {
     // watcher's own path serves the reply.
     match &owed {
         Some(pp) => {
+            // Stamp-pinned (vanished parity): an identical re-prompt
+            // racing the close RPCs owns the slot now — retiring would
+            // kill fresh work and resurrect the corpse over it.
             if !s
-                .pending_matches(pane, pp.chat, pp.thread, &pp.prompt)
+                .pending_matches_stamp(pane, pp.chat, pp.thread, &pp.prompt, pp.started_unix)
                 .await
             {
                 return true;

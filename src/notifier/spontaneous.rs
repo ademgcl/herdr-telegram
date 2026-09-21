@@ -76,6 +76,7 @@ pub(crate) async fn post_spontaneous_card(
 
     let mut landed = 0usize;
     let mut expected = 0usize;
+    let mut landed_mids: Vec<i64> = Vec::new();
     if let Some(forum) = s.cfg.forum {
         // Liveness before sync (fail-closed verdict above): never
         // re-mint a dead pane's topic; ambiguous reads post nothing.
@@ -127,8 +128,11 @@ pub(crate) async fn post_spontaneous_card(
                 // Per-part retarget (finalize parity): a submit landing
                 // during a slow multi-part flood-wait must stop the stale
                 // tail — the pre-loop check alone still posts part 2+
-                // beside the new prompt's turn.
+                // beside the new prompt's turn. Delivered heads delete
+                // best-effort (finalize parity): the retry reposts the
+                // full body, never a truncated tail beside a stale head.
                 if part_blocked(s, pane, settled, armed_at, false).await {
+                    delete_parts(s, forum, &landed_mids).await;
                     return false;
                 }
                 // Remap-safe (stall.rs parity): a paced reset migrating
@@ -137,11 +141,13 @@ pub(crate) async fn post_spontaneous_card(
                 // stamped done) instead of retrying the full body into
                 // the new one. No stamp: the retry reposts everything.
                 if s.topics.storage.get_thread(pane) != Some(thread) {
+                    delete_parts(s, forum, &landed_mids).await;
                     return false;
                 }
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if let Some(m) = mid {
                     landed += 1;
+                    landed_mids.push(m);
                     if settled == "done" {
                         let _ = s.tg.set_reaction(forum, m, Some("✅")).await;
                     }
@@ -214,6 +220,20 @@ pub(crate) async fn post_spontaneous_card(
             .insert(pane.to_string(), std::time::Instant::now());
     }
     complete
+}
+
+/// Best-effort delete of delivered multi-part heads when a later part
+/// aborts (supersede/remap): the retry reposts the full body, so a
+/// stranded head would duplicate beside it. Bounded like retire_live —
+/// never park the tick on flood-wait.
+async fn delete_parts(s: &AppState, chat: i64, mids: &[i64]) {
+    for m in mids {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
+            s.tg.delete_msg(chat, *m),
+        )
+        .await;
+    }
 }
 
 #[cfg(test)]

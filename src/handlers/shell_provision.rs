@@ -269,6 +269,9 @@ pub(crate) async fn attach_shell_pane(
     space: &str,
     follow_focus: bool,
 ) {
+    // Normalized send (callback parity): a General panel tap carries
+    // Some(1) — sends must target None, never thread 1.
+    let thread = thread.filter(|t| *t != 1);
     // Kind "shell" mints an sh<n> tag; icon goes straight to shell.
     // Fresh pane: retire only on a raced prune (uniform, see agents.rs).
     let topic = match s.topics.sync_topic_prune(pane, "shell", space).await {
@@ -289,7 +292,8 @@ pub(crate) async fn attach_shell_pane(
     s.remember(chat, mid, pane).await;
     // Explicit shells take focus; side splits must not steal global
     // DM/General routing from live work (topics route by thread anyway).
-    if follow_focus {
+    // Focus follows delivery: a failed send pins routing nowhere.
+    if follow_focus && mid.is_some() {
         s.set_focus(pane).await;
     }
 }

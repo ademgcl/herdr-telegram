@@ -139,14 +139,22 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
             .await;
         return;
     }
-    s.tg.send_msg(
-        chat,
-        thread,
-        &format!("⏳ running in {space} [{pane}]\n$ {cmd}"),
-        None,
-    )
-    .await;
-    s.set_focus(&pane).await;
+    let mid = s
+        .tg
+        .send_msg(
+            chat,
+            thread,
+            &format!("⏳ running in {space} [{pane}]\n$ {cmd}"),
+            None,
+        )
+        .await;
+    // Focus follows delivery (provision parity): a failed receipt pins
+    // no routing toward a pane the user never saw.
+    // NOTE: the receipt mid is intentionally untracked (remember parity
+    // with run_shell_cmd): only the settle card routes replies.
+    if mid.is_some() {
+        s.set_focus(&pane).await;
+    }
     s.remember_pending(&pane, chat, thread, cmd).await;
     s.push_history(&pane, cmd).await;
     super::shell_lifecycle::spawn_flip_watch(s, &pane);

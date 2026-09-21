@@ -129,7 +129,7 @@ pub fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     // final). Longest base-suffix == new-prefix overlap is exact here:
     // same source, tail window, no new output means full overlap.
     if new.len() < base.len() {
-        for k in (0..=new.len()).rev() {
+        for k in (1..=new.len()).rev() {
             if new[..k] == base[base.len() - k..] {
                 return &new[k..];
             }

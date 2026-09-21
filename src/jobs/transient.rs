@@ -55,7 +55,15 @@ pub(crate) const TRANSIENT: &[&str] = &[
     "Antigravity CLI 1.2.2",
     "  ADC: firebase-adminsdk-fbsvc@test-proj-123",
     "└ Tip: Run with --nocapture",
+    // Agy subagent group headers + processing footer (transient, not reply).
+    "▸ Subagents (1 running, 2 done)",
+    "▾ Subagents (3 done)",
+    "esc to cancel",
 ];
+// NOTE: agy auto titles ("Prioritizing Tool Usage") are NOT here: plain
+// prose, transient only right after a `▸ Thought` header (drained
+// positionally in segment::final_block, tested there). Alone they are
+// content — see PROSE.
 
 /// Reply prose that must survive filtering byte-for-byte. Each entry guards
 /// a narrowness rule: mid-line glyphs, ASCII bullets, checkmarks, ~/paths,
@@ -78,4 +86,7 @@ pub(crate) const PROSE: &[&str] = &[
     "| a | b |",
     "```rust",
     "Hi! I'm Muse Spark. How can I help today?",
+    // Agy auto title WORDS are content — only their position right after a
+    // `▸ Thought` header makes them transient (never the words alone).
+    "Prioritizing Tool Usage",
 ];

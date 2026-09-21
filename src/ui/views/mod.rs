@@ -131,7 +131,7 @@ pub fn build_ws_text(ws: &str, spaces: &[WorkspaceInfo], agents: &[AgentRow]) ->
     let label = spaces
         .iter()
         .find(|s| s.id == ws)
-        .map(|s| format!("#{} {}", s.number, s.label))
+        .map(|s| format!("#{} {}", s.number, crate::types::mask_home(&s.label)))
         .unwrap_or_else(|| ws.to_string());
 
     let mut text = format!("🖥 {label}\n\n");
@@ -156,9 +156,11 @@ pub fn build_agent_card_text(a: &AgentDetail, space: &str) -> String {
         Some(b) => format!("\nbranch: 🌿 {}", crate::types::mask_home(b)),
         None => String::new(),
     };
-    // Mask $HOME in cwd + title (titles carry terminal paths).
+    // Mask $HOME in cwd + title + space (space labels carry terminal
+    // paths — ws_text/menu parity, never raw $HOME to the chat).
     let cwd = crate::types::mask_home(&a.cwd);
     let title = crate::types::mask_home(&a.title);
+    let space = crate::types::mask_home(space);
     format!(
         "{} {} [{}]\nstatus: {}\nspace: {}{}\ncwd: {}\ntitle: {}",
         emoji(&a.status),
@@ -184,7 +186,11 @@ pub fn build_identity_card_text(
 ) -> String {
     // Plain text: no parse_mode is ever sent (build_send_msg_params
     // sends raw text), so Markdown would render literally.
-    let mut card = format!("📌 {kind} · {pane}\nWorkspace: {space}");
+    // Space masked: labels carry terminal paths ($HOME/username).
+    let mut card = format!(
+        "📌 {kind} · {pane}\nWorkspace: {}",
+        crate::types::mask_home(space)
+    );
     if let Some(t) = title.filter(|t| !t.trim().is_empty()) {
         card.push_str(&format!("\nTitle: {}", crate::types::mask_home(t.trim())));
     }

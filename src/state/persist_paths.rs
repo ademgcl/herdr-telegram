@@ -38,18 +38,27 @@ pub(crate) fn offset_file() -> PathBuf {
     state_dir().join("offset.state")
 }
 
-/// Back up a corrupt state file (`<path>.corrupt-<unix>.bak`, 0600):
-/// single source for the offset/focus corrupt paths (dup'd backup
-/// blocks re-drift — one once skipped the 0600). Log names the file
-/// only (never the raw dir: it holds $HOME) plus the masked backup.
+/// Back up a corrupt state file (`<path>.corrupt-<unix>-<pid>.bak`,
+/// 0600): single source for the offset/focus corrupt paths (dup'd backup
+/// blocks re-drift — one once skipped the 0600). Pid-suffixed like
+/// jobs/persist (secs alone collides on two corrupts in one second) and
+/// pruned to 5 like every other corrupt writer (unbounded growth).
+/// Log names the file only (never the raw dir: it holds $HOME) plus the
+/// masked backup.
 pub(crate) fn backup_corrupt(path: &std::path::Path) {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
+    let bak = PathBuf::from(format!(
+        "{}.corrupt-{}-{}.bak",
+        path.display(),
+        secs,
+        std::process::id()
+    ));
     let _ = std::fs::copy(path, &bak);
     crate::types::chmod_private(&bak);
+    crate::types::prune_corrupt_backups(path, 5);
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

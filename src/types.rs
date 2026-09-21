@@ -3,7 +3,9 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 // Re-exported file helpers (split to `fsutil`, 300-line file limit):
 // existing `types::{write_private, chmod_private, unique_tmp}` call
 // sites keep working unchanged.
-pub(crate) use crate::fsutil::{chmod_private, unique_tmp, write_private};
+pub(crate) use crate::fsutil::{
+    chmod_private, prune_corrupt_backups, unique_tmp, write_private,
+};
 
 pub const TG_POLL_SECS: i64 = 25;
 pub const STALE_SECS: u64 = 600;

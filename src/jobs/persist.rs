@@ -70,6 +70,7 @@ pub fn load_file(path: &Path) -> HashMap<String, PendingPrompt> {
         ));
         let _ = std::fs::copy(path, &bak);
         crate::types::chmod_private(&bak);
+        crate::types::prune_corrupt_backups(path, 5);
         HashMap::new()
     })
 }

@@ -12,9 +12,8 @@ use serde_json::json;
 use tokio::time::{Duration, sleep};
 
 /// A missing agent row really is a shell (not a list dropout) when the
-/// volatile status or the durable tag already says shell — the shared
-/// confirm for the watchdog skip, so flips converge (icon included)
-/// instead of skipping forever.
+/// volatile status or the durable tag already says shell — shared with
+/// the watchdog skip so flips converge instead of skipping forever.
 pub async fn confirmed_shell(s: &AppState, pane: &str) -> bool {
     if s.status
         .lock()
@@ -84,7 +83,9 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
                         s.tg.send_msg(chat, thread, &shell_card_text(pane), None)
                             .await;
                     s.remember(chat, mid, pane).await;
-                    s.set_focus(pane).await;
+                    if mid.is_some() {
+                        s.set_focus(pane).await; // delivery-gated (provision parity)
+                    }
                     return;
                 };
                 a
@@ -92,8 +93,7 @@ pub async fn quit_to_shell(s: &AppState, chat: i64, thread: Option<i64>, pane: &
         }
     };
     if !matches!(agent.status.as_str(), "idle" | "done") {
-        // Stateless confirm (no pending-state map to leak): Quit/Keep
-        // taps carry the pane, like X:kill.
+        // Stateless confirm (no pending-state map to leak): Quit/Keep taps carry the pane, like X:kill.
         let kb = json!([[
             {"text": "Quit anyway", "callback_data": format!("X:quit:{pane}")},
             {"text": "Keep", "callback_data": format!("X:keep:{pane}")},

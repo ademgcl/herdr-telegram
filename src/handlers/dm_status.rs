@@ -65,7 +65,10 @@ pub(crate) async fn handle_status(
                 )
                 .await;
             s.remember(chat, mid, &pane).await;
-            s.set_focus(&pane).await;
+            // Focus follows delivery: a failed card pins no routing.
+            if mid.is_some() {
+                s.set_focus(&pane).await;
+            }
         }
         Err(_) => {
             // Gone probe (callback `a:`-arm parity): a corpse pane must
@@ -74,12 +77,15 @@ pub(crate) async fn handle_status(
             // unreadable herdr refuses visibly, never guesses.
             match list_panes(&s.cfg.socket).await {
                 Ok(l) if l.contains(&pane) => {
-                    s.set_focus(&pane).await;
                     let mid = s
                         .tg
                         .send_msg(chat, None, &crate::ui::shell_gone_text(&pane), None)
                         .await;
                     s.remember(chat, mid, &pane).await;
+                    // Focus follows delivery (card arm parity above).
+                    if mid.is_some() {
+                        s.set_focus(&pane).await;
+                    }
                 }
                 Ok(_) => {
                     s.tg.send_msg(chat, None, crate::ui::UNKNOWN_TARGET, None)

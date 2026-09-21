@@ -214,13 +214,26 @@ pub async fn finalize(
     // mid-post supersede leaves it for the handoff's retire instead of
     // stranding a done stamp with no reply.
     let mut delivered = false;
+    let mut landed: Vec<i64> = Vec::new();
     for part in parts.iter() {
-        if report_done(s, chat, th, pane, part).await {
+        if let Some(m) = super::report::report_done_mid(s, chat, th, pane, part).await {
             delivered = true;
+            landed.push(m);
         }
         // Retarget check per part: a slow flood-wait can span a submit.
         if job.epoch.load(Ordering::Relaxed) != entry_epoch {
             println!("[prompt] finalize {pane}: superseded mid-post, stopping");
+            // Delete delivered heads best-effort (post-send guard
+            // parity above): the new prompt owns the thread — a stale
+            // head beside its turn misattributes the reply, and the
+            // handoff reposts nothing (its own watcher serves it).
+            for m in landed {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
+                    s.tg.delete_msg(chat, m),
+                )
+                .await;
+            }
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             acc.clear();
             return false;
@@ -261,4 +274,4 @@ pub async fn finalize(
     false
 }
 
-pub use super::report::{edit_live, report, report_done};
+pub use super::report::{edit_live, report};

@@ -38,7 +38,11 @@ pub(crate) async fn watch_stall(
     }
     let epoch_before = job.epoch.load(Ordering::Relaxed);
     let screen = read_screen_for_limits(&s.cfg.socket, pane).await;
-    if screen.is_empty() {
+    // A cleared pane reads as non-empty all-blank lines: like an empty
+    // read it is outage/unknown (never clean) — treating it as a clean
+    // miss clears the episode on a blip and re-pages an already-buzzed
+    // stall on the next tick.
+    if screen.is_empty() || screen.iter().all(|l| l.trim().is_empty()) {
         episode.note_empty();
         return screen;
     }
@@ -48,14 +52,15 @@ pub(crate) async fn watch_stall(
         // Clean read: on the CONFIRMED-clear transition (episode just
         // reset after sustained absence) also release the shared claim.
         // Duplicates-over-silence: one extra card on read disagreement
-        // beats a genuine refire swallowed by the remind window.
+        // beats a genuine refire swallowed by the remind window. The
+        // failed-send cooldown is NOT cleared: it backs off a dead
+        // Telegram, and a clean screen says nothing about delivery.
         let was_open = !episode.is_fresh();
         episode.tick(None, now);
         if was_open && episode.is_fresh() {
             s.limit_alert.lock().await.remove(pane);
             s.limit_seen.lock().await.remove(pane);
             s.limit_miss.lock().await.remove(pane);
-            s.limit_send_cool.lock().await.remove(pane);
         }
         return screen;
     }
@@ -117,14 +122,23 @@ pub(crate) async fn watch_stall(
         episode.unfire();
         return screen;
     }
-    if get_agent(&s.cfg.socket, pane).await.is_err() {
-        // Fail-closed (send_keys parity): only a confirmed agent takes
-        // the buzz — shell flips, dead panes and blips all stay silent
-        // and retry next tick. list_panes is not consulted: a live shell
-        // pane would read as "present" and page the corpse thread.
-        release_claim(s, pane, hit.kind, now).await;
-        episode.unfire();
-        return screen;
+    // Fail-closed (send_keys parity): only a confirmed live agent takes
+    // the buzz — shell flips, dead panes and blips all stay silent and
+    // retry next tick. list_panes is not consulted: a live shell pane
+    // would read as "present" and page the corpse thread. Fresh status
+    // value (not just is_err): a quit-to-shell inside the read→send
+    // window still reports Ok with a shell/dead status.
+    match get_agent(&s.cfg.socket, pane).await {
+        Ok(a)
+            if !matches!(
+                a.status.as_str(),
+                "shell" | "dead" | "closed" | "exited"
+            ) => {}
+        _ => {
+            release_claim(s, pane, hit.kind, now).await;
+            episode.unfire();
+            return screen;
+        }
     }
     // Remap-safe: a paced reset migrates the topic mid-run — buzzing
     // the corpse thread fails or lands in the deleted topic. Forum

@@ -171,13 +171,21 @@ pub(crate) fn read_store(path: &Path) -> Store {
         return s;
     }
     if !txt.trim().is_empty() {
+        // Pid-suffixed like jobs/persist (secs alone collides on two
+        // corrupts in one second); pruned to 5 like every other writer.
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let bak = PathBuf::from(format!("{}.corrupt-{}.bak", path.display(), secs));
+        let bak = PathBuf::from(format!(
+            "{}.corrupt-{}-{}.bak",
+            path.display(),
+            secs,
+            std::process::id()
+        ));
         let _ = fs::copy(path, &bak);
         crate::types::chmod_private(&bak);
+        crate::types::prune_corrupt_backups(path, 5);
     }
     Store::default()
 }

@@ -30,7 +30,14 @@ pub async fn list_agents(socket: &str) -> Res<Vec<AgentRow>> {
 
 pub async fn get_agent(socket: &str, pane: &str) -> Res<AgentDetail> {
     let v = rpc(socket, "agent.get", json!({"target": pane})).await?;
-    let a = &v["agent"];
+    // Fail-closed (list_agents parity): a bare ack / missing `agent`
+    // object is never "agent exists" — callers treat Ok as liveness
+    // (focus moves, spawn verifies). Malformed rows must Err, never
+    // invent "?" rows that mint success with ghost kinds.
+    let a = v.get("agent").filter(|a| a.is_object()).ok_or("agent.get returned no agent")?;
+    if a.get("pane_id").and_then(|p| p.as_str()).is_none() {
+        return Err("agent.get returned no pane_id".into());
+    }
     let cwd: String = a["foreground_cwd"]
         .as_str()
         .or(a["cwd"].as_str())

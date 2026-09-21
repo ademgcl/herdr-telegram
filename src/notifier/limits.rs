@@ -54,8 +54,10 @@ pub(crate) async fn scan_limits(s: &AppState) {
         }
         let screen = read_screen_for_limits(&s.cfg.socket, &pane).await;
         // Outage/unknown: preserve everything (alert, stuck timer, miss
-        // count) so the next good read does NOT re-alert.
-        if screen.is_empty() {
+        // count) so the next good read does NOT re-alert. A cleared pane
+        // reads as non-empty all-blank lines and counts the same —
+        // treating it as clean clears the episode on a blip (stall parity).
+        if screen.is_empty() || screen.iter().all(|l| l.trim().is_empty()) {
             continue;
         }
         // Settled panes count fresh-tail banners only: a quota banner in
@@ -84,7 +86,9 @@ pub(crate) async fn scan_limits(s: &AppState) {
             if misses >= LIMIT_CLEAR_MISSES {
                 s.limit_alert.lock().await.remove(&pane);
                 s.limit_seen.lock().await.remove(&pane);
-                s.limit_send_cool.lock().await.remove(&pane);
+                // The failed-send cooldown survives the clear: it backs
+                // off a dead Telegram, and a clean screen says nothing
+                // about delivery (stall.rs parity — clearing it storms).
             }
             continue;
         };

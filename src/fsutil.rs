@@ -63,3 +63,83 @@ pub(crate) fn unique_tmp(path: &std::path::Path) -> std::path::PathBuf {
     tmp.push(format!(".tmp-{}-{n}", std::process::id()));
     std::path::PathBuf::from(tmp)
 }
+
+/// Corrupt-backup filename verdict (pure, tested): `true` when `name`
+/// is a `.corrupt-*.bak` sibling of `base` (same `<base>.corrupt-`
+/// prefix, `.bak` suffix). Single source for the prune below so the
+/// match can never drift between writers.
+pub(crate) fn is_corrupt_backup(base: &str, name: &str) -> bool {
+    let prefix = format!("{base}.corrupt-");
+    name.starts_with(&prefix) && name.ends_with(".bak") && name.len() > prefix.len() + 4
+}
+
+/// Cap `.corrupt-*.bak` siblings (single source for jobs/topics
+/// writers): every corrupt load copies one backup with no expiry
+/// otherwise — keep the newest `keep`, delete the rest. Best-effort.
+pub(crate) fn prune_corrupt_backups(path: &std::path::Path, keep: usize) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Some(base) = path.file_name().and_then(|b| b.to_str()) else {
+        return;
+    };
+    let Ok(dir) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let mut hits: Vec<std::path::PathBuf> = Vec::new();
+    for e in dir.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if is_corrupt_backup(base, &name) {
+            hits.push(e.path());
+        }
+    }
+    if hits.len() <= keep {
+        return;
+    }
+    hits.sort();
+    for old in hits.iter().take(hits.len() - keep) {
+        let _ = std::fs::remove_file(old);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_corrupt_backup_match() {
+        assert!(is_corrupt_backup("jobs.state", "jobs.state.corrupt-1-2.bak"));
+        assert!(is_corrupt_backup("jobs.state", "jobs.state.corrupt-1.bak"));
+        assert!(!is_corrupt_backup("jobs.state", "jobs.state.prev"));
+        assert!(!is_corrupt_backup("jobs.state", "jobs.state.corrupt-1.tmp"));
+        assert!(!is_corrupt_backup("jobs.state", "other.corrupt-1.bak"));
+    }
+
+    #[test]
+    fn test_prune_corrupt_backups_keeps_newest() {
+        let dir = std::env::temp_dir().join(format!(
+            "ht-prune-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("jobs.state");
+        std::fs::write(&base, "{}").unwrap();
+        for i in 0..7 {
+            let p = dir.join(format!("jobs.state.corrupt-{i}.bak"));
+            std::fs::write(&p, "x").unwrap();
+        }
+        prune_corrupt_backups(&base, 5);
+        let left: usize = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                is_corrupt_backup("jobs.state", &e.file_name().to_string_lossy())
+            })
+            .count();
+        assert_eq!(left, 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

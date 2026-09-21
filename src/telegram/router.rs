@@ -139,7 +139,7 @@ pub async fn handle_update(s: AppState, u: &Value) {
         return;
     }
 
-    if text.is_empty() {
+    if text.trim().is_empty() {
         return;
     }
 

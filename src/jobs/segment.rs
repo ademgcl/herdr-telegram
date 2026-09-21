@@ -19,6 +19,7 @@ use super::{
 /// merges into the final card.
 const TOOL_PREFIXES: &[&str] = &[
     "→", "←", "●", "○", "⏺", "⎿", "☰", "❯", "›", "✱", "~ ", "✻", "※", "⏵",
+    "▸ ", "▾", // agy ▸ Thought/Subagents headers + expanded ▾ group
 ];
 
 /// A full-width box-rule turn separator (────…): turns are wrapped in these,
@@ -129,6 +130,10 @@ fn is_footer_line(line: &str) -> bool {
     if t.starts_with('⏵') || t.contains("auto mode on") || t.contains("shift+tab to cycle") {
         return true;
     }
+    // Agy processing footer — a lone one never posts as the reply.
+    if t.contains("esc to cancel") {
+        return true;
+    }
     if t.contains("· ←") && t.ends_with("agent") {
         return true;
     }
@@ -170,22 +175,39 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let mut cands: Vec<(Vec<String>, bool)> = Vec::new();
     let mut seg: Vec<String> = Vec::new();
     let mut echo_pos: Option<usize> = None;
-    let flush =
-        |seg: &mut Vec<String>, cands: &mut Vec<(Vec<String>, bool)>, closed_by_rule: bool| {
-            let cand = chrome_filtered(seg);
-            if !cand.is_empty() {
-                cands.push((cand, closed_by_rule));
-            }
-            seg.clear();
-        };
+    // Agy auto title ("Prioritizing Tool Usage") opens every segment behind
+    // a `▸ Thought` header. Drain it at flush — but only when more content
+    // follows (a lone line may be the whole reply) and never a fatal
+    // provider error (content, not a title). Gated on agy-exact `▸ Thought`:
+    // opencode `Thought ·` headers answer directly and drop nothing.
+    let mut thought_opened = false;
+    let flush = |seg: &mut Vec<String>,
+                 cands: &mut Vec<(Vec<String>, bool)>,
+                 closed_by_rule: bool,
+                 thought_opened: bool| {
+        if thought_opened
+            && seg.iter().filter(|l| !l.trim().is_empty()).count() >= 2
+            && let Some(i) = seg.iter().position(|l| !l.trim().is_empty())
+            && !super::notices::is_provider_failure_line(&seg[i])
+        {
+            seg.remove(i);
+        }
+        let cand = chrome_filtered(seg);
+        if !cand.is_empty() {
+            cands.push((cand, closed_by_rule));
+        }
+        seg.clear();
+    };
     for l in lines.iter() {
         if is_boundary(l) {
-            flush(&mut seg, &mut cands, is_rule(l));
+            flush(&mut seg, &mut cands, is_rule(l), thought_opened);
             echo_pos = None;
+            thought_opened = l.trim().starts_with("▸ Thought");
             continue;
         }
         if !want.is_empty() && is_prompt_echo(l, want) {
-            flush(&mut seg, &mut cands, false);
+            flush(&mut seg, &mut cands, false, thought_opened);
+            thought_opened = false;
             echo_pos = Some(0);
             continue;
         }
@@ -201,7 +223,7 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
         }
         seg.push(l.clone());
     }
-    flush(&mut seg, &mut cands, false);
+    flush(&mut seg, &mut cands, false, thought_opened);
     let Some((mut win, mut gated)) = cands.pop() else {
         return Vec::new();
     };
@@ -224,56 +246,6 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
         }
     }
     win
-}
-
-/// Dialog-specific segmentation: returns (cleaned_winner, raw_winner).
-/// In blocked dialogs, '←' does not split headers and options are preserved
-/// in raw form so terminal padding rules never drop them before parsing.
-pub fn dialog_block(lines: &[String]) -> (Vec<String>, Vec<String>) {
-    let mut cands: Vec<(Vec<String>, Vec<String>, bool)> = Vec::new();
-    let mut raw_seg: Vec<String> = Vec::new();
-    let flush = |raw_seg: &mut Vec<String>,
-                 cands: &mut Vec<(Vec<String>, Vec<String>, bool)>,
-                 closed_by_rule: bool| {
-        let cand = super::filter::dialog_chrome_filtered(raw_seg);
-        if !cand.is_empty() {
-            cands.push((cand, raw_seg.clone(), closed_by_rule));
-        }
-        raw_seg.clear();
-    };
-    for (i, l) in lines.iter().enumerate() {
-        let next_non_blank = lines[i + 1..]
-            .iter()
-            .find(|s| !s.trim().is_empty())
-            .map(String::as_str);
-        if is_dialog_boundary(l, next_non_blank) {
-            flush(&mut raw_seg, &mut cands, is_rule(l));
-            continue;
-        }
-        raw_seg.push(l.clone());
-    }
-    flush(&mut raw_seg, &mut cands, false);
-    let Some((mut cleaned, mut raw, mut gated)) = cands.pop() else {
-        return (Vec::new(), Vec::new());
-    };
-    loop {
-        if gated {
-            let openers = cleaned.iter().take_while(|l| is_input_opener(l)).count();
-            cleaned.drain(..openers);
-        }
-        if !cleaned.is_empty() && !is_footer_segment(&cleaned) {
-            break;
-        }
-        match cands.pop() {
-            Some((prev_clean, prev_raw, prev_rule)) => {
-                cleaned = prev_clean;
-                raw = prev_raw;
-                gated = prev_rule;
-            }
-            None => return (Vec::new(), Vec::new()),
-        }
-    }
-    (cleaned, raw)
 }
 
 #[cfg(test)]
