@@ -35,6 +35,11 @@ pub fn facts_contradict(
 /// only periodic caller.
 pub async fn pane_facts(socket: &str) -> Res<HashMap<String, PaneFacts>> {
     let r = rpc(socket, "pane.list", json!({})).await?;
+    // Fail-closed (list_panes parity): missing `panes` is malformed,
+    // never "no panes".
+    if r.get("panes").and_then(|v| v.as_array()).is_none() {
+        return Err("pane.list returned no panes".into());
+    }
     Ok(parse_facts(&r))
 }
 

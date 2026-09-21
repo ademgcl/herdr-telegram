@@ -4,22 +4,26 @@ use serde_json::json;
 
 pub async fn list_agents(socket: &str) -> Res<Vec<AgentRow>> {
     let r = rpc(socket, "agent.list", json!({})).await?;
+    // Fail-closed (list_panes parity): a missing `agents` key is a
+    // malformed envelope, never "no agents" (the "all dead" signal).
+    let arr = r
+        .get("agents")
+        .and_then(|v| v.as_array())
+        .ok_or("agent.list returned no agents")?;
     let mut out = Vec::new();
-    if let Some(arr) = r["agents"].as_array() {
-        for a in arr {
-            // Skip malformed rows: a ghost "?" pane would be subscribed
-            // and reconciled downstream — fail-closed, never invent ids.
-            let Some(pane) = a["pane_id"].as_str() else {
-                continue;
-            };
-            out.push(AgentRow {
-                kind: a["agent"].as_str().unwrap_or("?").into(),
-                pane: pane.into(),
-                title: a["terminal_title_stripped"].as_str().unwrap_or("").into(),
-                status: a["agent_status"].as_str().unwrap_or("unknown").into(),
-                ws: a["workspace_id"].as_str().unwrap_or("?").into(),
-            });
-        }
+    for a in arr {
+        // Skip malformed rows: a ghost "?" pane would be subscribed
+        // and reconciled downstream — fail-closed, never invent ids.
+        let Some(pane) = a["pane_id"].as_str() else {
+            continue;
+        };
+        out.push(AgentRow {
+            kind: a["agent"].as_str().unwrap_or("?").into(),
+            pane: pane.into(),
+            title: a["terminal_title_stripped"].as_str().unwrap_or("").into(),
+            status: a["agent_status"].as_str().unwrap_or("unknown").into(),
+            ws: a["workspace_id"].as_str().unwrap_or("?").into(),
+        });
     }
     Ok(out)
 }

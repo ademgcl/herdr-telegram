@@ -17,31 +17,47 @@ pub fn kill_confirm_text(pane: &str, desc: &str) -> String {
 }
 
 /// Describe the pane for the confirm card, or None when already gone.
-/// Fail-open: a failed pane list must not read as "gone" (every kill
+/// Fail-closed: a failed pane list must not read as "gone" (every kill
 /// would false-gone during a herdr blip); the kill itself then fails
-/// gracefully with a visible error.
-async fn describe(s: &AppState, pane: &str) -> Option<String> {
-    if let Ok(a) = get_agent(&s.cfg.socket, pane).await {
-        return Some(format!("{}, {}", a.kind, a.status));
+/// gracefully with a visible error. Err on outage: posting the
+/// destructive confirm card on an ambiguous read violates fail-closed.
+async fn describe(s: &AppState, pane: &str) -> Result<Option<String>, ()> {
+    match get_agent(&s.cfg.socket, pane).await {
+        Ok(a) => return Ok(Some(format!("{}, {}", a.kind, a.status))),
+        // Only confirmed death reads as shell (dm_info/tap_runkey
+        // parity): a get_agent blip on a live agent refuses visibly
+        // instead of mislabeling it "shell" on the confirm card.
+        Err(e) if crate::herdr::rpc::should_retry_agent_lookup(&e.to_string()) => {
+            return Err(());
+        }
+        Err(_) => {}
     }
     match list_panes(&s.cfg.socket).await {
-        Ok(panes) if panes.contains(&pane.to_string()) => Some("shell".to_string()),
-        Ok(_) => None,
-        Err(_) => Some("unreachable — assuming live".to_string()),
+        Ok(panes) if panes.contains(&pane.to_string()) => Ok(Some("shell".to_string())),
+        Ok(_) => Ok(None),
+        Err(_) => Err(()),
     }
 }
 
 /// Ask: post the confirm card with Kill/Keep buttons.
 pub async fn ask_kill(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    let Some(desc) = describe(s, pane).await else {
-        s.tg.send_msg(
-            chat,
-            thread,
-            &format!("⚠️ pane {pane} is already gone"),
-            None,
-        )
-        .await;
-        return;
+    let desc = match describe(s, pane).await {
+        Err(()) => {
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        }
+        Ok(None) => {
+            s.tg.send_msg(
+                chat,
+                thread,
+                &format!("⚠️ pane {pane} is already gone"),
+                None,
+            )
+            .await;
+            return;
+        }
+        Ok(Some(desc)) => desc,
     };
     let kb = json!([[
         {"text": "☠️ Kill", "callback_data": format!("X:kill:{pane}")},

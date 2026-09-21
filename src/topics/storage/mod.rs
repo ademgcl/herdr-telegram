@@ -8,6 +8,9 @@ mod meta;
 mod tags;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "restore_tests.rs"]
+mod restore_tests;
 
 use disk::Store;
 
@@ -106,6 +109,12 @@ impl TopicStorage {
     }
 
     pub fn get_pane(&self, thread: i64) -> Option<String> {
+        // Thread 1 is General, never a pane topic: a stored 1 (corrupt /
+        // hand-edited) must not resolve General to a pane and poison the
+        // icon/rename arms.
+        if thread == 1 {
+            return None;
+        }
         self.lock()
             .topics
             .iter()
@@ -127,9 +136,18 @@ impl TopicStorage {
     /// its own; a failed send must not leave edits aimed at a deleted
     /// message while the new topic starves).
     pub fn insert_with_title(&self, pane: String, thread: i64, title: &str) {
+        // Thread 1 is General, never a pane topic — refuse to store it
+        // (get_pane parity: a stored 1 poisons icon/rename arms).
+        if thread == 1 {
+            return;
+        }
         let mut s = self.lock();
         if s.topics.get(&pane) != Some(&thread) {
             s.pins.remove(&pane);
+            // Reminted panes must not carry the dead topic's message ids
+            // into the next reset (copy-of-copy duplicates / silent copy
+            // failures) — remove_if_thread parity.
+            s.last_msgs.remove(&pane);
         }
         s.topics.insert(pane.clone(), thread);
         s.titles.insert(pane, title.to_string());

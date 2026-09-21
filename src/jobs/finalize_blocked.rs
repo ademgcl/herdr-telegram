@@ -139,7 +139,26 @@ pub async fn try_finalize_blocked(
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }
-    let posted = send_blocked_card(s, chat, th, pane).await;
+    let posted = {
+        // Remap-safe (stall.rs parity): a paced reset migrating the
+        // topic during the RPCs above must not buzz into the deleted
+        // thread — follow the live mapping at send time. Unmapped
+        // forum dests retire: there is nowhere to post (mappable rule
+        // below would spin retry forever against a deleted topic).
+        let th = if s.cfg.forum == Some(chat) {
+            match s.topics.storage.get_thread(pane) {
+                Some(cur) => Some(cur),
+                None => {
+                    settle_books(s, pane, job, entry_epoch, entry_pending).await;
+                    acc.clear();
+                    return Some(false);
+                }
+            }
+        } else {
+            th
+        };
+        send_blocked_card(s, chat, th, pane).await
+    };
     // Re-gate after the post await: a submit during it owns the pane —
     // the observe below would stamp the old settled kind over the new
     // turn's live status (finalize.rs parity). The handoff retires the

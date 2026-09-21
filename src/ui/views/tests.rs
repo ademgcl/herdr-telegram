@@ -226,3 +226,32 @@ fn test_chunks_empty_yields_no_message() {
     assert!(chunks("", 100).is_empty());
     assert!(!chunks("hi", 100).is_empty());
 }
+
+#[test]
+fn test_menu_text_masks_home_paths() {
+    // Space labels / kinds carrying terminal paths must not leak $HOME
+    // to the chat (agent-card parity). Uses the real home so mask_home
+    // actually fires.
+    use crate::types::{AgentRow, WorkspaceInfo, home_dir, mask_home_with};
+    let home = home_dir();
+    assert!(!home.is_empty(), "test needs a HOME to mask");
+    let spaces = vec![WorkspaceInfo {
+        id: "w8".into(),
+        label: format!("{home}/shop"),
+        number: 8,
+    }];
+    let agents = vec![AgentRow {
+        kind: format!("{home}/opencode"),
+        pane: "w8:p1".into(),
+        title: String::new(),
+        status: "working".into(),
+        ws: "w8".into(),
+    }];
+    let text = build_menu_text(&spaces, &agents);
+    assert_eq!(
+        text,
+        mask_home_with(&text, &home),
+        "menu text must carry no raw $HOME"
+    );
+    assert!(!text.contains(&*home));
+}

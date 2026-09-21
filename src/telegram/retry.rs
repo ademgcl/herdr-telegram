@@ -105,6 +105,19 @@ impl TelegramClient {
             .unwrap_or(false)
     }
 
+    /// Fatal permission/topic errors fail fast without retry.
+    /// Case-insensitive (errors.rs parity): Telegram ships sentence-case
+    /// variants too, and a missed fatal burns 6 retries + sleeps instead
+    /// of failing fast. Pure for tests.
+    pub(crate) fn is_fatal_msg(msg: &str) -> bool {
+        let low = msg.to_lowercase();
+        crate::telegram::topic_missing(msg)
+            || crate::telegram::topic_not_modified(msg)
+            || low.contains(crate::telegram::NO_RIGHTS)
+            || low.contains(crate::telegram::BOT_BLOCKED)
+            || low.contains("chat_admin_required")
+    }
+
     /// Execute a Telegram API call with 429 flood-wait (`retry_after`)
     /// and transient connection/server error retries. Fatal permission/topic
     /// errors fail fast without retry.
@@ -118,12 +131,7 @@ impl TelegramClient {
                 Ok(v) => return Ok(v),
                 Err(e) => {
                     let msg = e.to_string();
-                    if crate::telegram::topic_missing(&msg)
-                        || crate::telegram::topic_not_modified(&msg)
-                        || msg.contains(crate::telegram::NO_RIGHTS)
-                        || msg.contains(crate::telegram::BOT_BLOCKED)
-                        || msg.contains("CHAT_ADMIN_REQUIRED")
-                    {
+                    if Self::is_fatal_msg(&msg) {
                         return Err(e);
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
@@ -144,5 +152,29 @@ impl TelegramClient {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fatal_match_is_case_insensitive() {
+        // Sentence-case variants must fail fast, not burn 6 retries.
+        assert!(TelegramClient::is_fatal_msg(
+            "Forbidden: Not Enough Rights to send text messages"
+        ));
+        assert!(TelegramClient::is_fatal_msg(
+            "Forbidden: Bot Was Blocked by the user"
+        ));
+        assert!(TelegramClient::is_fatal_msg(
+            "Bad Request: CHAT_ADMIN_REQUIRED"
+        ));
+        assert!(TelegramClient::is_fatal_msg(
+            "Bad Request: Chat_admin_required"
+        ));
+        assert!(!TelegramClient::is_fatal_msg("Internal Server Error"));
+        assert!(!TelegramClient::is_fatal_msg("connection reset"));
     }
 }

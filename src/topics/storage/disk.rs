@@ -35,6 +35,26 @@ fn load_prev(path: &Path) -> Option<Store> {
     }
     let ptxt = fs::read_to_string(&prev).ok()?;
     if let Ok(s) = serde_json::from_str::<Store>(&ptxt) {
+        // A legacy flat map parses as an empty Store (unknown fields
+        // ignored) — fall through to the flat branch below instead of
+        // returning empty and mass-reminting (main-path parity).
+        let store_empty = s.topics.is_empty()
+            && s.tags.is_empty()
+            && s.titles.is_empty()
+            && s.pins.is_empty()
+            && s.icons.is_empty()
+            && s.last_msgs.is_empty();
+        if !store_empty {
+            return Some(s);
+        }
+        if let Ok(topics) = serde_json::from_str::<HashMap<String, i64>>(&ptxt)
+            && !topics.is_empty()
+        {
+            return Some(Store {
+                topics,
+                ..Default::default()
+            });
+        }
         return Some(s);
     }
     serde_json::from_str::<HashMap<String, i64>>(&ptxt)

@@ -99,10 +99,12 @@ pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String 
             .map(|a| a.status.as_str())
             .collect();
         let emo = worst_status(mine.iter().copied());
+        // Masked (agent-card parity): space labels carry terminal paths
+        // ($HOME/username) shown to the whole chat.
+        let label = crate::types::mask_home(&s.label);
         text.push_str(&format!(
             "{emo} #{} {} — {} agent(s)\n",
-            s.number,
-            s.label,
+            s.number, label,
             mine.len()
         ));
     }
@@ -112,11 +114,13 @@ pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String 
         text.push_str("(none — tap ➕ or wait for detection)\n");
     }
     for a in agents {
+        let kind = crate::types::mask_home(&a.kind);
+        let ws = crate::types::mask_home(ws_label(spaces, &a.ws));
         text.push_str(&format!(
             "{} {} @ {} [{}]\n",
             emoji(&a.status),
-            a.kind,
-            ws_label(spaces, &a.ws),
+            kind,
+            ws,
             a.pane,
         ));
     }

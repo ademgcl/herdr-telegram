@@ -28,7 +28,10 @@ pub struct Job {
 
 impl Job {
     pub fn new(baseline: Vec<String>, chat_id: i64, thread_id: Option<i64>) -> Arc<Self> {
-        let ok = !baseline.is_empty();
+        // anchor_baseline parity: an all-blank screen is never a baseline
+        // (follow_answer's pre-poll read can be a cleared pane) — marking
+        // it ok would finalize the whole next screen as "fresh" dupe noise.
+        let ok = !baseline.is_empty() && !baseline.iter().all(|l| l.trim().is_empty());
         Arc::new(Self {
             cancel: Notify::new(),
             stopped: AtomicBool::new(false),
@@ -46,10 +49,11 @@ impl Job {
     }
 
     /// First successful sight of the pane anchors the delta stream.
-    /// Never anchors an empty screen: an outage/blank read would wipe a
-    /// good baseline and repost scrollback as fresh on the next tick.
+    /// Never anchors an empty or all-blank screen: an outage/blank read
+    /// would wipe a good baseline and repost scrollback as fresh on the
+    /// next tick.
     pub async fn anchor_baseline(&self, screen: Vec<String>) {
-        if screen.is_empty() {
+        if screen.is_empty() || screen.iter().all(|l| l.trim().is_empty()) {
             return;
         }
         *self.baseline.lock().await = screen;
@@ -89,5 +93,41 @@ impl Job {
 
     pub fn mark_stopped(&self) {
         self.stopped.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_anchor_baseline_ignores_all_blank_screen() {
+        // A cleared pane reads as non-empty all-blank lines: anchoring
+        // it would make the whole next screen read as "fresh" (dupe
+        // noise via the scrolled-off fallback in stream::delta).
+        let job = Job::new(Vec::new(), 1, None);
+        assert!(!job.baseline_ok());
+        job.anchor_baseline(vec!["".to_string(), "   ".to_string()])
+            .await;
+        assert!(!job.baseline_ok());
+        assert!((*job.baseline.lock().await).is_empty());
+        // A real screen still anchors.
+        job.anchor_baseline(vec!["".to_string(), "fresh".to_string()])
+            .await;
+        assert!(job.baseline_ok());
+        assert_eq!(
+            *job.baseline.lock().await,
+            vec!["".to_string(), "fresh".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_new_all_blank_baseline_starts_unanchored() {
+        // Constructor parity with anchor_baseline: a cleared-pane read
+        // must not start anchored, or the next screen posts whole as fresh.
+        let job = Job::new(vec!["".to_string(), "   ".to_string()], 1, None);
+        assert!(!job.baseline_ok());
+        let job = Job::new(vec!["out".to_string()], 1, None);
+        assert!(job.baseline_ok());
     }
 }

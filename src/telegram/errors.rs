@@ -65,6 +65,40 @@ pub fn is_reopen_converged(err: &str) -> bool {
     topic_not_modified(err) || low.contains("not open") || low.contains("already open")
 }
 
+/// True when a send error rejects the message effect (unsupported chat,
+/// bad effect id) — strip `message_effect_id` and retry once.
+/// Effect-shaped only: a bare "not allowed" also matches unrelated fatals
+/// (rights/kicked) that must fail fast instead of burning a second send
+/// that fails the same way. Single source for the strip gate.
+pub fn is_effect_rejection(msg: &str) -> bool {
+    let low = msg.to_lowercase();
+    low.contains("effect_invalid")
+        || low.contains("effect invalid")
+        || low.contains("message effect")
+        || low.contains("effect_id")
+        || low.contains("effect not allowed")
+}
+
+/// True when an edit error means the card is definitely gone or
+/// uneditable (deleted topic/thread, removed message, blocked bot) —
+/// callers may post a fresh card without duplicating a live one.
+/// Any other error (timeout, flood-wait exhaustion, network, rights
+/// loss without a gone thread) leaves the card plausibly alive:
+/// callers must keep the slot and retry the edit, never send fresh.
+/// Single source for the fatal match below.
+pub fn edit_gone(msg: &str) -> bool {
+    // Lowercase once: Telegram ships sentence-case variants ("Message
+    // can't be edited", "Bot was blocked") that exact-case matches miss
+    // (retry::is_fatal_msg parity) — a miss retries a corpse edit forever
+    // instead of posting fresh.
+    let low = msg.to_lowercase();
+    topic_gone(msg)
+        || low.contains("message to edit not found")
+        || low.contains("message_to_edit_not_found")
+        || low.contains("message can't be edited")
+        || low.contains(BOT_BLOCKED)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -27,7 +27,9 @@ pub fn pick_first_pane(facts: &HashMap<String, PaneFacts>, ws: &str) -> Option<S
         .iter()
         .filter(|(_, f)| f.ws == ws)
         .map(|(id, _)| id)
-        .min_by_key(|id| pane_num(id))?;
+        // Deterministic tiebreak: equal counters (or two garbage MAXs)
+        // must not resolve via HashMap iteration order.
+        .min_by(|a, b| pane_num(a).cmp(&pane_num(b)).then(a.cmp(b)))?;
     if pane_num(best) == u64::MAX {
         return None;
     }

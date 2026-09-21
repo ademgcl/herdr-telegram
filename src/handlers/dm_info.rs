@@ -59,9 +59,17 @@ async fn send_keys(s: &AppState, chat: i64, pane: &str, keys: &str) {
     };
     // Classify without guessing (tap_input parity): get_agent-ok means
     // an agent owns the pane (agent keys); a confirmed live pane with
-    // no agent is a shell (pane keys). Unreadable refuses visibly.
+    // no agent is a shell (pane keys). Unreadable refuses visibly — a
+    // selective get_agent blip on a live agent must never route one
+    // batch as pane keys (shell_provision should_retry_agent_lookup
+    // parity: only confirmed death reads as shell).
     let was_shell = match get_agent(&s.cfg.socket, pane).await {
         Ok(_) => false,
+        Err(e) if crate::herdr::rpc::should_retry_agent_lookup(&e.to_string()) => {
+            s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        }
         Err(_) => match list_panes(&s.cfg.socket).await {
             Ok(l) if l.contains(&pane.to_string()) => true,
             Ok(_) => {

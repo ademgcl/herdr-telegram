@@ -55,6 +55,24 @@ fn test_pane_num_orders_numerically() {
 }
 
 #[test]
+fn test_pick_first_pane_tiebreak_is_deterministic() {
+    // Equal-counter ties cannot arise for well-formed ids (same ws +
+    // same counter is the same id), but the pick must still be stable
+    // across HashMap orderings — pin repeated picks on one map.
+    let m = facts(
+        r#"{"panes": [
+            {"pane_id": "wJ:p2", "workspace_id": "wJ"},
+            {"pane_id": "wJ:p1", "workspace_id": "wJ"},
+            {"pane_id": "wJ:p12", "workspace_id": "wJ"}]}"#,
+    );
+    let first = pick_first_pane(&m, "wJ");
+    assert_eq!(first, Some("wJ:p1".to_string()));
+    for _ in 0..50 {
+        assert_eq!(pick_first_pane(&m, "wJ"), first);
+    }
+}
+
+#[test]
 fn test_parse_layout_reads_rects() {
     let v: serde_json::Value = serde_json::from_str(
         r#"{"layout": {"panes": [

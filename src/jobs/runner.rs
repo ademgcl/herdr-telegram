@@ -130,7 +130,9 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // (bounded handoff; a transient failure keeps the slot for
             // the new turn to adopt, never duplicates).
             live.retire_for_handoff(&s).await;
-            job.baseline_ok.store(false, Ordering::Relaxed);
+            // Baseline persists: it already covers everything streamed,
+            // so the next delta is exactly the new turn's output
+            // (resetting drops the first burst — fresh and reused).
         }
 
         // Reconnect the event stream lazily — never in a hot loop.

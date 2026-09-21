@@ -10,30 +10,9 @@ use std::time::Duration;
 /// Telegram animated message effect ID for fire/flame (urgent alerts: blocked, limit stall).
 pub const EFFECT_FIRE: &str = "5104841245755180586";
 
-/// True when a send error rejects the message effect (unsupported chat,
-/// bad effect id) — strip `message_effect_id` and retry once.
-/// Effect-shaped only: a bare "not allowed" also matches unrelated fatals
-/// (rights/kicked) that must fail fast below instead of burning a second
-/// send that fails the same way. Single source for the strip gate.
-pub fn is_effect_rejection(msg: &str) -> bool {
-    msg.to_lowercase().contains("effect")
-}
-
-/// True when an edit error means the card is definitely gone or
-/// uneditable (deleted topic/thread, removed message, lost rights) —
-/// callers may post a fresh card without duplicating a live one.
-/// Any other error (timeout, flood-wait exhaustion, network) leaves
-/// the card plausibly alive: callers must keep the slot and retry the
-/// edit, never send fresh. Single source for the fatal match below.
-pub fn edit_gone(msg: &str) -> bool {
-    super::errors::topic_gone(msg)
-        || msg.contains("message to edit not found")
-        || msg.contains("Message to edit not found")
-        || msg.contains("MESSAGE_TO_EDIT_NOT_FOUND")
-        || msg.contains("message can't be edited")
-        || msg.contains(super::errors::NO_RIGHTS)
-        || msg.contains(super::errors::BOT_BLOCKED)
-}
+// Single-source verdicts live in `errors` (300-line file limit):
+// re-exported so every `messages::edit_gone` call site keeps working.
+pub use super::errors::{edit_gone, is_effect_rejection};
 
 pub fn build_send_msg_params(
     chat_id: i64,

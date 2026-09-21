@@ -71,12 +71,18 @@ pub async fn read_shell_output(socket: &str, pane: &str, lines: u32) -> Res<Stri
 /// dead ones).
 pub async fn list_panes(socket: &str) -> Res<Vec<String>> {
     let r = rpc(socket, "pane.list", json!({})).await?;
+    // Fail-closed: a malformed envelope (missing `panes`, e.g. bare ack
+    // Null) must error, never read as "no panes" — empty is exactly the
+    // "all dead" signal for reconcile (mass-retire). A legit empty fleet
+    // still serves `{"panes": []`.
+    let arr = r
+        .get("panes")
+        .and_then(|v| v.as_array())
+        .ok_or("pane.list returned no panes")?;
     let mut out = Vec::new();
-    if let Some(arr) = r["panes"].as_array() {
-        for p in arr {
-            if let Some(id) = p["pane_id"].as_str() {
-                out.push(id.to_string());
-            }
+    for p in arr {
+        if let Some(id) = p["pane_id"].as_str() {
+            out.push(id.to_string());
         }
     }
     Ok(out)

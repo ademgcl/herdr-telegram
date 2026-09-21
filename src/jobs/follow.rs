@@ -18,11 +18,12 @@ use crate::{
 };
 
 /// Pure stand-down rule (tested): a live (non-stopped) job owns the pane,
-/// or the agent never resumed (still `blocked`, or the status read failed
-/// and `status` is empty) — the card path owns those, the follower stands
-/// down. Only a resumed, watcherless turn starts a follower.
+/// or the agent never resumed (still `blocked`, quit-to-`shell`, or the
+/// status read failed and `status` is empty) — the card path owns those,
+/// the follower stands down. Only a resumed, watcherless turn starts a
+/// follower.
 pub fn should_start_follow(has_live_job: bool, status: &str) -> bool {
-    !has_live_job && !status.is_empty() && status != "blocked"
+    !has_live_job && !status.is_empty() && status != "blocked" && status != "shell"
 }
 
 /// Track the resumed turn after a successful blocked answer.
@@ -108,6 +109,9 @@ mod tests {
     fn test_follow_stands_down_when_not_resumed() {
         // Still blocked: the card path owns it.
         assert!(!should_start_follow(false, "blocked"));
+        // Quit-to-shell inside the resume poll: a follower would
+        // baseline shell text and finalize it as the "answer".
+        assert!(!should_start_follow(false, "shell"));
         // Unreadable (RPC failed): the card path owns it too.
         assert!(!should_start_follow(false, ""));
     }

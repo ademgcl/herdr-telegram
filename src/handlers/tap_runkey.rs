@@ -65,12 +65,18 @@ pub async fn consume_runkey(s: &AppState, chat: i64, thread: Option<i64>, text: 
         // Classify without guessing: get_agent-ok means an agent owns
         // the pane (agent keys); a confirmed live pane with no agent is
         // a shell (pane keys). Anything unreadable refuses visibly —
-        // never sends blind. (A selective get_agent blip on an agent
-        // pane routes one batch as pane keys; the keys land in the same
-        // pane, and the waiter is consumed, so the blast radius is one
-        // mistyped batch, never cross-pane injection.)
+        // never sends blind. A selective get_agent blip on an agent
+        // pane must not route one batch as pane keys (dm_info parity:
+        // only confirmed death reads as shell) — re-arm with the
+        // original instant and refuse, never consume on ambiguity.
         let was_shell = match get_agent(&s.cfg.socket, &pane).await {
             Ok(_) => false,
+            Err(e) if crate::herdr::rpc::should_retry_agent_lookup(&e.to_string()) => {
+                s.keywait.lock().await.insert(key, (pane, at));
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                    .await;
+                return true;
+            }
             Err(_) => {
                 // Distinguish gone (shell or dead) from blip: a failed
                 // pane list must not read as anything — refuse visibly.

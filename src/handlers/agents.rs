@@ -10,9 +10,22 @@ use crate::{
 };
 
 /// Read-only panel: spaces + agents + spawn buttons. No focus change.
+/// Fail-closed (callback.rs parity): an unreadable herdr refuses visibly
+/// instead of rendering an empty panel as healthy (a herdr outage would
+/// read as "no agents" and invite spawns into the void).
 pub(crate) async fn show_panel(s: &AppState, chat: i64, thread: Option<i64>) {
-    let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
-    let agents = list_agents(&s.cfg.socket).await.unwrap_or_default();
+    let (spaces, agents) = match (
+        list_workspaces(&s.cfg.socket).await,
+        list_agents(&s.cfg.socket).await,
+    ) {
+        (Ok(sp), Ok(ag)) => (sp, ag),
+        _ => {
+            s.tg
+                .send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+                .await;
+            return;
+        }
+    };
     s.tg.send_msg(
         chat,
         thread,

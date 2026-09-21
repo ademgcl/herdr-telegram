@@ -22,7 +22,14 @@ pub(crate) async fn close_dead_pane(s: &AppState, pane: &str) -> bool {
     // check is dead code; the real remint guards are the post-RPC CAS
     // below and close_topic_for_thread's own compare-delete.
     if let Some(t) = thread {
-        s.topics.close_topic_for_thread(pane, t).await;
+        // Gate the retire on the close verdict: a transient failure
+        // keeps the mapping (callee compare-deletes only on success) —
+        // retiring anyway would orphan the still-open topic with no
+        // tracker, so the close is never retried. `topic_gone` counts
+        // as success above, so corpse-prune still converges.
+        if !s.topics.close_topic_for_thread(pane, t).await {
+            return true;
+        }
     }
     // Remint mid-RPC keeps its mapping (CAS fails): skip the retire — it
     // would kill fresh work and resurrect the corpse intent over it.

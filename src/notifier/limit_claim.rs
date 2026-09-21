@@ -70,11 +70,15 @@ impl LimitClaim<'_> {
     /// survive) and cool down — the next tick retries, nothing
     /// suppresses, nothing storms.
     pub(crate) async fn release(mut self) {
-        self.armed = false;
+        // Disarm AFTER the removal: a task dropped during the lock
+        // await above must land in Drop still armed (best-effort
+        // removal) — disarming first leaks the claim for the full
+        // remind window with nothing delivered.
         let mut map = self.s.limit_alert.lock().await;
         if matches!(map.get(&self.pane), Some((k, t)) if k == &self.kind && *t == self.at) {
             map.remove(&self.pane);
         }
+        self.armed = false;
     }
 }
 

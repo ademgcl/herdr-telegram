@@ -17,6 +17,28 @@ pub fn build_reaction_body(chat_id: i64, message_id: i64, emoji: Option<&str>) -
     })
 }
 
+/// Pure ignore verdict for reaction errors (single source): unsupported
+/// chats / gone messages stay silent, everything else retries or fails.
+/// Case-insensitive (errors.rs parity) — Telegram ships sentence-case
+/// variants ("Reaction invalid") too. Pure for tests.
+pub fn reaction_ignorable(msg: &str) -> bool {
+    // Underscore/space-insensitive like retry_after (Telegram ships
+    // `REACTION_INVALID` and `Reaction invalid` for the same fault).
+    let low = msg.to_lowercase().replace('_', " ");
+    low.contains("reactions not allowed")
+        || low.contains("reactions disabled")
+        || low.contains("reaction invalid")
+        || low.contains("chat admin required")
+        || low.contains("message to react not found")
+        || low.contains("message not found")
+        || low.contains("not modified")
+        || low.contains("message to forward not found")
+        || low.contains("message to delete not found")
+        || low.contains(super::errors::NO_RIGHTS)
+        || low.contains(super::errors::BOT_BLOCKED)
+        || super::errors::topic_gone(msg)
+}
+
 impl TelegramClient {
     /// F7: Set an emoji reaction on a message (e.g. ❗ for blocked/stalled, ✅ for done/resumed).
     /// Pass None to clear reactions. Ignores unsupported chats / reaction errors gracefully.
@@ -39,21 +61,7 @@ impl TelegramClient {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     let msg = e.to_string();
-                    if msg.contains("REACTIONS_NOT_ALLOWED")
-                        || msg.contains("REACTIONS_DISABLED")
-                        || msg.contains("REACTION_INVALID")
-                        || msg.contains("CHAT_ADMIN_REQUIRED")
-                        || msg.contains("MESSAGE_TO_REACT_NOT_FOUND")
-                        || msg.contains("MESSAGE_NOT_FOUND")
-                        || msg.contains("not modified")
-                        || msg.contains("message not found")
-                        || msg.contains("message to forward not found")
-                        || msg.contains("message to delete not found")
-                        || msg.contains("message to react not found")
-                        || msg.contains(super::errors::NO_RIGHTS)
-                        || msg.contains(super::errors::BOT_BLOCKED)
-                        || super::errors::topic_gone(&msg)
-                    {
+                    if reaction_ignorable(&msg) {
                         return Ok(());
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
@@ -91,5 +99,14 @@ mod tests {
 
         let body_none = build_reaction_body(12345, 6789, None);
         assert_eq!(body_none["reaction"], json!([]));
+    }
+
+    #[test]
+    fn test_reaction_ignorable_is_case_insensitive() {
+        assert!(reaction_ignorable("Bad Request: REACTION_INVALID"));
+        assert!(reaction_ignorable("Bad Request: Reaction invalid"));
+        assert!(reaction_ignorable("Bad Request: reaction invalid"));
+        assert!(reaction_ignorable("Forbidden: bot was kicked"));
+        assert!(!reaction_ignorable("Internal Server Error"));
     }
 }

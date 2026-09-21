@@ -131,6 +131,14 @@ pub(crate) async fn post_spontaneous_card(
                 if part_blocked(s, pane, settled, armed_at, false).await {
                     return false;
                 }
+                // Remap-safe (stall.rs parity): a paced reset migrating
+                // the topic mid-flood must stop the stale tail — later
+                // parts would land in the deleted topic (a lost card
+                // stamped done) instead of retrying the full body into
+                // the new one. No stamp: the retry reposts everything.
+                if s.topics.storage.get_thread(pane) != Some(thread) {
+                    return false;
+                }
                 let mid = s.tg.send_msg(forum, Some(thread), part, None).await;
                 if let Some(m) = mid {
                     landed += 1;

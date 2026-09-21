@@ -35,8 +35,15 @@ impl State {
             // LWW: only clear the intent we actually saw — a submit
             // racing the snapshot owns the changed slot.
             let had_pending = self
-                .clear_pending_if_unchanged(pane, pending_at_entry)
+                .clear_pending_if_unchanged(pane, pending_at_entry.clone())
                 .await;
+            if !had_pending
+                && self.pending.lock().await.get(pane) != pending_at_entry.as_ref()
+            {
+                // Racing submit owns the changed slot — its debounce and
+                // done stamp belong to the new turn (missed-buzz guard).
+                return false;
+            }
             // No job: disarm waiters/debounce/episode (stale arms stay dead).
             self.clear_waiters(pane).await;
             self.clear_limit_episode(pane).await;
@@ -100,8 +107,15 @@ impl State {
                 return false;
             }
             // LWW (loud parity): a submit racing the snapshot owns it.
-            self.clear_pending_if_unchanged(pane, pending_at_entry)
-                .await;
+            // A changed slot means a live successor — keep its debounce
+            // (dropping it loses the next settle's card).
+            if !self
+                .clear_pending_if_unchanged(pane, pending_at_entry.clone())
+                .await
+                && self.pending.lock().await.get(pane) != pending_at_entry.as_ref()
+            {
+                return false;
+            }
             self.clear_waiters(pane).await;
             self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
@@ -149,6 +163,8 @@ impl State {
         let Some(job) = cur else {
             // Lost-race guard (loud/quiet parity): a successor inserted
             // after the snapshot owns the fresh debounce — leave it alone.
+            // Checked just before the remove: a job landing in between
+            // still owns it (sequential checks, never nested locks).
             if self.jobs.lock().await.contains_key(pane) {
                 return false;
             }
@@ -276,3 +292,6 @@ pub(crate) use super::test_state::isolated_state;
 #[cfg(test)]
 #[path = "cancel_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "cancel_race_tests.rs"]
+mod race_tests;

@@ -37,12 +37,23 @@ fn test_edit_fatal_errors_fail_fast_not_retried() {
     }
     // Token death needs no gone-card (handled at the session layer);
     // rights loss without a gone thread keeps the slot for retry.
-    for fatal in ["Unauthorized", "Forbidden: CHAT_ADMIN_REQUIRED"] {
+    for fatal in [
+        "Unauthorized",
+        "Forbidden: CHAT_ADMIN_REQUIRED",
+        "Forbidden: not enough rights to send text messages",
+    ] {
         assert!(
             !super::edit_gone(fatal),
             "fatal needs no gone-card: {fatal}"
         );
     }
+    // Blocked-bot means the card is definitely uneditable (any case —
+    // errors.rs parity); rights loss without a gone thread still keeps
+    // the slot for retry.
+    assert!(
+        super::edit_gone("Forbidden: Bot was blocked by the user"),
+        "blocked must retire in any case"
+    );
     // Kicked / chat-gone means the card is definitely uneditable:
     // callers must post fresh (then prune) instead of retrying a corpse
     // edit every tick forever.
@@ -58,11 +69,14 @@ fn test_edit_fatal_errors_fail_fast_not_retried() {
     for t in ["Internal Server Error", "Bad Gateway", "timed out"] {
         assert!(TelegramClient::is_transient_msg(t), "must retry: {t}");
     }
-    // Edit-gone matches both cases + the constant form.
+    // Edit-gone matches every case + the constant form (a missed
+    // capital retried a corpse edit every tick instead of posting fresh).
     for gone in [
         "Bad Request: message to edit not found",
         "Bad Request: Message to edit not found",
         "Bad Request: MESSAGE_TO_EDIT_NOT_FOUND",
+        "Bad Request: message can't be edited",
+        "Bad Request: Message can't be edited",
     ] {
         assert!(super::edit_gone(gone), "gone must retire: {gone}");
     }
