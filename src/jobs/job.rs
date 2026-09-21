@@ -4,6 +4,8 @@ use std::sync::{
 };
 use tokio::sync::{Mutex, Notify};
 
+use crate::types::anchorable_screen;
+
 /// Per-pane prompt channel: submissions are delivered to the agent
 /// immediately (like typing in the pane); the watcher reports output
 /// whenever the agent settles.
@@ -31,7 +33,7 @@ impl Job {
         // anchor_baseline parity: an all-blank screen is never a baseline
         // (follow_answer's pre-poll read can be a cleared pane) — marking
         // it ok would finalize the whole next screen as "fresh" dupe noise.
-        let ok = !baseline.is_empty() && !baseline.iter().all(|l| l.trim().is_empty());
+        let ok = anchorable_screen(&baseline);
         Arc::new(Self {
             cancel: Notify::new(),
             stopped: AtomicBool::new(false),
@@ -53,7 +55,7 @@ impl Job {
     /// would wipe a good baseline and repost scrollback as fresh on the
     /// next tick.
     pub async fn anchor_baseline(&self, screen: Vec<String>) {
-        if screen.is_empty() || screen.iter().all(|l| l.trim().is_empty()) {
+        if !anchorable_screen(&screen) {
             return;
         }
         *self.baseline.lock().await = screen;

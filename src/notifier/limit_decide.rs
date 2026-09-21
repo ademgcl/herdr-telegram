@@ -45,6 +45,16 @@ pub(crate) fn send_cooled(last_fail: Option<Instant>, now: Instant) -> bool {
     last_fail.is_some_and(|t| now.duration_since(t) < Duration::from_secs(SEND_FAIL_COOL_SECS))
 }
 
+/// No-dest skip verdict (pure, tested): with no owner dest and no forum
+/// mapping there is nowhere to send — claiming + cooling would burn the
+/// shared claim and delay the real stall a full tick. Forum-mode
+/// unmapped panes (paced-reset remint in flight) stay silent for retry
+/// (stall.rs parity); DM-mode (no forum) still skips here and lets the
+/// owner-broadcast arm below decide.
+pub(crate) fn no_dest_skip(has_forum: bool, owners_empty: bool) -> bool {
+    owners_empty || has_forum
+}
+
 /// Tail detection with full-screen context: settled panes match banners
 /// in the fresh tail, but WEAK hits may draw error context from anywhere
 /// on screen — tail-only context would read a live stall as clean and
@@ -148,6 +158,20 @@ mod tests {
         assert!(!send_cooled(None, t));
         assert!(send_cooled(Some(t - Duration::from_secs(10)), t));
         assert!(!send_cooled(Some(t - Duration::from_secs(61)), t));
+    }
+
+    #[test]
+    fn test_no_dest_skip_forum_unmapped_stays_silent() {
+        // No owner dest + no forum mapping = nowhere to send: skipping
+        // preserves the claim and the cool-down for the retry tick. A
+        // forum-mode unmapped pane is a paced-reset remint in flight —
+        // claiming would burn the shared claim and cool the real stall
+        // a full tick (DM-mode with owners falls through to the owner
+        // broadcast arm instead).
+        assert!(no_dest_skip(false, true));
+        assert!(no_dest_skip(true, true));
+        assert!(no_dest_skip(true, false));
+        assert!(!no_dest_skip(false, false));
     }
 
     #[test]

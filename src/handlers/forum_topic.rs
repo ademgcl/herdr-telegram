@@ -14,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    forum::bare_cmd,
+    forum::{bare_cmd, waiter_key},
     forum_topic_status::{handle_model_topic, handle_status_topic},
     topic_keys::handle_topic_keys_agent,
 };
@@ -78,9 +78,13 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     if cmd == "/cancel" {
-        s.keywait.lock().await.remove(&(chat, Some(thread_id)));
-        s.runwait.lock().await.remove(&(chat, Some(thread_id)));
-        s.typewait.lock().await.remove(&(chat, Some(thread_id)));
+        // Single source (waiter_key): General arrives as Some(1) on
+        // callbacks vs None on messages — a raw tuple would fork the
+        // arms from the consumes.
+        let key = waiter_key(chat, Some(thread_id));
+        s.keywait.lock().await.remove(&key);
+        s.runwait.lock().await.remove(&key);
+        s.typewait.lock().await.remove(&key);
         // Parity with General/DM: an explicit arg routes via scope
         // (all | pane id — a mismatch warns instead of cancelling the
         // wrong pane); bare cancels this topic's pane, never focus.

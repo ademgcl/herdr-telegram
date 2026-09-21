@@ -41,12 +41,18 @@ impl TopicStorage {
         self.lock().last_msgs.get(pane).cloned().unwrap_or_default()
     }
 
-    /// F6: Drop stale mids after a reset migration (old topic deleted —
-    /// a second reset must not re-copy corpses that now fail silently).
-    pub fn clear_msgs(&self, pane: &str) {
+    /// F6: Take recent mids atomically (get + clear under one lock): the
+    /// reset remap drops them on thread change, so callers must take
+    /// BEFORE `insert_with_title` — and a concurrent second reset must
+    /// not re-copy the same corpses. Single source for reset_topic.
+    pub fn take_recent_msgs(&self, pane: &str) -> Vec<i64> {
         let mut s = self.lock();
-        if s.last_msgs.remove(pane).is_some() {
-            self.save(&s);
+        match s.last_msgs.remove(pane) {
+            Some(mids) => {
+                self.save(&s);
+                mids
+            }
+            None => Vec::new(),
         }
     }
 }

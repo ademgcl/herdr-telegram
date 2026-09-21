@@ -107,3 +107,15 @@ impl State {
         }
     }
 }
+
+/// Global-cancel clear verdict (pure, tested): the snapshotted intent is
+/// cleared only while the slot still holds that exact stamp — text
+/// equality alone would wipe an identical resubmit's fresh intent
+/// (`started_unix` pins it; pending_cas parity). Single source for
+/// `cancel_all_jobs`' retain.
+pub(crate) fn global_cancel_clears(
+    current: Option<&PendingPrompt>,
+    snapshotted: &PendingPrompt,
+) -> bool {
+    current.is_some_and(|c| c == snapshotted)
+}

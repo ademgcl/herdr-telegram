@@ -34,6 +34,50 @@ pub(crate) fn opt_tap_num(i: usize) -> Option<&'static str> {
     }
 }
 
+/// Option-index bounds gate (pure, tested): the card index against the
+/// live probe — shared by the pre-send gate above and the post-nav
+/// revalidation below so the two can never drift (a stale index into a
+/// narrower turned-over dialog stays silent, never drives keys blind).
+fn opt_bounds_hold(i: usize, probe: &[String]) -> bool {
+    opt_tap_num(i).is_some() && i < crate::handlers::dialog::parse_options(probe).len()
+}
+
+/// Dialog-presence gate (pure, tested): named keys need a live dialog
+/// shape (parsed options or a question) — shared by the pre-send gate
+/// and the post-nav revalidation like the bounds gate above.
+fn dialog_present(probe: &[String]) -> bool {
+    !crate::handlers::dialog::parse_options(probe).is_empty()
+        || crate::handlers::dialog::dialog_sig(probe).contains('?')
+}
+
+/// Post-nav revalidation (async, RPC): the nav sleep below is a turnover
+/// window — re-apply the pre-send gates (blocked status + per-action
+/// bounds/presence) on a fresh read before confirming, or Enter lands
+/// on the NEW dialog's highlight (wrong-option injection into
+/// turned-over work). Fail-closed on unreadable reads like the gates.
+async fn confirm_still_valid(socket: &str, pane: &str, action: &str) -> bool {
+    let screen =
+        read_screen_visible(socket, pane, crate::handlers::dialog::DIALOG_READ_LINES).await;
+    if screen.is_empty() {
+        return false;
+    }
+    match get_agent(socket, pane).await {
+        Ok(a) if a.status != "blocked" => return false,
+        Err(_) => return false,
+        _ => {}
+    }
+    let win = crate::handlers::dialog::winner_lines(&screen);
+    let probe: &[String] = if win.is_empty() { &screen } else { &win };
+    if let Some(rest) = action.strip_prefix("opt") {
+        match rest.parse::<usize>() {
+            Ok(i) => opt_bounds_hold(i, probe),
+            Err(_) => false,
+        }
+    } else {
+        dialog_present(probe)
+    }
+}
+
 /// Send the tap's keys and re-read. Returns what to classify — never
 /// touches Telegram itself (the caller owns the card).
 pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall {
@@ -78,17 +122,18 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                 // Cards emit at most 8 options (dialog takes 8): wider
                 // indices are crafted callbacks, never real buttons.
                 Ok(i) => {
+                    // Bounds against the live dialog (opt_bounds_hold —
+                    // same gate as the post-nav revalidation below): a
+                    // stale index into a narrower turned-over dialog
+                    // stays silent, and an option-less live screen
+                    // refuses (never drive keys blind into
+                    // turned-over work).
+                    if !opt_bounds_hold(i, probe) {
+                        return TapCall::Unknown;
+                    }
                     let Some(num) = opt_tap_num(i) else {
                         return TapCall::Unknown;
                     };
-                    // Bounds against the live dialog: a stale index into
-                    // a narrower turned-over dialog stays silent, and an
-                    // option-less live screen refuses (never drive keys
-                    // blind into turned-over work).
-                    let live = crate::handlers::dialog::parse_options(probe);
-                    if i >= live.len() {
-                        return TapCall::Unknown;
-                    }
                     let (full, confirm) = if crate::handlers::dialog::has_numbered_options(probe) {
                         (vec![num], vec!["enter"])
                     } else {
@@ -109,9 +154,7 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
                     // (parsed options or a question) on screen, Enter / Esc
                     // / Right would land in live work. (B:type arming never
                     // reaches here — it sends no keys.)
-                    let live = crate::handlers::dialog::parse_options(probe);
-                    let sig = crate::handlers::dialog::dialog_sig(probe);
-                    if live.is_empty() && !sig.contains('?') {
+                    if !dialog_present(probe) {
                         return TapCall::Unknown;
                     }
                     (Vec::new(), keys.to_vec(), action.to_string())
@@ -129,6 +172,13 @@ pub(crate) async fn tap_keys(socket: &str, pane: &str, action: &str) -> TapCall 
             return TapCall::KeysFailed;
         }
         tokio::time::sleep(Duration::from_millis(1200)).await;
+        // Turnover window: a new dialog landing in the sleep owns the
+        // highlight now — confirming would inject the wrong option
+        // into turned-over work. Re-gate on a fresh read (fail-closed);
+        // a stale tap strips + heals downstream like the pre-send gate.
+        if !confirm_still_valid(socket, pane, action).await {
+            return TapCall::Unknown;
+        }
     }
     if let Err(e) = send_agent_keys(socket, pane, &confirm).await {
         if crate::herdr::rpc::is_not_found(&e.to_string()) {
@@ -188,5 +238,37 @@ mod tests {
         );
         assert_eq!(opt_tap_num(8), None);
         assert_eq!(opt_tap_num(99), None);
+    }
+
+    fn probe(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_opt_bounds_hold_live_and_turned_over() {
+        // Pre-send and post-nav gates share this: a live 3-option dialog
+        // admits 0–2; a turned-over narrower dialog (or option-less
+        // screen) refuses — Enter must never confirm a fresh highlight.
+        let live = probe(&["Allow once   Allow always   Reject"]);
+        assert!(opt_bounds_hold(0, &live));
+        assert!(opt_bounds_hold(2, &live));
+        assert!(!opt_bounds_hold(3, &live));
+        // Crafted wide index refused even against a live dialog.
+        assert!(!opt_bounds_hold(9, &live));
+        let narrow = probe(&["Allow once   Deny"]);
+        assert!(opt_bounds_hold(0, &narrow));
+        assert!(!opt_bounds_hold(2, &narrow));
+        assert!(!opt_bounds_hold(0, &probe(&["steady working prose"])));
+    }
+
+    #[test]
+    fn test_dialog_present_options_or_question() {
+        // Named keys need a dialog shape: options or a question.
+        assert!(dialog_present(&probe(&[
+            "Allow once   Allow always   Reject"
+        ])));
+        // Bare working prose (no options, no question) refuses.
+        assert!(!dialog_present(&probe(&["steady working prose"])));
+        assert!(!dialog_present(&probe(&[])));
     }
 }

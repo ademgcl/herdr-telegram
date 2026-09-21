@@ -3,10 +3,9 @@
 //! with tap answers, contention silent).
 use crate::{
     handlers::dialog::{dialog_sig, send_blocked_card},
-    jobs::{books::settle_books, job::Job, report::fold_live},
+    jobs::{books::settle_books, job::Job},
     notifier::observe_status,
     state::AppState,
-    types::LIVE_RPC_TIMEOUT_SECS,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -20,8 +19,6 @@ pub async fn try_finalize_blocked(
     pane: &str,
     job: &Arc<Job>,
     settled: &str,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
     snapshot: Vec<String>,
     entry_epoch: u64,
     entry_pending: usize,
@@ -46,63 +43,12 @@ pub async fn try_finalize_blocked(
             return Some(false);
         }
         observe_status(s, pane, settled, true, "job").await;
-        // Any live slot duplicates the already-buzzed question card:
-        // fold its streamed output, or the working card freezes next
-        // to the question.
-        fold_live(s, live_dest, live_mid, crate::ui::BLOCKED_SEE_CARD).await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }
     let (chat, th) = *job.dest.lock().await;
-    // Superseded mid-RPCs: post/consume nothing (the handoff retires
-    // the live slot; consuming it strands a stale ❗ with no owner).
-    if job.epoch.load(Ordering::Relaxed) != entry_epoch {
-        settle_books(s, pane, job, entry_epoch, entry_pending).await;
-        acc.clear();
-        return Some(false);
-    }
-    // Retire the live working card in place (address from the slot,
-    // never job.dest): the question card posts fresh below.
-    // Fail-closed: mid without dest drops without editing rather
-    // than guessing the thread after a remap.
-    // Bounded: a slow Telegram must not stall settle past the tick —
-    // sibling live paths (live.rs, repoint.rs, handoff retire) wrap the
-    // same edit in LIVE_RPC_TIMEOUT_SECS; a timeout keeps the slot for
-    // the next tick instead of duplicating, never blocks the ❗ post.
-    // Take the slot only on landed/gone (live.rs retire_for_handoff
-    // parity): a transient failure keeps it for the next turn to adopt.
-    if let Some(mid) = live_mid {
-        if let Some((lchat, _)) = live_dest {
-            let retire = tokio::time::timeout(
-                std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
-                s.tg.try_edit_msg(
-                    *lchat,
-                    *mid,
-                    "⛔ blocked — needs input (see next message)",
-                    None,
-                ),
-            )
-            .await;
-            let done = match retire {
-                Ok(Ok(())) => true,
-                Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
-                Err(_) => {
-                    eprintln!("[prompt] finalize {pane}: live retire edit timed out");
-                    false
-                }
-            };
-            if done {
-                live_mid.take();
-                live_dest.take();
-            }
-        } else {
-            live_mid.take();
-        }
-    } else {
-        live_dest.take();
-    }
-    // Re-check after the retire edit: a submit during it owns the
-    // pane — the ❗ card below would buzz stale beside its prompt.
+    // Superseded mid-RPCs: post/consume nothing (a newer prompt owns
+    // the pane now — posting here would strand a stale ❗ with no owner).
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
@@ -133,9 +79,6 @@ pub async fn try_finalize_blocked(
             return Some(false);
         }
         observe_status(s, pane, settled, true, "job").await;
-        // Same as the pre-claim sig-match arm above: a live working card
-        // would else freeze next to the already-buzzed question card.
-        fold_live(s, live_dest, live_mid, crate::ui::BLOCKED_SEE_CARD).await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }
@@ -161,8 +104,8 @@ pub async fn try_finalize_blocked(
     };
     // Re-gate after the post await: a submit during it owns the pane —
     // the observe below would stamp the old settled kind over the new
-    // turn's live status (finalize.rs parity). The handoff retires the
-    // live slot; books still cover our entry share.
+    // turn's live status (finalize.rs parity). Books still cover our
+    // entry share.
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
@@ -171,11 +114,6 @@ pub async fn try_finalize_blocked(
     // Silent icon sync (later observations dedupe via blocked_sig).
     observe_status(s, pane, settled, true, "job").await;
     if posted {
-        // The pre-post retire above keeps the slot on transient failure —
-        // but the watcher retires below, so no next turn adopts it: fold
-        // once more now that the question landed (take-on-landed/gone;
-        // a transient still keeps it, documented like every live path).
-        fold_live(s, live_dest, live_mid, crate::ui::BLOCKED_SEE_CARD).await;
         // A submit landing during the card post owns the pane now:
         // stamp nothing, or the new prompt's fresh output anchors
         // away into the old prompt's baseline.
@@ -184,8 +122,13 @@ pub async fn try_finalize_blocked(
                 .lock()
                 .await
                 .insert(pane.to_string(), std::time::Instant::now());
-            // Anchor the baseline so later settles don't repost the dialog.
-            s.seen.lock().await.insert(pane.to_string(), snapshot);
+            // Anchor the baseline so later settles don't repost the
+            // dialog — never an all-blank read (anchorable_screen
+            // parity): it would wipe a good baseline and repost
+            // scrollback as fresh.
+            if crate::types::anchorable_screen(&snapshot) {
+                s.seen.lock().await.insert(pane.to_string(), snapshot);
+            }
         }
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
@@ -204,77 +147,32 @@ pub async fn try_finalize_blocked(
 
 /// Empty non-blocked settle arm (split from `finalize`, 300-line file
 /// limit): post nothing, but anchor the screen so the span never
-/// resurfaces as a stale "fresh" delta. A live card is retired, not
-/// orphaned frozen on "working…". `Some(retry)` when handled.
+/// resurfaces as a stale "fresh" delta. `Some(retry)` when handled.
 #[allow(clippy::too_many_arguments)]
 pub async fn try_finalize_empty(
     s: &AppState,
     pane: &str,
     job: &Arc<Job>,
     settled: &str,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
     snapshot: Vec<String>,
     entry_epoch: u64,
     entry_pending: usize,
     acc: &mut Vec<String>,
 ) -> Option<bool> {
     // Gate before observing: a submit racing the RPCs above owns
-    // the pane — observe nothing, consume nothing (its handoff
-    // retires the live slot; consuming here would land a stale edit
-    // the cancel arm then double-posts).
+    // the pane — observe nothing, consume nothing (its watcher serves
+    // the new prompt; consuming here would anchor its fresh output
+    // away into our stale snapshot).
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         acc.clear();
         return Some(false);
     }
     observe_status(s, pane, settled, true, "job").await;
-    // Address from the slot (remap-safe); mid without dest drops
-    // without editing (fail-closed, never wrong thread).
-    // Bounded like the blocked-path retire: a slow Telegram must not
-    // stall settle past the tick — take the slot only on landed/gone
-    // (finalize_blocked parity): a timeout keeps the slot for the
-    // next tick instead of orphaning a frozen card.
-    // No next tick exists here (settle_books below retires the
-    // watcher): a transient failure returns retry with backoff
-    // (delivery-failure parity below) instead of retiring into an
-    // orphaned frozen card.
-    let mut transient = false;
-    if let Some(mid) = *live_mid {
-        if let Some((lchat, _)) = *live_dest {
-            let retire = tokio::time::timeout(
-                std::time::Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
-                s.tg.try_edit_msg(lchat, mid, "✅ settled — no fresh output", None),
-            )
-            .await;
-            let done = match retire {
-                Ok(Ok(())) => true,
-                Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
-                Err(_) => false,
-            };
-            if done {
-                live_mid.take();
-                live_dest.take();
-                let _ = s.tg.set_reaction(lchat, mid, Some("✅")).await;
-            } else {
-                transient = true;
-            }
-        } else {
-            live_mid.take();
-        }
-    } else {
-        live_dest.take();
-    }
-    if transient {
-        // Superseded during the RPCs above: stamp nothing (blocked-path rule).
-        if job.epoch.load(Ordering::Relaxed) == entry_epoch {
-            s.seen.lock().await.insert(pane.to_string(), snapshot);
-        }
-        println!("[prompt] finalize {pane}: live retire transient, retrying");
-        return Some(true);
-    }
     // Superseded during the RPCs above: stamp nothing (blocked-path rule).
-    if job.epoch.load(Ordering::Relaxed) == entry_epoch {
+    if job.epoch.load(Ordering::Relaxed) == entry_epoch
+        && crate::types::anchorable_screen(&snapshot)
+    {
         s.seen.lock().await.insert(pane.to_string(), snapshot);
     }
     settle_books(s, pane, job, entry_epoch, entry_pending).await;

@@ -241,9 +241,10 @@ impl State {
             let mut map = self.pending.lock().await;
             let mut snap = live_pending.clone();
             snap.retain(|p, pp| {
-                map.get(p)
-                    .map(|c| c.chat == pp.chat && c.thread == pp.thread && c.prompt == pp.prompt)
-                    .unwrap_or(false)
+                // Stamp-pinned (global_cancel_clears parity): full
+                // equality — text equality alone would wipe an identical
+                // resubmit's fresh intent (started_unix pins it).
+                super::retire::global_cancel_clears(map.get(p), pp)
             });
             for p in snap.keys() {
                 map.remove(p);

@@ -35,9 +35,12 @@ pub async fn get_agent(socket: &str, pane: &str) -> Res<AgentDetail> {
     // (focus moves, spawn verifies). Malformed rows must Err, never
     // invent "?" rows that mint success with ghost kinds.
     let a = v.get("agent").filter(|a| a.is_object()).ok_or("agent.get returned no agent")?;
-    if a.get("pane_id").and_then(|p| p.as_str()).is_none() {
-        return Err("agent.get returned no pane_id".into());
-    }
+    // Validated once (list_agents parity above): bind the id here so the
+    // row below can never fall back to guessing the requested pane.
+    let pid = a
+        .get("pane_id")
+        .and_then(|p| p.as_str())
+        .ok_or("agent.get returned no pane_id")?;
     let cwd: String = a["foreground_cwd"]
         .as_str()
         .or(a["cwd"].as_str())
@@ -46,7 +49,7 @@ pub async fn get_agent(socket: &str, pane: &str) -> Res<AgentDetail> {
     let branch = derive_branch(a, &cwd).await;
     Ok(AgentDetail {
         kind: a["agent"].as_str().unwrap_or("?").into(),
-        pane: a["pane_id"].as_str().unwrap_or(pane).into(),
+        pane: pid.into(),
         title: a["terminal_title_stripped"].as_str().unwrap_or("").into(),
         status: a["agent_status"].as_str().unwrap_or("unknown").into(),
         ws: a["workspace_id"].as_str().unwrap_or("?").into(),

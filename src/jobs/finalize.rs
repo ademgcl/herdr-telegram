@@ -1,4 +1,4 @@
-//! Prompt result finalization: turn the live message into the final
+//! Prompt result finalization: post the settled reply as the final
 //! card. Split from `runner` (300-line file limit). `watch_job` calls
 //! `finalize` on settle; `enqueue_prompt` reports submit errors.
 //! Stamps (baseline, done-mark, books) are epoch-gated: a submit landing
@@ -10,7 +10,6 @@ use crate::{
         books::settle_books,
         finalize_blocked::try_finalize_blocked,
         job::Job,
-        report::{RUN_ENDED, fold_live, retire_live},
     },
     notifier::observe_status,
     state::AppState,
@@ -20,7 +19,7 @@ use crate::{
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-/// Turn the live message into the final result card: last-segment reply
+/// Post the settled reply as the final result card: last-segment reply
 /// arbitrated against one settled read (see select_final_body — herdr
 /// exposes only raw TUI text, so answers ride the filtered stream).
 /// True when nothing was delivered (outage or all parts failed) so the
@@ -31,8 +30,6 @@ pub async fn finalize(
     pane: &str,
     job: &Arc<Job>,
     settled: &str,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
     entry: (u64, usize, String),
 ) -> bool {
@@ -82,16 +79,15 @@ pub async fn finalize(
         if matches!(settled, "dead" | "closed" | "exited") {
             println!("[prompt] finalize {pane}: pane gone with no output, retiring");
             // A submit racing the settle read retargets everything: the
-            // epoch handoff below owns the live slot then, so fold only
+            // epoch handoff below owns the books then, so retire only
             // for the prompt that is still current.
             if job.epoch.load(Ordering::Relaxed) != entry_epoch {
                 settle_books(s, pane, job, entry_epoch, entry_pending).await;
                 acc.clear();
                 return false;
             }
-            // Fold the live slot (retiring with it set orphans a frozen
-            // card); address from the slot itself, never job.dest.
-            fold_live(s, live_dest, live_mid, RUN_ENDED).await;
+            // Gone with no output: nothing was ever posted (no live card
+            // exists to fold — see live.rs), just retire the books.
             // Empty never anchors (anchor parity with
             // Job::anchor_baseline): a blank read would wipe a good
             // baseline and repost scrollback as fresh on reuse.
@@ -121,8 +117,6 @@ pub async fn finalize(
         pane,
         job,
         settled,
-        live_mid,
-        live_dest,
         snapshot.clone(),
         entry_epoch,
         entry_pending,
@@ -133,8 +127,8 @@ pub async fn finalize(
         return r;
     }
     // Empty non-blocked settle: post nothing, but anchor the screen so
-    // the span never resurfaces as a stale "fresh" delta. A live card
-    // is retired, not orphaned frozen on "working…".
+    // the span never resurfaces as a stale "fresh" delta (no live card
+    // exists to retire — see live.rs).
     // Split to `finalize_blocked::try_finalize_empty` (300-line file limit).
     if body.is_empty()
         && let Some(r) = super::finalize_blocked::try_finalize_empty(
@@ -142,8 +136,6 @@ pub async fn finalize(
             pane,
             job,
             settled,
-            live_mid,
-            live_dest,
             snapshot.clone(),
             entry_epoch,
             entry_pending,
@@ -208,11 +200,11 @@ pub async fn finalize(
         parts.len(),
         body.len()
     );
-    // Finals buzz; progress stayed silent in place. The working card is
-    // DELETED once a part lands (the reply is the tombstone — no "✅ done"
-    // corpse beside it); a total failure keeps the slot for retry, a
-    // mid-post supersede leaves it for the handoff's retire instead of
-    // stranding a done stamp with no reply.
+    // Finals buzz; progress stayed silent in place (no working card was
+    // ever posted — see live.rs). A total failure keeps the slot for
+    // retry, a mid-post supersede leaves delivered heads for the
+    // best-effort cleanup below instead of stranding a done stamp with
+    // no reply.
     let mut delivered = false;
     let mut landed: Vec<i64> = Vec::new();
     for part in parts.iter() {
@@ -225,8 +217,7 @@ pub async fn finalize(
             println!("[prompt] finalize {pane}: superseded mid-post, stopping");
             // Delete delivered heads best-effort (post-send guard
             // parity above): the new prompt owns the thread — a stale
-            // head beside its turn misattributes the reply, and the
-            // handoff reposts nothing (its own watcher serves it).
+            // head beside its turn misattributes the reply.
             for m in landed {
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_secs(crate::types::LIVE_RPC_TIMEOUT_SECS),
@@ -249,9 +240,6 @@ pub async fn finalize(
         println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
         return true;
     }
-    // Working card retires only now that the finish landed: deleted,
-    // with an in-place "✅ done" fold only when deletion fails.
-    retire_live(s, live_dest, live_mid).await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.
@@ -263,10 +251,11 @@ pub async fn finalize(
             .lock()
             .await
             .insert(pane.to_string(), std::time::Instant::now());
-        // Empty never anchors (anchor_baseline parity): a blank settled
-        // read over a streamed `acc` body would wipe a good baseline and
-        // repost scrollback as fresh on reuse.
-        if !snapshot.is_empty() {
+        // Empty/all-blank never anchors (anchorable_screen parity with
+        // Job::anchor_baseline): a blank settled read over a streamed
+        // `acc` body would wipe a good baseline and repost scrollback
+        // as fresh on reuse.
+        if crate::types::anchorable_screen(&snapshot) {
             s.seen.lock().await.insert(pane.to_string(), snapshot);
         }
     }
@@ -274,4 +263,4 @@ pub async fn finalize(
     false
 }
 
-pub use super::report::{edit_live, report};
+pub use super::report::report;

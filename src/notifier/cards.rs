@@ -155,9 +155,11 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
     // "?" (unreadable agent) is already refused inside ensure_inner.
     let spaces_ok = kind == "?" || spaces.iter().any(|w| w.id == ws_id);
     // Single stray chars (picker echoes, vim residue) never page; real
-    // shorts ("ok", "done") do. Empty stays silent but advances the
-    // baseline so the stray doesn't haunt future settles (split:
-    // `settle_stray` — 300-line file limit).
+    // shorts ("ok", "done") do. Strays advance the baseline so the same
+    // stray doesn't re-RPC every settle — but never an outage/blank read
+    // (settle_stray guards via anchorable_screen): that would wipe a good
+    // baseline and repost scrollback as fresh (split: `settle_stray` —
+    // 300-line file limit).
     if body.chars().count() < 2 {
         super::cards_retry::settle_stray(&s, &pane, &settled, armed_at, screen).await;
         return;

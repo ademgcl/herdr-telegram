@@ -1,14 +1,13 @@
 //! Mid-job topic remap: paced reset migrates the topic + deletes the
 //! old thread. Split from `settle` (300-line file limit).
-use crate::{jobs::job::Job, state::AppState, types::LIVE_RPC_TIMEOUT_SECS};
+use crate::{jobs::job::Job, state::AppState};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::time::Duration;
 
 /// Repoint dest at the live thread, or delivery retries into the corpse
-/// forever. Folds the old-thread live card (or it freezes on "working…")
-/// and drops its address; write-back keeps runner ticks,
-/// settle_books and durable intent on the same address.
+/// forever. No card moves (no live card exists — see live.rs); the
+/// reply below simply lands in the new topic. Write-back keeps runner
+/// ticks, settle_books and durable intent on the same address.
 /// Forum-topic jobs only (DM dests must never gain a thread); epoch +
 /// pending guarded like the reconcile restores so a submit racing the
 /// migration wins over the corpse's text.
@@ -16,8 +15,6 @@ pub async fn repoint_dest_if_remapped(
     s: &AppState,
     pane: &str,
     job: &Arc<Job>,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
     epoch_before: u64,
 ) {
     let Some(forum) = s.cfg.forum else {
@@ -63,35 +60,4 @@ pub async fn repoint_dest_if_remapped(
         return;
     }
     *dest = (chat, Some(cur));
-    drop(dest);
-    // Retire the old-thread card where it lives (live_dest), never the
-    // new dest — or the old thread freezes on "working…" while the reply
-    // lands in the new one. Fail-closed: mid without dest drops. Take
-    // the slot only on landed/gone — a transient failure (timeout,
-    // flood-wait) keeps it for the new turn to adopt instead of
-    // freezing the old card (same rule as the handoff retire).
-    // Bounded like the handoff retire — a slow Telegram must not stall
-    // settle past the tick (a miss heals next tick via the slot rules).
-    let retire = match (live_mid.as_ref(), live_dest.as_ref()) {
-        (Some(mid), Some((lchat, _))) => {
-            let mid = *mid;
-            let lchat = *lchat;
-            let r = tokio::time::timeout(
-                Duration::from_secs(LIVE_RPC_TIMEOUT_SECS),
-                s.tg.try_edit_msg(lchat, mid, "🔄 continued in new topic", None),
-            )
-            .await;
-            match r {
-                Ok(Ok(())) => true,
-                Ok(Err(e)) => crate::telegram::messages::edit_gone(&e.to_string()),
-                Err(_) => false,
-            }
-        }
-        // Fail-closed split (mid without dest): drop without guessing.
-        _ => true,
-    };
-    if retire {
-        live_mid.take();
-        live_dest.take();
-    }
 }

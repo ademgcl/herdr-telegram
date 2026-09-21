@@ -1,5 +1,5 @@
 use super::{emoji, views::ws_label, worst_status};
-use crate::types::{AgentRow, WorkspaceInfo};
+use crate::types::{AgentRow, WorkspaceInfo, mask_home};
 use serde_json::{Value, json};
 
 pub const SPAWN_KINDS: &[&str] = &[
@@ -90,7 +90,10 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
                     // FINAL text (prefix + label), never components — a
                     // capped label plus emoji still exceeds Telegram's 64B
                     // BUTTON_TEXT_INVALID.
-                    let label = btn_label(&format!("{emo} {}", s.label));
+                    // Masked (menu-text parity): space labels carry
+                    // terminal paths ($HOME/username) — buttons ride to
+                    // the whole chat like the text does.
+                    let label = btn_label(&format!("{emo} {}", mask_home(&s.label)));
                     btn(label, &format!("w:{}", s.id))
                 })
                 .collect(),
@@ -103,11 +106,13 @@ pub fn main_menu_kb(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> Value {
         // Space names are user-controlled: cap the FINAL text like the
         // menu arms above, or long names fail sendMessage with
         // BUTTON_TEXT_INVALID (kind is herdr-fed, capped the same way).
+        // Masked (menu-text parity): kinds + space labels ride buttons
+        // to the whole chat — never raw $HOME.
         let label = btn_label(&format!(
             "{} {} @ {}",
             emoji(&a.status),
-            a.kind,
-            ws_label(spaces, &a.ws)
+            mask_home(&a.kind),
+            mask_home(ws_label(spaces, &a.ws))
         ));
         kb.push(vec![btn(label, &format!("a:{}", a.pane))]);
     }
@@ -121,10 +126,17 @@ pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
         // Titles are user-controlled (terminal/task): cap the FINAL text
         // (emoji + kind + title), never components — capped parts plus a
         // raw kind still exceed Telegram's 64B BUTTON_TEXT_INVALID.
+        // Masked (ws-text parity): titles carry terminal paths — never
+        // raw $HOME on buttons.
         let label = if a.title.is_empty() {
-            btn_label(&format!("{} {}", emoji(&a.status), a.kind))
+            btn_label(&format!("{} {}", emoji(&a.status), mask_home(&a.kind)))
         } else {
-            btn_label(&format!("{} {} · {}", emoji(&a.status), a.kind, a.title))
+            btn_label(&format!(
+                "{} {} · {}",
+                emoji(&a.status),
+                mask_home(&a.kind),
+                mask_home(&a.title)
+            ))
         };
         kb.push(vec![btn(label, &format!("a:{}", a.pane))]);
     }
@@ -139,7 +151,9 @@ pub fn workspace_kb(ws: &str, agents: &[AgentRow]) -> Value {
 pub fn agent_card_kb(pane: &str, ws_id: &str, ws_label: &str) -> Value {
     // Space labels are user-controlled (/space): cap the FINAL text —
     // the "← " prefix on an already-capped label still exceeds the cap.
-    let back = btn_label(&format!("← {ws_label}"));
+    // Masked (agent-card-text parity): space labels carry terminal
+    // paths — the back button rides to the chat like the card does.
+    let back = btn_label(&format!("← {}", mask_home(ws_label)));
     json!([
         [
             btn("📄 output", &format!("o:{pane}")),
@@ -207,6 +221,41 @@ mod tests {
                 for b in row.as_array().unwrap() {
                     let t = b["text"].as_str().unwrap();
                     assert!(t.len() <= 64, "button overflow ({}B): {t:?}", t.len());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_buttons_mask_home_paths() {
+        // Button-text parity with menu/ws/agent-card texts: space
+        // labels, kinds and titles carry terminal paths ($HOME/username)
+        // shown to the whole chat — never raw $HOME on buttons.
+        use crate::types::home_dir;
+        let home = home_dir();
+        assert!(!home.is_empty(), "test needs a HOME to mask");
+        let spaces = vec![WorkspaceInfo {
+            id: "w8".into(),
+            label: format!("{home}/shop"),
+            number: 8,
+        }];
+        let agents = vec![AgentRow {
+            kind: format!("{home}/opencode"),
+            pane: "w8:p1".into(),
+            title: format!("{home}/proj title"),
+            status: "working".into(),
+            ws: "w8".into(),
+        }];
+        let kbs = vec![
+            main_menu_kb(&spaces, &agents),
+            workspace_kb("w8", &agents),
+            agent_card_kb("w8:p1", "w8", &format!("{home}/shop")),
+        ];
+        for kb in &kbs {
+            for row in kb.as_array().unwrap() {
+                for b in row.as_array().unwrap() {
+                    let t = b["text"].as_str().unwrap();
+                    assert!(!t.contains(&*home), "button leaks $HOME: {t:?}");
                 }
             }
         }

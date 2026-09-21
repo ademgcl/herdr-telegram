@@ -221,11 +221,13 @@ pub(crate) fn write_store(path: &Path, s: &Store, backup: bool) {
                 if !backup {
                     return;
                 }
-                // Atomic backup, never a torn copy.
+                // Atomic backup, never a torn copy. Reuses the main
+                // serialization above (single source): a second
+                // to_string_pretty could fail where the first succeeded,
+                // and unwrap_or_default would clobber last-good with "".
                 let prev = prev_path(path);
                 let ptmp = crate::types::unique_tmp(&prev);
-                let pretty = serde_json::to_string_pretty(s).unwrap_or_default();
-                if crate::types::write_private(&ptmp, pretty.as_bytes()).is_ok() {
+                if crate::types::write_private(&ptmp, json.as_bytes()).is_ok() {
                     if let Ok(f) = fs::File::open(&ptmp) {
                         let _ = f.sync_all();
                     }

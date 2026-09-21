@@ -116,17 +116,6 @@ const CHROME_PREFIXES: &[&str] = &[
     "[alert]",
 ];
 
-/// Full-width box-rule turn separator (segment::is_rule parity, kept
-/// local to avoid a filter↔segment module cycle): only a full rule is
-/// chrome — a lone ─/━/═ inside prose is content.
-fn is_rule_line(line: &str) -> bool {
-    let t = line.trim();
-    t.chars().count() >= 8
-        && t.chars()
-            .all(|c| c.is_whitespace() || matches!(c, '─' | '━' | '═' | '╍'))
-        && t.contains(['─', '━', '═', '╍'])
-}
-
 /// Spinner braille frames (⠋⠙⠹… / ⡿⣟⣯…) — pure progress, never content.
 fn is_spinner(line: &str) -> bool {
     let t = line.trim();
@@ -166,9 +155,10 @@ pub fn is_chrome(line: &str) -> bool {
     if super::notices::is_provider_failure_line(line) {
         return false;
     }
-    // Full-width box rules are chrome only as a full rule (segment parity:
-    // a lone ─ in prose like `foo ─ bar` is content, never chrome).
-    if is_rule_line(line) {
+    // Full-width box rules are chrome only as a full rule (single
+    // source: segment::is_rule — a lone ─ in prose like `foo ─ bar`
+    // is content, never chrome).
+    if super::segment::is_rule(line) {
         return true;
     }
     if is_spinner(line) {

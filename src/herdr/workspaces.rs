@@ -44,17 +44,35 @@ pub async fn rename_workspace(socket: &str, ws_id: &str, label: &str) -> Res<()>
     Ok(())
 }
 
+/// Pick the `tg` space id from a listing, if present. Pure so the
+/// race-adopt rule in `ensure_tg_space` is unit-tested (single source,
+/// never a duplicated literal).
+fn tg_space_id(spaces: &[WorkspaceInfo]) -> Option<String> {
+    spaces.iter().find(|w| w.label == "tg").map(|w| w.id.clone())
+}
+
 /// Find the `tg` space, creating it when missing. Returns
 /// `(id, created)`: a just-created space ships a reusable root pane,
 /// so callers must prefer it over `tab.create` (else p1 orphans).
 pub async fn ensure_tg_space(socket: &str) -> Res<(String, bool)> {
-    for w in list_workspaces(socket).await? {
-        if w.label == "tg" {
-            return Ok((w.id, false));
+    if let Some(id) = tg_space_id(&list_workspaces(socket).await?) {
+        return Ok((id, false));
+    }
+    match create_workspace(socket, "tg").await {
+        Ok(id) => Ok((id, true)),
+        Err(e) => {
+            // List-then-create race: a concurrent caller minted `tg`
+            // between our list and create (ours then fails or would
+            // duplicate) — adopt the winner instead of erroring. Only a
+            // still-missing `tg` propagates the original failure.
+            if let Ok(spaces) = list_workspaces(socket).await
+                && let Some(id) = tg_space_id(&spaces)
+            {
+                return Ok((id, false));
+            }
+            Err(e)
         }
     }
-    let id = create_workspace(socket, "tg").await?;
-    Ok((id, true))
 }
 
 /// Fresh tab in a known workspace id, returning its root pane.
@@ -151,5 +169,27 @@ mod tests {
             "herdr closed connection (empty reply)"
         ));
         assert!(!verify_failure_reaps("no agent output yet"));
+    }
+
+    #[test]
+    fn test_tg_space_id_picks_tg_only() {
+        // The list-then-create race-adopt in `ensure_tg_space` keys on
+        // this: a concurrent mint must be adopted, never duplicated.
+        fn ws(id: &str, label: &str) -> WorkspaceInfo {
+            WorkspaceInfo {
+                id: id.into(),
+                label: label.into(),
+                number: 0,
+            }
+        }
+        assert_eq!(
+            tg_space_id(&[ws("w1", "dev"), ws("w2", "tg")]),
+            Some("w2".to_string())
+        );
+        // No `tg` anywhere: caller mints (create path), never adopts.
+        assert_eq!(tg_space_id(&[ws("w1", "dev")]), None);
+        assert_eq!(tg_space_id(&[]), None);
+        // Label match is exact: near-misses never adopt the wrong space.
+        assert_eq!(tg_space_id(&[ws("w3", "tg2")]), None);
     }
 }

@@ -213,7 +213,6 @@ pub(crate) fn kind_priority(kind: &str, strong: bool) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_normalize_fixes_exceded_typo() {
         assert_eq!(normalize_line("free usage exceded"), "free usage exceeded");
@@ -238,3 +237,7 @@ mod tests {
         assert_eq!(hit.1, "rate-limit");
     }
 }
+
+#[cfg(test)]
+#[path = "patterns_tests.rs"]
+mod parity_tests;

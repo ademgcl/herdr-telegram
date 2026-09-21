@@ -88,8 +88,6 @@ pub async fn settle_step(
     pane: &str,
     job: &Arc<Job>,
     status: &str,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
     acc: &mut Vec<String>,
     retry_wait: &mut u64,
     settled_since: &mut SettledArm,
@@ -130,11 +128,10 @@ pub async fn settle_step(
     tokio::select! {
         _ = job.cancel.notified() => {
             // Loud /cancel only (quiet retires never notify): the card
-            // must read cancelled, not fall through to the loop-top
-            // quiet fold (RUN_ENDED). Single source with the runner's
-            // cancel arm and the backoff arm below.
+            // must read cancelled, not silently drop. Single source with
+            // the runner's cancel arm and the backoff arm below.
             *settled_since = None;
-            super::runner_cancel::cancel_watch_parts(s, pane, job, live_mid, live_dest).await;
+            super::runner_cancel::cancel_watch_parts(s, pane, job).await;
             return SettleStep::Break;
         }
         _ = sleep_or_superseded(job, epoch_at_entry, Duration::from_millis(750)) => {}
@@ -175,7 +172,7 @@ pub async fn settle_step(
         return SettleStep::Continue;
     }
     let epoch_before = entry_epoch;
-    repoint_dest_if_remapped(s, pane, job, live_mid, live_dest, epoch_before).await;
+    repoint_dest_if_remapped(s, pane, job, epoch_before).await;
     // A submit landing during the remap fold owns the pane: finalize
     // captures its entry epoch AFTER the remap RPCs and would mistake
     // the old status/acc for the new prompt's — stop here instead.
@@ -188,17 +185,10 @@ pub async fn settle_step(
         pane,
         job,
         status,
-        live_mid,
-        live_dest,
         acc,
         (entry_epoch, entry_pending, entry_prompt),
     )
     .await;
-    // finalize consumes the live slot on success — drop its
-    // address too, or a later reset would edit the final card.
-    if live_mid.is_none() {
-        *live_dest = None;
-    }
     if job.epoch.load(Ordering::Relaxed) != epoch_before {
         return SettleStep::Continue;
     }
@@ -215,7 +205,7 @@ pub async fn settle_step(
                 // Like the sibling cancel branch: a genuine cancel
                 // retires the durable intent (a supersede never
                 // notifies — it bumps the epoch instead).
-                super::runner_cancel::cancel_watch_parts(s, pane, job, live_mid, live_dest).await;
+                super::runner_cancel::cancel_watch_parts(s, pane, job).await;
                 return SettleStep::Break;
             }
             _ = sleep_or_superseded(job, epoch_now, Duration::from_secs(*retry_wait)) => {}

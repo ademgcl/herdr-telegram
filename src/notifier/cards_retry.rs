@@ -8,6 +8,7 @@ use crate::{
     herdr::client::{list_panes, read_agent_output, read_agent_visible},
     notifier::spontaneous::{Liveness, liveness},
     state::AppState,
+    types::anchorable_screen,
 };
 use std::{
     collections::HashMap,
@@ -136,7 +137,13 @@ pub(crate) async fn settle_stray(
         return;
     }
     consume_reset_arm(&mut *s.debounce.lock().await, pane, armed_at);
-    s.seen.lock().await.insert(pane.to_string(), screen);
+    // Outage guard (status parity via anchorable_screen): the caller
+    // guarantees a non-empty screen, but a cleared pane reads as
+    // all-blank lines — anchoring it wipes a good baseline so the next
+    // tick reposts scrollback as fresh. The arm is still consumed.
+    if anchorable_screen(&screen) {
+        s.seen.lock().await.insert(pane.to_string(), screen);
+    }
 }
 
 /// Re-poll an ambiguous liveness verdict. `None` = caller returns at

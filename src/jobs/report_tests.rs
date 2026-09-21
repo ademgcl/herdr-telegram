@@ -41,7 +41,7 @@ fn test_cancel_owns_intent_vacant_clears_nothing() {
 
 #[test]
 fn test_cancelled_text_single_source() {
-    // Every cancel branch edits this in place, never posts fresh —
+    // Every cancel branch posts this fresh (no live card to edit) —
     // pin the shared text against drift.
     assert_eq!(CANCELLED, "✋ cancelled");
 }

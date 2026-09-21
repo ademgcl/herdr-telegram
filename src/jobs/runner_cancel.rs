@@ -1,28 +1,24 @@
 //! Shared cancel retire for prompt watchers. Split from `runner`
 //! (300-line file limit): mark, clear the intent only when the map
-//! still points here (a superseding enqueue owns it otherwise), fold
-//! the live card quiet. Single source for the select arm, the backoff
-//! arm, and the reconnect race.
+//! still points here (a superseding enqueue owns it otherwise), then
+//! post the cancel card fresh (no live card exists to edit — see
+//! live.rs). Single source for the select arm, the backoff arm, and
+//! the reconnect race.
 use crate::{
-    jobs::finalize::edit_live, jobs::job::Job, jobs::live::LiveSlot, jobs::report::CANCELLED,
-    jobs::stream::EvStream, state::AppState, types::Res,
+    jobs::{job::Job, report::CANCELLED},
+    jobs::stream::EvStream,
+    state::AppState,
+    types::Res,
 };
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-pub(crate) async fn cancel_watch(s: &AppState, pane: &str, job: &Arc<Job>, live: &mut LiveSlot) {
-    cancel_watch_parts(s, pane, job, &mut live.mid, &mut live.dest).await;
+pub(crate) async fn cancel_watch(s: &AppState, pane: &str, job: &Arc<Job>) {
+    cancel_watch_parts(s, pane, job).await;
 }
 
-/// Split-fields variant for `settle_step` (holds `live_mid`/`live_dest`,
-/// not the slot): same single source, no inline copies.
-pub(crate) async fn cancel_watch_parts(
-    s: &AppState,
-    pane: &str,
-    job: &Arc<Job>,
-    live_mid: &mut Option<i64>,
-    live_dest: &mut Option<(i64, Option<i64>)>,
-) {
+/// Same single source, called from `settle_step`'s cancel arms.
+pub(crate) async fn cancel_watch_parts(s: &AppState, pane: &str, job: &Arc<Job>) {
     // Entry epoch BEFORE the stop: a superseding enqueue reuses this
     // same Arc and bumps in place — the guarded clear below must not
     // eat the successor's intent (ptr_eq alone is blind to it).
@@ -32,7 +28,7 @@ pub(crate) async fn cancel_watch_parts(
     // awaits): a superseding enqueue landing mid-retire owns the slot.
     s.clear_pending_if_owner(pane, job, epoch_at_entry).await;
     let (chat, th) = *job.dest.lock().await;
-    edit_live(s, chat, th, pane, live_mid, live_dest, CANCELLED).await;
+    super::report::report(s, chat, th, pane, CANCELLED).await;
 }
 
 /// Event-dial outcome: cancel arms share the runner's retire path,
@@ -57,13 +53,11 @@ pub(crate) enum Reopen {
 /// Lazy event-stream reconnect, raced against cancel + supersede (see
 /// `open_events_raced`). Owns the cooldown stamp: a hung dial counts,
 /// so the next attempt waits a full cooldown after it ends instead of
-/// retrying immediately. `live` folds the working card on the cancel
-/// path only — supersede leaves it for the handoff's retire.
+/// retrying immediately.
 pub(crate) async fn reopen_events(
     s: &AppState,
     pane: &str,
     job: &Arc<Job>,
-    live: &mut LiveSlot,
     ev: &mut Option<EvStream>,
     last_open: &mut tokio::time::Instant,
 ) -> Reopen {
@@ -73,7 +67,7 @@ pub(crate) async fn reopen_events(
     *last_open = tokio::time::Instant::now();
     match opened {
         DialOut::Cancelled => {
-            cancel_watch(s, pane, job, live).await;
+            cancel_watch(s, pane, job).await;
             Reopen::Break
         }
         DialOut::Superseded => Reopen::Cooled,

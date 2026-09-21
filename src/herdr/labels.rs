@@ -72,7 +72,19 @@ pub fn parse_facts(v: &Value) -> HashMap<String, PaneFacts> {
 /// users actually edit in herdr UI). Returns tab_id -> label.
 pub async fn tab_labels(socket: &str) -> Res<HashMap<String, String>> {
     let r = rpc(socket, "tab.list", json!({})).await?;
+    require_tabs(&r)?;
     Ok(parse_tab_labels(&r))
+}
+
+/// Fail-closed envelope guard (pane_facts parity): a missing `tabs` key
+/// is malformed, never "no tabs" — an empty read here would mass-retire
+/// title sync the way a bare pane.list would. Pure so tests pin the
+/// shape without I/O.
+fn require_tabs(v: &Value) -> Res<()> {
+    if v.get("tabs").and_then(|t| t.as_array()).is_none() {
+        return Err("tab.list returned no tabs".into());
+    }
+    Ok(())
 }
 
 /// Pure parse so tests cover the shape without I/O.
@@ -183,5 +195,21 @@ mod tests {
         assert_eq!(m["wH:t5"], "agy_gelistirme");
         assert_eq!(m["wH:t4"], "console");
         assert!(!m.contains_key("wH:t9"));
+    }
+
+    #[test]
+    fn test_require_tabs_rejects_malformed_envelope() {
+        // Fail-closed: a bare ack / missing `tabs` is never "no tabs"
+        // (title sync would else mass-retire on a degraded read).
+        for raw in [r#"{"ok": true}"#, r#"{"tabs": null}"#, r#"{"tabs": {}}"#] {
+            let v: Value = serde_json::from_str(raw).unwrap();
+            assert!(require_tabs(&v).is_err(), "accepted {raw:?}");
+            // The lenient parser alone would read all of these as empty.
+            assert!(parse_tab_labels(&v).is_empty());
+        }
+        // A legit empty fleet still serves `{"tabs": []}` — valid.
+        let v: Value = serde_json::from_str(r#"{"tabs": []}"#).unwrap();
+        assert!(require_tabs(&v).is_ok());
+        assert!(parse_tab_labels(&v).is_empty());
     }
 }

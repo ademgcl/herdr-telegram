@@ -5,7 +5,7 @@ use crate::{
     herdr::client::read_screen_for_limits,
     jobs::notices::{detect_limit, limit_card_text, needs_stuck_gate},
     notifier::limit_claim::try_claim,
-    notifier::limit_decide::{detect_tail_with_context, kind_flipped, scan_tail, send_cooled},
+    notifier::limit_decide::{detect_tail_with_context, kind_flipped, no_dest_skip, scan_tail, send_cooled},
     state::AppState,
 };
 use std::time::{Duration, Instant};
@@ -180,7 +180,10 @@ pub(crate) async fn scan_limits(s: &AppState) {
         {
             *th = Some(cur);
         }
-        if owned_dest.is_none() && forum_dest.is_none() && s.cfg.owners.is_empty() {
+        if owned_dest.is_none() && forum_dest.is_none() && no_dest_skip(
+            s.cfg.forum.is_some(),
+            s.cfg.owners.is_empty(),
+        ) {
             continue;
         }
         // Failed-send cooldown BEFORE claiming (preserves stuck timers and

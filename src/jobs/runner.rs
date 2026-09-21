@@ -1,9 +1,8 @@
-//! Prompt watcher loop: event stream + 2s poll tick, live-message
-//! streaming, stall watch, and settle→finalize on completion. Split
+//! Prompt watcher loop: event stream + 2s poll tick, stream
+//! accumulation, stall watch, and settle→finalize on completion. Split
 //! from `finalize`/`settle` (300-line file limit). One task per prompt;
 //! supersede/cancel retire via epoch + cancel signal, never by killing.
 use crate::jobs::episode::BuzzEpisode;
-use crate::jobs::report::{RUN_ENDED, fold_live};
 use crate::jobs::runner_cancel::cancel_watch;
 use crate::jobs::stall::watch_stall;
 use crate::{
@@ -24,12 +23,9 @@ const RETRY_BACKOFF_SECS: u64 = 5;
 /// Min gap between event-socket reconnect attempts (prevents tight-loop starvation).
 const REOPEN_COOLDOWN_SECS: u64 = 5;
 
-/// Watch the agent via herdr push-events: every output burst updates one live
-/// Telegram message; settle turns it into the final result card.
+/// Watch the agent via herdr push-events: output bursts accumulate for
+/// the final-card arbitration; settle posts the final result card.
 pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
-    // Live card slot: address + edit throttle travel together (see
-    // live.rs) so the address can never split.
-    let mut live = super::live::LiveSlot::new();
     // Raw output since the prompt — the fresh reply is extracted from
     // this at display time (last segment only, see segment::final_block)
     let mut acc: Vec<String> = Vec::new();
@@ -77,8 +73,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // Time-based sustain task: the ticker arm above falls through to
     // blocking work (30s agent reads, 45s stall scans), so sick-herdr
     // rounds would stretch the sustain gap past the ≈5s expiry — in DM
-    // nothing else backstops it. Reads the live dest every round (a
-    // handoff retargets mid-watch); aborted once in the exit epilogue.
+    // nothing else backstops it. Reads the current dest every round (a
+    // remap retargets mid-watch); aborted once in the exit epilogue.
     let sustain = {
         let tg = s.tg.clone();
         let job = job.clone();
@@ -95,8 +91,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     };
     // Instant feedback is the typing indicator (sustained below on the
     // shared cadence, well inside the ≈5s expiry, so a returning client
-    // sees it within ~2s): no empty "working" card — the live slot stays
-    // empty until real output lands, then streams contentfully.
+    // sees it within ~2s): no "working" card is ever posted — output
+    // accumulates silently until the final.
     // First settled sample arms the report timer (see settle.rs): agy
     // idles briefly between phases mid-run, and retiring on that
     // transient leaves the agent working unwatched. Cleared on working
@@ -107,14 +103,13 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
     loop {
         if job.is_stopped() {
-            // Quiet retire: no cancel card by design, but never freeze a
-            // live "working…" card — fold it in place, buzz nothing.
-            fold_live(&s, &mut live.dest, &mut live.mid, RUN_ENDED).await;
+            // Quiet retire: no cancel card by design (nothing was ever
+            // posted to fold — see live.rs), buzz nothing.
             break;
         }
         // New prompt on a reused watcher restarts all episode timers
-        // and drops the old prompt's stream state: stale accumulation,
-        // baseline and live message belong to the previous turn.
+        // and drops the old prompt's stream state: stale accumulation
+        // and baseline belong to the previous turn.
         let epoch = job.epoch.load(Ordering::Relaxed);
         if epoch != last_epoch {
             last_epoch = epoch;
@@ -125,11 +120,6 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // Herdr-error streak belongs to the old prompt: 11 failures
             // there + 1 here must not back the new prompt off for 60s.
             fails = 0;
-            live.rearm();
-            // Retire the old live card instead of orphaning it frozen
-            // (bounded handoff; a transient failure keeps the slot for
-            // the new turn to adopt, never duplicates).
-            live.retire_for_handoff(&s).await;
             // Baseline persists: it already covers everything streamed,
             // so the next delta is exactly the new turn's output
             // (resetting drops the first burst — fresh and reused).
@@ -146,7 +136,6 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 &s,
                 &pane,
                 &job,
-                &mut live,
                 &mut ev,
                 &mut last_open,
             )
@@ -171,7 +160,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // to a poll cycle too (its own cost is one spawned `typing` RPC).
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
-                cancel_watch(&s, &pane, &job, &mut live).await;
+                cancel_watch(&s, &pane, &job).await;
                 break;
             }
             _ = typing_tick.tick() => {
@@ -221,7 +210,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                     let backoff_epoch = job.epoch.load(Ordering::Relaxed);
                     tokio::select! {
                         _ = job.cancel.notified() => {
-                            cancel_watch(&s, &pane, &job, &mut live).await;
+                            cancel_watch(&s, &pane, &job).await;
                             break;
                         }
                         _ = sleep_or_superseded(&job, backoff_epoch, Duration::from_secs(60)) => {}
@@ -241,8 +230,6 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 &pane,
                 &job,
                 &agent.status,
-                &mut live.mid,
-                &mut live.dest,
                 &mut acc,
                 &mut retry_wait,
                 &mut settled_since,
@@ -266,16 +253,16 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         let screen = watch_stall(&s, &pane, &job, &mut episode).await;
         // Streaming keeps the historic ~200-line window: the stall watch
         // reads wide (500) for quota detection; baselines and deltas stay
-        // tail-shaped so live cards behave exactly as before.
+        // tail-shaped so finals behave exactly as before.
         let screen = if screen.len() > 200 {
             screen[screen.len() - 200..].to_vec()
         } else {
             screen
         };
 
-        // Stream whatever is new into the live message (see live.rs
-        // for the cooldown/baseline/delta details).
-        super::live::stream_live(&s, &job, screen, &mut acc, &mut live).await;
+        // Stream whatever is new into the accumulator (see live.rs
+        // for the baseline/delta details).
+        super::live::stream_live(&s, &job, screen, &mut acc).await;
     }
 
     // Every `break` above converges here: single abort site for the
@@ -284,10 +271,16 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // Retire only if the map still points at THIS watcher (no newer job took over)
     {
         let mut map = s.jobs.lock().await;
-        if map
-            .get(&pane)
-            .map(|j| Arc::ptr_eq(j, &job))
-            .unwrap_or(false)
+        // Epoch-gated like books::settle_books (same-Arc reuse bumps the
+        // epoch in place — ptr_eq alone cannot tell a successor apart):
+        // a submit landing between the last loop-top and this exit owns
+        // the entry now; removing it strands a live watcher with no map
+        // cover (a later failed submit reads owed==0 and retires it).
+        if job.epoch.load(Ordering::Relaxed) == last_epoch
+            && map
+                .get(&pane)
+                .map(|j| Arc::ptr_eq(j, &job))
+                .unwrap_or(false)
         {
             map.remove(&pane);
         }

@@ -12,8 +12,7 @@ pub const STALE_SECS: u64 = 600;
 /// Setup-note window: an unconfigured group reminds once a day —
 /// time-bounded like stale notices, never forever-mute, never spam.
 pub const NAGGED_SECS: u64 = 86400;
-pub const LIVE_EDIT_COOLDOWN_SECS: u64 = 4;
-/// Bound for silent live RPCs (stream edits/sends, handoff retire):
+/// Bound for silent live RPCs (stream edits/sends): flood-wait retries
 /// flood-wait retries must not stall settle past the tick — a miss
 /// retries next tick. Single source for jobs + telegram (distinct from
 /// the edit cooldown above, same seconds by design).
@@ -151,6 +150,17 @@ pub fn collapse_home(path: &str, home: &str) -> String {
     }
 }
 
+/// Baseline-anchor verdict (pure, tested): an outage/empty screen or a
+/// cleared pane (non-empty all-blank lines) must never wipe the delta
+/// baseline — anchoring it reposts scrollback as fresh on the next tick.
+/// Single source for every `seen` anchor (jobs finalize paths, the
+/// spontaneous stray arm, `Job::anchor_baseline`, the status watchdog) —
+/// dup'd predicates re-drift (one site once checked emptiness only and
+/// cleared panes wiped).
+pub fn anchorable_screen(screen: &[String]) -> bool {
+    !screen.is_empty() && !screen.iter().all(|l| l.trim().is_empty())
+}
+
 /// Pane-id shape for `focus.state` (fail-closed load: garbage, torn
 /// writes, and hand-edits must never become the DM routing focus).
 /// Herdr pane ids are `ws:pane` (`w8:p1`) — exactly one colon with a
@@ -226,6 +236,16 @@ mod tests {
         assert!(!valid_focus("a:b:c"));
         assert!(!valid_focus(":p1"));
         assert!(!valid_focus("w8:"));
+    }
+
+    #[test]
+    fn test_anchorable_screen_never_empty_or_blank() {
+        // Outage/empty and cleared-pane (all-blank) screens must never
+        // wipe the baseline, or the next tick reposts scrollback fresh.
+        assert!(!anchorable_screen(&[]));
+        assert!(!anchorable_screen(&["".to_string(), "   ".to_string()]));
+        assert!(anchorable_screen(&["out".to_string()]));
+        assert!(anchorable_screen(&["".to_string(), "out".to_string()]));
     }
 
     #[test]

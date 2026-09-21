@@ -38,6 +38,14 @@ fn herdr_moved_on(
 /// (split tab). Unmapped threads (General) are ignored; our own sync
 /// echoes match the stored title and skip.
 pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name: &str) {
+    // Unmapped threads (General, user-made topics) are silent first: a
+    // native rename there during a paced reset must not earn a bot
+    // "reset in progress" message — those threads are ignored outright.
+    let Some(th) = thread else { return };
+    let Some(pane) = s.topics.pane_of_thread(th) else {
+        println!("[titles] rename to {name:?} in unmapped thread #{th} — ignored");
+        return;
+    };
     // Reset owns migration: a native rename mid-reset would mutate herdr
     // during the read-only window and fight re-sync.
     if crate::handlers::reset::is_resetting() {
@@ -50,11 +58,6 @@ pub async fn adopt_topic_title(s: AppState, chat: i64, thread: Option<i64>, name
         .await;
         return;
     }
-    let Some(th) = thread else { return };
-    let Some(pane) = s.topics.pane_of_thread(th) else {
-        println!("[titles] rename to {name:?} in unmapped thread #{th} — ignored");
-        return;
-    };
     let name = name.trim();
     if name.is_empty() || stored_matches_label(s.topics.topic_title(&pane).as_deref(), name) {
         return;

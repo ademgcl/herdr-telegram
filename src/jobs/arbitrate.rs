@@ -32,13 +32,16 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
     if acc_body.chars().count() >= STREAM_MIN_CHARS {
         // Healthy stream — but it may be TRUNCATED (last burst landed
         // after the final stream tick, so the settled screen holds the
-        // same answer PLUS its tail). When the screen reflow-proof
-        // contains the whole stream and is substantially longer, the
+        // same answer PLUS its tail). When the screen starts with the
+        // whole stream reflow-proof and is substantially longer, the
         // extra is the missing tail, not scrollback: take the screen.
-        // Unrelated longer screens (no containment) never displace.
+        // Prefix (never contains): a contains-match also fires when
+        // stale scrollback heads the screen (old-turn + fresh), and
+        // returning the screen then leaks the prior turn as the reply.
+        // Unrelated longer screens (no prefix) never displace.
         let acc_sq = squash(&acc_body);
         let screen_sq = squash(&screen_body);
-        if screen_sq.contains(&acc_sq) && screen_sq.chars().count() > acc_sq.chars().count() + 20 {
+        if screen_sq.starts_with(&acc_sq) && screen_sq.chars().count() > acc_sq.chars().count() + 20 {
             return screen_body;
         }
         return acc_body;
@@ -154,6 +157,26 @@ mod tests {
         let body = select_final_body(&acc, &screen, "how to migrate?");
         assert!(body.contains("Third, apply"), "tail kept: {body:?}");
         assert!(body.contains("back up the database"), "head kept: {body:?}");
+    }
+
+    #[test]
+    fn test_head_scrollback_never_displaces_healthy_stream() {
+        // Settled screen merged stale scrollback AHEAD of the fresh
+        // answer (no boundary split it): contains-match would return
+        // the whole merged scrollback as the "reply". Prefix-only
+        // takes the tail merge and never leaks the prior turn.
+        let acc = v(&[
+            "The migration has three steps. First, back up the database",
+            "before running anything else on production.",
+        ]);
+        let mut screen = v(&["older turn prose from last week that goes on a bit"]);
+        screen.extend(acc.clone());
+        let body = select_final_body(&acc, &screen, "how to migrate?");
+        assert!(
+            !body.contains("older turn prose"),
+            "stale head leaked: {body:?}"
+        );
+        assert!(body.contains("back up the database"));
     }
 
     #[test]

@@ -25,9 +25,10 @@ pub(crate) fn collapse_flap(
 /// reposts scrollback as fresh on the next tick. A cleared pane reads as
 /// non-empty all-blank lines and counts the same (anchor_baseline parity
 /// in jobs::job — anchoring it makes the whole next screen "fresh").
-/// Pure for tests.
+/// Pure for tests. Delegates to [`crate::types::anchorable_screen`] (one
+/// predicate for every `seen` anchor — dup'd copies re-drift).
 pub(crate) fn should_anchor_baseline(screen: &[String]) -> bool {
-    !screen.is_empty() && !screen.iter().all(|l| l.trim().is_empty())
+    crate::types::anchorable_screen(screen)
 }
 
 #[cfg(test)]

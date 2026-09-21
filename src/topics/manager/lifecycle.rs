@@ -223,6 +223,10 @@ impl TopicManager {
         };
 
         // Record the mapping before touching the old topic (see step 3).
+        // F6 mids take FIRST: insert_with_title drops the dead topic's
+        // mids on thread change (copy-of-copy parity) — reading after
+        // would always copy nothing. Atomic take, never get+clear.
+        let mids = self.storage.take_recent_msgs(pane);
         self.storage
             .insert_with_title(pane.to_string(), new_thread, &name);
 
@@ -245,14 +249,13 @@ impl TopicManager {
             self.storage.set_icon(pane, &icon);
         }
 
-        // F6: copy recent messages to the new topic before old topic is deleted
-        let mids = self.storage.get_recent_msgs(pane);
+        // F6: copy recent messages to the new topic before old topic is deleted.
+        // Old mids were taken (and dropped from the store) before the
+        // remap above, so a second reset copies nothing stale (copy
+        // failures are silent).
         for mid in mids {
             let _ = self.tg.copy_msg(forum, forum, mid, Some(new_thread)).await;
         }
-        // Old mids point at the deleted topic: drop them so the next
-        // reset copies nothing stale (copy failures are silent).
-        self.storage.clear_msgs(pane);
 
         // F2: fresh identity card, tracked by id for status edits —
         // never pinned.

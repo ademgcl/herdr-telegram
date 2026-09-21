@@ -253,16 +253,18 @@ fn test_empty_main_falls_back_to_prev() {
 
 #[test]
 fn test_clear_msgs_and_icon_drop_stale() {
-    // Reset migration drops old-topic mids; icon clear drops the custom
-    // so the watchdog heals the kind glyph instead of wedging.
+    // Reset migration takes old-topic mids atomically (a second take
+    // copies nothing stale); icon clear drops the custom so the
+    // watchdog heals the kind glyph instead of wedging.
     let st = TopicStorage::at(
         std::env::temp_dir().join(format!("herdr-tg-test-clear-{}.json", super::test_tag())),
     );
     st.insert("w1:p1".into(), 42);
     st.record_msg("w1:p1", 100);
     st.set_icon("w1:p1", "1234567890");
-    st.clear_msgs("w1:p1");
+    assert_eq!(st.take_recent_msgs("w1:p1"), vec![100]);
     assert!(st.get_recent_msgs("w1:p1").is_empty());
+    assert!(st.take_recent_msgs("w1:p1").is_empty());
     st.clear_icon("w1:p1");
     assert_eq!(st.get_icon("w1:p1"), None);
     let _ = std::fs::remove_file(&st.file_path);
