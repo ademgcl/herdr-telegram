@@ -1,6 +1,12 @@
 //! 1:1 pane↔topic title sync (both directions) plus stable short tags.
 //! Split from `manager` (300-line file limit).
 use super::TopicManager;
+
+/// Topic-liveness probes per reconcile tick (see `probe_deleted`): the
+/// ring cursor covers every mapping, this only bounds the per-tick
+/// flood-budget spend.
+const PROBE_PER_TICK: usize = 2;
+
 impl TopicManager {
     /// Stable short tag for this pane (`o2`) — backs the friendly
     /// default title for unlabeled panes.
@@ -95,15 +101,21 @@ impl TopicManager {
         }
     }
 
-    /// Round-robin liveness probe: re-assert mappings' stored titles
-    /// per watchdog tick so a human-deleted topic prunes within ≤60s.
-    /// Converged titles otherwise never fire an RPC, so a deleted topic
-    /// would dangle — the probe answers TOPIC_ID_INVALID → prune, and
-    /// the next ensure recreates. Budget scales with map size (all
-    /// mappings each tick): N RPCs per 60s stays well under limits for
-    /// realistic hosts and keeps herdr→tg ≤60s for any N. Skipped while
-    /// resetting (would fight identity restore). Returns pruned panes
-    /// for dialog retire.
+    /// Round-robin liveness probe: re-assert mappings' stored titles so
+    /// a human-deleted topic prunes. Converged titles otherwise never
+    /// fire an RPC, so a deleted topic would dangle — the probe answers
+    /// TOPIC_ID_INVALID → prune, and the next ensure recreates.
+    ///
+    /// Bounded slice per tick ([`PROBE_PER_TICK`]), NOT the whole map:
+    /// each probe is an unconditional `setForumTopicTitle` no-op that
+    /// still spends the flood budget, and one probe per mapping per
+    /// minute (11 here) is what earned real flood-waits (`retry after
+    /// 38`) that delayed the instant message by tens of seconds. The
+    /// ring cursor still walks every mapping, so a deleted topic prunes
+    /// within `map/PROBE_PER_TICK` ticks — and nothing user-visible
+    /// waits on that: the topic is gone, so no card there can be read
+    /// back either way. Skipped while resetting (would fight identity
+    /// restore). Returns pruned panes for dialog retire.
     pub async fn probe_deleted(&self) -> Vec<String> {
         if crate::handlers::reset::is_resetting() {
             return Vec::new();
@@ -111,9 +123,8 @@ impl TopicManager {
         let Some(forum) = self.forum_id else {
             return Vec::new();
         };
-        let n = self.storage.all_mappings().len().max(3);
         let mut pruned = Vec::new();
-        for _ in 0..n {
+        for _ in 0..PROBE_PER_TICK {
             if let Some(p) = self.probe_next(forum).await {
                 pruned.push(p);
             }
