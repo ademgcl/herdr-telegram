@@ -26,6 +26,13 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
     if photo_id.is_none() && caption.is_empty() {
         return;
     }
+    // Photo + command caption: the command runs as text below, so the
+    // image would vanish silently without this note (fail-visible —
+    // escapes like /cancel still run, never blocked by an attachment).
+    if photo_id.is_some() && super::photo::is_command_caption(caption) {
+        s.tg.send_msg(chat, None, crate::ui::PHOTO_CMD_SKIPPED, None)
+            .await;
+    }
     let text = match photo_id {
         Some(fid) if !super::photo::is_command_caption(caption) => {
             match super::photo::fetch_prompt(&s, chat, None, &fid, caption).await {

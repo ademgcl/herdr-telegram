@@ -39,7 +39,11 @@ impl State {
                 return false;
             }
             // No job: disarm waiters/debounce/episode (stale arms stay dead).
+            // A stranded prompt queue dies here too (cancel means cancel:
+            // a queued prompt must never resurrect on a later turn, and a
+            // no-job /cancel is the only recovery when no watcher serves).
             self.clear_waiters(pane).await;
+            crate::jobs::queue::clear_queue(self, pane).await;
             self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
             // In-flight DM spontaneous owns no arm to disarm (missing arm
@@ -114,6 +118,9 @@ impl State {
                 return false;
             }
             self.clear_waiters(pane).await;
+            // Stranded-queue recovery (quiet parity with loud): a
+            // pane-death retire with no job still owns the queue.
+            crate::jobs::queue::clear_queue(self, pane).await;
             self.clear_limit_episode(pane).await;
             self.debounce.lock().await.remove(pane);
             // No watcher left to reap the typing task — stop it here
@@ -168,6 +175,10 @@ impl State {
                 return false;
             }
             self.debounce.lock().await.remove(pane);
+            // A stranded prompt queue dies here too (no-job recovery:
+            // held agent prompts for a shell/vanished pane can never be
+            // served — without this they resurrect on the next agent turn).
+            crate::jobs::queue::clear_queue(self, pane).await;
             return false;
         };
         // Epoch-guarded remove (intent preserved): a racing submit keeps
@@ -178,6 +189,10 @@ impl State {
         {
             return false;
         }
+        // Held agent prompts die with the retired watcher (intent +
+        // waiters stay preserved — only the queue goes: no agent turn
+        // will ever serve it on this shell/vanished pane).
+        crate::jobs::queue::clear_queue(self, pane).await;
         self.debounce.lock().await.remove(pane);
         self.stop_shell_typing(pane).await;
         job.mark_stopped();
@@ -195,6 +210,9 @@ pub(crate) use super::test_state::isolated_state;
 #[cfg(test)]
 #[path = "cancel_cas_tests.rs"]
 mod cas_tests;
+#[cfg(test)]
+#[path = "cancel_queue_tests.rs"]
+mod queue_tests;
 #[cfg(test)]
 #[path = "cancel_race_tests.rs"]
 mod race_tests;

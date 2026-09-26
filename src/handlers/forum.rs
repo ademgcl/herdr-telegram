@@ -72,6 +72,13 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
             || s.keywait.lock().await.contains_key(&k)
             || s.runwait.lock().await.contains_key(&k);
         if !armed_here {
+            // A photo can't ride a billable mint: refuse its image part
+            // visibly (fail-closed — never mint-and-silently-drop), then
+            // mint from the caption alone below.
+            if photo_id.is_some() {
+                s.tg.send_msg(chat, thread_id, crate::ui::PHOTO_CMD_SKIPPED, None)
+                    .await;
+            }
             let label = if super::space::check_label(arg) {
                 arg.to_string()
             } else {

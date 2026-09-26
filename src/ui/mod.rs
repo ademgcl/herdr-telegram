@@ -93,6 +93,17 @@ pub fn queued_ack(pos: usize) -> String {
 pub const QUEUE_FULL: &str =
     "⚠️ prompt queue is full — wait for the live turn to finish, then resend";
 
+/// Single source for the reminted-topic queue drop (serve-time dest
+/// gone: the queued ack already promised a run, so the drop must be
+/// visible at the item's own dest, never log-only).
+pub const QUEUE_TOPIC_GONE: &str =
+    "⚠️ dropped a queued prompt — its topic is gone (reset/remint); please resend";
+
+/// Single source for photo + command captions (DM/topic-agent share
+/// it): the command runs as text, so the image would vanish silently
+/// without this note — fail-visible, never a quiet discard.
+pub const PHOTO_CMD_SKIPPED: &str = "🖼️ commands run as text — the image wasn't attached; resend it with a plain caption to include it";
+
 /// Single source for the typed-answer ack (every typed-answer surface).
 pub fn typed_ack(pane: &str) -> String {
     format!("⌨️ typed into {pane} + ⏎")

@@ -176,13 +176,23 @@ pub async fn serve_next(s: &AppState, pane: &str, job: &Arc<Job>) -> bool {
             return published;
         }
         // Fresh dest at serve time: the thread may have reminted while
-        // the item waited. Unmapped forum dests retire (nowhere to post
-        // — the error card would fail the same way).
+        // the item waited. Unmapped forum dests retire with a visible
+        // note at the item's own dest (the queued ack promised a run —
+        // log-only would break submitter-always-hears parity; a dead
+        // thread fails the send silently, same as the orphan refuse).
         let th = if s.cfg.forum == Some(q.chat_id) {
             match s.topics.storage.get_thread(pane) {
                 Some(cur) => Some(cur),
                 None => {
                     println!("[jobs] queue {pane}: topic gone, dropping held prompt");
+                    super::finalize::report(
+                        s,
+                        q.chat_id,
+                        q.thread_id,
+                        pane,
+                        &crate::ui::error_card(crate::ui::QUEUE_TOPIC_GONE),
+                    )
+                    .await;
                     continue;
                 }
             }

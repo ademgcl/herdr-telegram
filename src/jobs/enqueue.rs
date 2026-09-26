@@ -259,10 +259,11 @@ async fn retire_if_idle(s: &AppState, pane: &str, job: &Arc<Job>) -> bool {
     if *owed > 0 {
         return false;
     }
-    // Queue check under the same hold would nest `prompt_queue` inside
-    // `pending` — take it after the zero-read instead (a push landing
-    // between serves at the next turn end; the fail-path serve above
-    // already drained what was present).
+    // The queue read nests inside the `pending` hold (the guard
+    // lives to end of scope — lock order `pending`→`prompt_queue`→`jobs`
+    // per the doc above). A push landing after this read but before the
+    // map remove strands: the loop-top serve + next submit drain it, and
+    // every cancel path now clears it (cancel means cancel).
     let queued = super::queue::queue_len(s, pane).await > 0;
     if queued {
         return false;
@@ -274,7 +275,6 @@ async fn retire_if_idle(s: &AppState, pane: &str, job: &Arc<Job>) -> bool {
             map.remove(pane);
         }
     }
-    drop(owed);
     true
 }
 

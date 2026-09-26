@@ -65,8 +65,14 @@ pub(crate) async fn handle_topic_agent_message(
     };
     // Photos prompt with the image attached (downloaded first —
     // caption-only would silently drop the image). Command captions
-    // skip the fetch (the command serves imageless). From here the flow
-    // is identical to text (waiters, blocked typing, prompts).
+    // skip the fetch (the command serves imageless) with a visible
+    // note above the command result (fail-visible — the image must
+    // never vanish silently). From here the flow is identical to text
+    // (waiters, blocked typing, prompts).
+    if photo.is_some() && super::photo::is_command_caption(text) {
+        s.tg.send_msg(chat, Some(thread_id), crate::ui::PHOTO_CMD_SKIPPED, None)
+            .await;
+    }
     let text = match photo {
         Some(fid) if !super::photo::is_command_caption(text) => {
             match super::photo::fetch_prompt(&s, chat, Some(thread_id), fid, text).await {
