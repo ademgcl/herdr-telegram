@@ -77,17 +77,10 @@ pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool
     }
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
-            // Same-generation consume: a re-arm during the slow send
-            // owns the next message — never delete it.
-            let mut tw = s.typewait.lock().await;
-            if tw
-                .get(&(chat, None))
-                .map(|(_, t)| *t == armed_at)
-                .unwrap_or(false)
-            {
-                tw.remove(&(chat, None));
-            }
-            drop(tw);
+            // Consume + focus-follow (single source, tested): same
+            // generation only — a re-arm during the slow send owns the
+            // next message — then focus the pane that took the answer.
+            super::forum_typewait::finish_typed_answer(s, (chat, None), armed_at, &wpane).await;
             s.tg.send_silent(chat, None, &crate::ui::typed_ack(&wpane))
                 .await;
             // Resumed work owns no job — follow it to the final reply.

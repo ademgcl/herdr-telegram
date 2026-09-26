@@ -7,12 +7,20 @@ use serde_json::Value;
 use std::time::Duration;
 
 impl TelegramClient {
-    /// Telegram flood-wait cap: an uncapped `retry after 1000000` would
-    /// stall the caller (settle tick, boot menu sync) for days; beyond
-    /// the cap the caller fails fast and the next tick retries.
+    /// Telegram flood-wait sleep cap: an uncapped `retry after 1000000`
+    /// would stall the caller (settle tick, boot menu sync) for days;
+    /// beyond the cap the caller fails fast (`flood_wait_exceeds_cap`)
+    /// and the next tick retries.
     /// Single source: `call_retrying` + every loud send/edit path share
     /// it, so the cap bounds retry churn everywhere.
     pub(crate) const MAX_FLOOD_WAIT_SECS: u64 = 60;
+
+    /// True when a parsed flood-wait exceeds the sleep cap: callers must
+    /// fail fast (next tick retries) instead of stalling for days.
+    /// Pure for tests.
+    pub(crate) fn flood_wait_exceeds_cap(wait: Duration) -> bool {
+        wait.as_secs() > Self::MAX_FLOOD_WAIT_SECS
+    }
 
     pub(crate) fn retry_after(e: &str) -> Option<Duration> {
         // Normalize first: Telegram ships `retry after N`, `retry_after N`
@@ -53,10 +61,13 @@ impl TelegramClient {
         if digits.is_empty() {
             return None;
         }
+        // Uncapped: callers gate on `flood_wait_exceeds_cap` and fail
+        // fast past MAX_FLOOD_WAIT_SECS (cap-in-parse made every huge
+        // wait look sleepable and stalled a tick for the full cap).
         digits
             .parse::<u64>()
             .ok()
-            .map(|s| Duration::from_secs(s.saturating_add(1).min(Self::MAX_FLOOD_WAIT_SECS)))
+            .map(|s| Duration::from_secs(s.saturating_add(1)))
     }
 
     /// True when a Telegram error string is a transient server/net
@@ -89,22 +100,6 @@ impl TelegramClient {
         .any(|m| low.contains(m))
     }
 
-    /// Transport half of the retry verdict (single source): only
-    /// reqwest transport/server faults arrive typed — Telegram API
-    /// fatals arrive as plain strings via `call`, gated by
-    /// `is_transient_msg`. Shared by `call_retrying` + the edit path.
-    pub(crate) fn is_transport_transient(
-        e: &(dyn std::error::Error + Send + Sync + 'static),
-    ) -> bool {
-        e.downcast_ref::<reqwest::Error>()
-            .map(|re| {
-                re.is_connect()
-                    || re.is_timeout()
-                    || re.status().map(|s| s.is_server_error()).unwrap_or(false)
-            })
-            .unwrap_or(false)
-    }
-
     /// Fatal permission/topic errors fail fast without retry.
     /// Case-insensitive (errors.rs parity): Telegram ships sentence-case
     /// variants too, and a missed fatal burns 6 retries + sleeps instead
@@ -135,6 +130,11 @@ impl TelegramClient {
                         return Err(e);
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
+                        // Over-cap flood: fail fast — the next settle tick
+                        // retries; sleeping the raw wait stalls for days.
+                        if Self::flood_wait_exceeds_cap(wait) {
+                            return Err(e);
+                        }
                         used += 1;
                         if used > 6 {
                             return Err(e);
@@ -142,8 +142,7 @@ impl TelegramClient {
                         tokio::time::sleep(wait).await;
                         continue;
                     }
-                    let retryable =
-                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
+                    let retryable = Self::is_transient_msg(&msg);
                     used += 1;
                     if !retryable || used > 6 {
                         return Err(e);
@@ -176,5 +175,27 @@ mod tests {
         ));
         assert!(!TelegramClient::is_fatal_msg("Internal Server Error"));
         assert!(!TelegramClient::is_fatal_msg("connection reset"));
+    }
+
+    #[test]
+    fn test_flood_wait_exceeds_cap() {
+        use std::time::Duration;
+        // Within cap: sleep and retry.
+        assert!(!TelegramClient::flood_wait_exceeds_cap(
+            Duration::from_secs(60)
+        ));
+        assert!(!TelegramClient::flood_wait_exceeds_cap(
+            Duration::from_secs(31)
+        ));
+        // Beyond cap: fail fast (next tick retries) — never sleep days.
+        assert!(TelegramClient::flood_wait_exceeds_cap(Duration::from_secs(
+            61
+        )));
+        assert!(TelegramClient::flood_wait_exceeds_cap(Duration::from_secs(
+            1_000_001
+        )));
+        assert!(TelegramClient::flood_wait_exceeds_cap(Duration::from_secs(
+            u64::MAX
+        )));
     }
 }

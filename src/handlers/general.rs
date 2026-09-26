@@ -92,11 +92,10 @@ pub(crate) async fn handle_general_forum_message(
             if !degraded {
                 match super::tap::type_text(&s, &wpane, text).await {
                     Ok(()) => {
-                        let mut tw = s.typewait.lock().await;
-                        if tw.get(&wk).map(|(_, t)| *t == armed_at).unwrap_or(false) {
-                            tw.remove(&wk);
-                        }
-                        drop(tw);
+                        // Consume + focus-follow (single source, tested):
+                        // same generation only, then focus the answered
+                        // pane (DM/forum typewait parity).
+                        super::forum_typewait::finish_typed_answer(&s, wk, armed_at, &wpane).await;
                         s.tg.send_silent(chat, thread_id, &crate::ui::typed_ack(&wpane))
                             .await;
                         // Resumed work owns no job — follow it to the final reply.

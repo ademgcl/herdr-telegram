@@ -3,19 +3,28 @@ use super::rpc::{is_not_found, rpc, rpc_t};
 use crate::types::{AgentRow, Res, WorkspaceInfo};
 use serde_json::json;
 
-pub async fn list_workspaces(socket: &str) -> Res<Vec<WorkspaceInfo>> {
-    let r = rpc(socket, "workspace.list", json!({})).await?;
-    let mut out = Vec::new();
-    if let Some(arr) = r["workspaces"].as_array() {
-        for w in arr {
-            out.push(WorkspaceInfo {
-                id: w["workspace_id"].as_str().unwrap_or("?").into(),
-                label: w["label"].as_str().unwrap_or("?").into(),
-                number: w["number"].as_u64().unwrap_or(0),
-            });
-        }
+/// Fail-closed parse of `workspace.list`: a missing/null `workspaces`
+/// key is an error, never `Ok(vec![])` (empty-success made every caller
+/// treat a degraded reply as "no spaces" and mint duplicates). Pure so
+/// the shape is unit-tested without the socket.
+pub(crate) fn parse_workspaces(r: &serde_json::Value) -> Res<Vec<WorkspaceInfo>> {
+    let arr = r["workspaces"]
+        .as_array()
+        .ok_or("workspace.list missing workspaces")?;
+    let mut out = Vec::with_capacity(arr.len());
+    for w in arr {
+        out.push(WorkspaceInfo {
+            id: w["workspace_id"].as_str().unwrap_or("?").into(),
+            label: w["label"].as_str().unwrap_or("?").into(),
+            number: w["number"].as_u64().unwrap_or(0),
+        });
     }
     Ok(out)
+}
+
+pub async fn list_workspaces(socket: &str) -> Res<Vec<WorkspaceInfo>> {
+    let r = rpc(socket, "workspace.list", json!({})).await?;
+    parse_workspaces(&r)
 }
 
 pub async fn create_workspace(socket: &str, label: &str) -> Res<String> {
@@ -48,7 +57,10 @@ pub async fn rename_workspace(socket: &str, ws_id: &str, label: &str) -> Res<()>
 /// race-adopt rule in `ensure_tg_space` is unit-tested (single source,
 /// never a duplicated literal).
 fn tg_space_id(spaces: &[WorkspaceInfo]) -> Option<String> {
-    spaces.iter().find(|w| w.label == "tg").map(|w| w.id.clone())
+    spaces
+        .iter()
+        .find(|w| w.label == "tg")
+        .map(|w| w.id.clone())
 }
 
 /// Find the `tg` space, creating it when missing. Returns
@@ -169,6 +181,29 @@ mod tests {
             "herdr closed connection (empty reply)"
         ));
         assert!(!verify_failure_reaps("no agent output yet"));
+    }
+
+    #[test]
+    fn test_parse_workspaces_fail_closed_on_missing_key() {
+        use serde_json::json;
+        // Missing/null key is an error — never empty-success (callers
+        // would mint duplicate `tg` spaces on a degraded reply).
+        assert!(parse_workspaces(&json!({})).is_err());
+        assert!(parse_workspaces(&json!({"workspaces": null})).is_err());
+        assert!(parse_workspaces(&json!({"other": []})).is_err());
+        // Empty array is a real answer (Ok, not Err).
+        assert_eq!(
+            parse_workspaces(&json!({"workspaces": []})).unwrap(),
+            vec![]
+        );
+        let one = parse_workspaces(&json!({
+            "workspaces": [{"workspace_id": "w1", "label": "tg", "number": 3}]
+        }))
+        .unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].id, "w1");
+        assert_eq!(one[0].label, "tg");
+        assert_eq!(one[0].number, 3);
     }
 
     #[test]

@@ -3,9 +3,11 @@
 //! pure predicates live in `limit_decide` (unit-tested there).
 use crate::{
     herdr::client::read_screen_for_limits,
-    jobs::notices::{detect_limit, limit_card_text, needs_stuck_gate},
+    jobs::notices::{detect_limit, is_transient_silent, limit_card_text, needs_stuck_gate},
     notifier::limit_claim::try_claim,
-    notifier::limit_decide::{detect_tail_with_context, kind_flipped, no_dest_skip, scan_tail, send_cooled},
+    notifier::limit_decide::{
+        detect_tail_with_context, kind_flipped, no_dest_skip, scan_tail, send_cooled,
+    },
     state::AppState,
 };
 use std::time::{Duration, Instant};
@@ -25,7 +27,9 @@ use crate::jobs::episode::{CLEAR_MISSES as LIMIT_CLEAR_MISSES, STUCK_SECS as LIM
 /// STRONG-`auth` banners alert on ANY non-shell status (herdr can sample
 /// idle mid-retry) but only from the fresh tail (deep-scrollback
 /// leftovers of a settled run stay silent); gated (`rate-limit`/
-/// `provider`/`error`/WEAK-`auth`) ones still need a working pane.
+/// `error`/WEAK-`auth`) ones still need a working pane. `provider`
+/// (overload/retry chatter) never pages — transient auto-retry noise
+/// (see `jobs::notices::is_transient_silent`).
 /// Once-per-episode survives noise: empty/outage reads preserve all
 /// state (unknown ≠ clean), a banner must be absent for
 /// [`LIMIT_CLEAR_MISSES`] consecutive clean reads to clear the episode,
@@ -93,6 +97,15 @@ pub(crate) async fn scan_limits(s: &AppState) {
             continue;
         };
         // Banner present: absence streak over.
+        // Transient auto-retry noise (`provider`) never buzzes — the
+        // agent recovers on its own, and agent prose discussing upstream
+        // handling trips the WEAK match while it persists on screen.
+        // Skip BEFORE touching any state (unknown ≠ clean): the stuck
+        // timer, miss streak and alert suppress all survive, so a genuine
+        // stall that follows still damps and gates normally.
+        if is_transient_silent(hit.kind) {
+            continue;
+        }
         s.limit_miss.lock().await.remove(&pane);
         let gated = needs_stuck_gate(&hit);
         // Gated stalls on settled panes never buzz (the settle/final card
@@ -180,10 +193,10 @@ pub(crate) async fn scan_limits(s: &AppState) {
         {
             *th = Some(cur);
         }
-        if owned_dest.is_none() && forum_dest.is_none() && no_dest_skip(
-            s.cfg.forum.is_some(),
-            s.cfg.owners.is_empty(),
-        ) {
+        if owned_dest.is_none()
+            && forum_dest.is_none()
+            && no_dest_skip(s.cfg.forum.is_some(), s.cfg.owners.is_empty())
+        {
             continue;
         }
         // Failed-send cooldown BEFORE claiming (preserves stuck timers and

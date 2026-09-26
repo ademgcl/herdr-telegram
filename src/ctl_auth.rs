@@ -65,6 +65,9 @@ pub fn display_token_path() -> String {
 /// Persist the token 0600 so only this user can read it back.
 /// `mode(0o600)` applies at create time only — a pre-existing 0644 file
 /// keeps its width — so chmod after open like `write_private` (same rule).
+/// Fail-closed: if chmod fails, do not leave a wide token on disk (a
+/// partial/wider file is worse than none — clients then get a clear
+/// "token missing" instead of a guessable secret).
 pub fn write_control_token(token: &str) {
     match std::fs::OpenOptions::new()
         .write(true)
@@ -78,11 +81,16 @@ pub fn write_control_token(token: &str) {
             if f.set_permissions(std::fs::Permissions::from_mode(0o600))
                 .is_err()
             {
-                eprintln!("[ctl] warning: control token file may be wider than 0600");
+                eprintln!("[ctl] warning: cannot chmod control token to 0600 — not writing");
+                drop(f);
+                let _ = std::fs::remove_file(ctl_token_path());
+                return;
             }
             use std::io::Write;
             if writeln!(f, "{token}").is_err() {
                 eprintln!("[ctl] warning: cannot persist control token");
+                drop(f);
+                let _ = std::fs::remove_file(ctl_token_path());
             }
         }
         Err(e) => eprintln!(
@@ -122,5 +130,28 @@ mod tests {
             "abc123"
         ));
         assert!(!auth_line_ok(" auth abc123", "abc123"));
+    }
+
+    #[tokio::test]
+    async fn test_write_control_token_roundtrip_0600() {
+        // Happy path: write + read back, mode exactly 0600 (the chmod
+        // fail-closed path cannot be forced portably; this pins the
+        // contract that a successful write is private).
+        let (_s, _dir) = crate::state::cancel::isolated_state();
+        write_control_token("deadbeef");
+        assert_eq!(read_control_token().as_deref(), Some("deadbeef"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(ctl_token_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "ctl.token must be 0600");
+        }
+        // Empty file reads as None (never an empty authenticating token).
+        std::fs::write(ctl_token_path(), b"  \n").unwrap();
+        assert_eq!(read_control_token(), None);
     }
 }

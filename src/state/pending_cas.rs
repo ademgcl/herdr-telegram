@@ -44,12 +44,17 @@ impl State {
         prompt: &str,
         started_unix: u64,
     ) -> bool {
-        self.pending.lock().await.get(pane).map(|p| {
-            p.chat == chat
-                && p.thread == thread
-                && p.prompt == prompt
-                && p.started_unix == started_unix
-        }).unwrap_or(false)
+        self.pending
+            .lock()
+            .await
+            .get(pane)
+            .map(|p| {
+                p.chat == chat
+                    && p.thread == thread
+                    && p.prompt == prompt
+                    && p.started_unix == started_unix
+            })
+            .unwrap_or(false)
     }
 
     /// Atomic check-and-remember for race-prone restores (reconcile

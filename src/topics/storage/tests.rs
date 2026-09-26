@@ -5,8 +5,7 @@ use super::{TopicStorage, disk::Store};
 fn test_store_roundtrip_and_migration() {
     // Legacy flat map migrates through the real read path; current
     // format (incl. unknown future fields) reads as-is.
-    let leg =
-        std::env::temp_dir().join(format!("herdr-tg-test-legacy-{}.json", super::test_tag()));
+    let leg = std::env::temp_dir().join(format!("herdr-tg-test-legacy-{}.json", super::test_tag()));
     std::fs::write(&leg, r#"{"w1:p1": 42}"#).unwrap();
     let st = TopicStorage::at(leg.clone());
     assert_eq!(st.get_thread("w1:p1"), Some(42));
@@ -231,8 +230,7 @@ fn test_empty_main_falls_back_to_prev() {
     // A zeroed main (failed copy, truncate, disk-full artifact) must
     // restore `.prev` like corrupt does — never wipe every mapping
     // (mass duplicate re-mints) while last-good sits next to it.
-    let path =
-        std::env::temp_dir().join(format!("herdr-tg-test-empty-{}.json", super::test_tag()));
+    let path = std::env::temp_dir().join(format!("herdr-tg-test-empty-{}.json", super::test_tag()));
     let prev = std::path::PathBuf::from(format!("{}.prev", path.display()));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&prev);

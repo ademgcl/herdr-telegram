@@ -1,6 +1,8 @@
 //! DM-mode shell flips: split from `hygiene` (300-line file limit).
 use super::hygiene::panes_once;
-use crate::{herdr::client::get_agent, state::AppState};
+use crate::{
+    handlers::shell_common::classify_shell_reuse, herdr::client::get_agent, state::AppState,
+};
 use std::collections::HashSet;
 
 /// Leave-blocked cleanup verdict (pure, tested): a quit while blocked
@@ -21,11 +23,23 @@ pub(crate) fn leave_cleanup(block_held: bool) -> LeaveCleanup {
     }
 }
 
+/// DM flip action (pure, tested): forum `classify_shell_reuse(false, …)`
+/// parity — a vanished agent with a live watcher or owed intent must
+/// retire (quit notice + quiet cancel), never status-flip only (the
+/// watcher would spin forever and the owed reply would drop).
+pub(crate) fn dm_flip_retires(owed: bool, job: bool) -> bool {
+    !matches!(
+        classify_shell_reuse(false, owed, job),
+        crate::handlers::shell_common::ShellReuse::Ignore
+    )
+}
+
 /// DM-mode shell flip: no topics exist, but `status` still drives the
 /// limit scanner — a PC-side quit would keep its last agent status
 /// forever and quota words in ordinary shell output would buzz false
-/// ❗ cards. Flip shell-reused panes (status + episode only — no topic,
-/// no report); dead panes stay for `reap_orphans`.
+/// ❗ cards. Flip shell-reused panes (status + episode only — no topic
+/// card); dead panes stay for `reap_orphans`. Live watchers / owed
+/// prompts retire via the shared vanish path (forum parity).
 pub(crate) async fn flip_dm_shells(
     s: &AppState,
     live_panes: &HashSet<String>,
@@ -75,11 +89,20 @@ pub(crate) async fn flip_dm_shells(
                     crate::handlers::dialog::resolve_cards(s, &pane).await;
                 }
             }
-            s.status
-                .lock()
-                .await
-                .insert(pane.clone(), "shell".to_string());
-            s.clear_limit_episode(&pane).await;
+            // Forum classify parity: status-only flips leave a live
+            // watcher spinning and drop the owed reply. was_shell is
+            // false here (filter above); DM has no topic tags.
+            let owed = s.pending.lock().await.get(&pane).cloned();
+            let has_job = s.job_live(&pane).await;
+            if dm_flip_retires(owed.is_some(), has_job) {
+                crate::notifier::reconcile_vanished::retire_vanished(s, &pane, owed).await;
+            } else {
+                s.status
+                    .lock()
+                    .await
+                    .insert(pane.clone(), "shell".to_string());
+                s.clear_limit_episode(&pane).await;
+            }
         }
     }
 }
@@ -95,5 +118,16 @@ mod tests {
         // an unblocked quit resolves the dead card locations instead.
         assert_eq!(leave_cleanup(true), LeaveCleanup::Sig);
         assert_eq!(leave_cleanup(false), LeaveCleanup::Cards);
+    }
+
+    #[test]
+    fn test_dm_flip_retires_watcher_or_owed() {
+        // Status-only flip (no job, no intent) stays a cheap mark-shell.
+        assert!(!dm_flip_retires(false, false));
+        // Live watcher or owed prompt must fully retire (forum parity) —
+        // never leave the watcher spinning or drop the reply.
+        assert!(dm_flip_retires(false, true));
+        assert!(dm_flip_retires(true, false));
+        assert!(dm_flip_retires(true, true));
     }
 }

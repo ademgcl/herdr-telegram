@@ -16,6 +16,7 @@ pub mod live;
 pub mod notices;
 pub mod persist;
 pub mod recover;
+pub mod recover_gate;
 pub mod repoint;
 pub mod report;
 pub mod runner;

@@ -1,13 +1,9 @@
 //! Watcher retire paths for shared state. Split from `state` (300-line
-//! file limit): loud user-cancel, quiet pane-death retire, global cancel.
-//! All single-pane retires are last-writer-wins (snapshot + remove-if-same
-//! Arc) and never nest async locks.
+//! file limit): loud user-cancel, quiet pane-death retire; global cancel
+//! lives in `cancel_all`. All single-pane retires are last-writer-wins
+//! (snapshot + remove-if-same Arc) and never nest async locks.
 use super::State;
-use crate::jobs::job::Job;
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
 impl State {
     /// Retire one pane's watcher. Last-writer-wins: snapshot the job,
@@ -37,9 +33,7 @@ impl State {
             let had_pending = self
                 .clear_pending_if_unchanged(pane, pending_at_entry.clone())
                 .await;
-            if !had_pending
-                && self.pending.lock().await.get(pane) != pending_at_entry.as_ref()
-            {
+            if !had_pending && self.pending.lock().await.get(pane) != pending_at_entry.as_ref() {
                 // Racing submit owns the changed slot — its debounce and
                 // done stamp belong to the new turn (missed-buzz guard).
                 return false;
@@ -185,103 +179,6 @@ impl State {
         job.epoch.fetch_add(1, Ordering::Relaxed);
         true
     }
-
-    pub async fn cancel_all_jobs(&self) -> usize {
-        // Narrow critical sections: take each map, drop its guard, then
-        // act — never hold typing_tasks across the jobs/pending/waiter
-        // locks (a future inverse nesting would deadlock, and every
-        // typing start/stop blocks for the whole global cancel).
-        // 1:1 working↔typing: abort only panes that owned cancellable
-        // work (job or intent) — a global /cancel must not darken a
-        // spontaneous working bystander with neither (its next heal is
-        // otherwise the 60s watchdog while it keeps working).
-        let job_panes: std::collections::HashSet<String> =
-            self.jobs.lock().await.keys().cloned().collect();
-        let pending_panes: std::collections::HashSet<String> =
-            self.pending.lock().await.keys().cloned().collect();
-        let doomed: Vec<tokio::task::JoinHandle<()>> = {
-            let mut tasks = self.typing_tasks.lock().await;
-            let kill: Vec<String> = tasks
-                .keys()
-                .filter(|p| job_panes.contains(*p) || pending_panes.contains(*p))
-                .cloned()
-                .collect();
-            kill.into_iter().filter_map(|p| tasks.remove(&p)).collect()
-        };
-        for handle in doomed {
-            handle.abort();
-        }
-        // Last-writer-wins (per-pane parity): an enqueue landing between
-        // the snapshots above and the clears below owns its intent — a
-        // blind take-all + clear-all would wipe a successfully submitted
-        // prompt with no reply ever arriving. Same-Arc reuse bumps the
-        // epoch in place, so the snapshot pairs each Arc with its epoch.
-        let live_jobs: HashMap<String, (Arc<Job>, u64)> = {
-            let map = self.jobs.lock().await;
-            map.iter()
-                .map(|(p, j)| (p.clone(), (j.clone(), j.epoch.load(Ordering::Relaxed))))
-                .collect()
-        };
-        let live_pending = self.pending.lock().await.clone();
-        let jobs: HashMap<String, Arc<Job>> = {
-            let mut map = self.jobs.lock().await;
-            let mut taken = HashMap::new();
-            for (p, (j, epoch)) in &live_jobs {
-                let same = map
-                    .get(p)
-                    .map(|c| Arc::ptr_eq(c, j) && c.epoch.load(Ordering::Relaxed) == *epoch)
-                    .unwrap_or(false);
-                if same && let Some(removed) = map.remove(p) {
-                    taken.insert(p.clone(), removed);
-                }
-            }
-            taken
-        };
-        {
-            let mut map = self.pending.lock().await;
-            let mut snap = live_pending.clone();
-            snap.retain(|p, pp| {
-                // Stamp-pinned (global_cancel_clears parity): full
-                // equality — text equality alone would wipe an identical
-                // resubmit's fresh intent (started_unix pins it).
-                super::retire::global_cancel_clears(map.get(p), pp)
-            });
-            for p in snap.keys() {
-                map.remove(p);
-            }
-            let remaining = map.clone();
-            drop(map);
-            crate::jobs::persist::save_file(&crate::jobs::persist::store_path(), &remaining);
-        }
-        // Global cancel retires everything: armed input waiters and
-        // settle debounces die with the jobs, or the next message/card
-        // would serve a cancelled world.
-        self.typewait.lock().await.clear();
-        self.keywait.lock().await.clear();
-        self.runwait.lock().await.clear();
-        self.debounce.lock().await.clear();
-        // Fresh episodes everywhere after a global cancel (see
-        // cancel_jobs_for for the per-pane reason).
-        self.clear_all_limit_episodes().await;
-        // DM done-stamps (cancel_jobs_for parity): in-flight DM
-        // spontaneous owns no arm — without this it posts past the
-        // global cancel via its done-after check.
-        {
-            let now = std::time::Instant::now();
-            let mut done = self.last_done.lock().await;
-            for pane in job_panes.union(&pending_panes) {
-                done.insert(pane.clone(), now);
-            }
-        }
-        let count = jobs.len();
-        for job in jobs.values() {
-            job.mark_stopped();
-            // Same epoch-bump as cancel_jobs_for: in-flight posts abort.
-            job.epoch.fetch_add(1, Ordering::Relaxed);
-            job.cancel.notify_waiters();
-        }
-        count
-    }
 }
 
 /// Re-exported test helper (split to `test_state`, 300-line file
@@ -291,8 +188,11 @@ impl State {
 pub(crate) use super::test_state::isolated_state;
 
 #[cfg(test)]
-#[path = "cancel_tests.rs"]
-mod tests;
+#[path = "cancel_cas_tests.rs"]
+mod cas_tests;
 #[cfg(test)]
 #[path = "cancel_race_tests.rs"]
 mod race_tests;
+#[cfg(test)]
+#[path = "cancel_tests.rs"]
+mod tests;

@@ -5,8 +5,8 @@
 //! live.rs). Single source for the select arm, the backoff arm, and
 //! the reconnect race.
 use crate::{
-    jobs::{job::Job, report::CANCELLED},
     jobs::stream::EvStream,
+    jobs::{job::Job, report::CANCELLED},
     state::AppState,
     types::Res,
 };

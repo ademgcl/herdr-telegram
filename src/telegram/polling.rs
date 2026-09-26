@@ -30,14 +30,19 @@ pub(crate) fn poll_backoff_secs(fails: u32) -> u64 {
 }
 
 /// Flood-aware poll wait (pure, tested): Telegram's `retry after N`
-/// overrides the failure backoff — re-hitting before it expires only
-/// extends the flood (and the 5–30s cap above would do exactly that).
+/// overrides the failure backoff when within the sleep cap — re-hitting
+/// before it expires only extends the flood (and the 5–30s cap above
+/// would do exactly that). Over-cap waits fail fast to the normal
+/// backoff (next tick retries — never stall the poll loop for days).
 /// Single source for the poll-error arm in `main`.
 pub(crate) fn flood_aware_poll_wait(err_msg: &str, fails: u32) -> u64 {
     let backoff = poll_backoff_secs(fails);
-    super::client::TelegramClient::retry_after(err_msg)
-        .map(|d| d.as_secs().max(backoff))
-        .unwrap_or(backoff)
+    match super::client::TelegramClient::retry_after(err_msg) {
+        Some(d) if !super::client::TelegramClient::flood_wait_exceeds_cap(d) => {
+            d.as_secs().max(backoff)
+        }
+        _ => backoff,
+    }
 }
 
 #[cfg(test)]
@@ -56,17 +61,17 @@ mod tests {
 
     #[test]
     fn test_flood_aware_poll_wait_honors_retry_after() {
-        // Flood-wait overrides the short backoff (never re-hit early).
+        // Flood-wait within the cap overrides the short backoff (never re-hit early).
         assert_eq!(
             flood_aware_poll_wait("Too Many Requests: retry after 45", 1),
             46
         );
         // No flood marker: plain backoff.
         assert_eq!(flood_aware_poll_wait("connection reset", 2), 10);
-        // Flood-wait capped at 60s+1 by retry_after, still wins over 30s cap.
+        // Over-cap wait fails fast to the normal backoff — never a multi-day stall.
         assert_eq!(
             flood_aware_poll_wait("Too Many Requests: retry after 1000000", 6),
-            60
+            30
         );
     }
 }

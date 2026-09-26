@@ -18,8 +18,8 @@ use super::{
 /// chrome in filter.rs, so they split here too — else old-turn prose
 /// merges into the final card.
 const TOOL_PREFIXES: &[&str] = &[
-    "→", "←", "●", "○", "⏺", "⎿", "☰", "❯", "›", "✱", "~ ", "✻", "※", "⏵",
-    "▸ ", "▾", // agy ▸ Thought/Subagents headers + expanded ▾ group
+    "→", "←", "●", "○", "⏺", "⎿", "☰", "❯", "›", "✱", "~ ", "✻", "※", "⏵", "▸ ",
+    "▾", // agy ▸ Thought/Subagents headers + expanded ▾ group
 ];
 
 /// A full-width box-rule turn separator (────…): turns are wrapped in these,
@@ -227,22 +227,26 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let Some((mut win, mut gated)) = cands.pop() else {
         return Vec::new();
     };
-    if want.is_empty() {
-        loop {
-            if gated {
-                let openers = win.iter().take_while(|l| is_input_opener(l)).count();
-                win.drain(..openers);
+    // Trailing footer / rule-gated input-box fallback runs on BOTH paths:
+    // watcher finals pass the prompt (`want` non-empty) and a codex-style
+    // answer + `›` box + model footer screen leaves the footer as the
+    // last candidate — gating the loop to the spontaneous path posted
+    // the footer as the reply and dropped the answer (dialog_block
+    // parity: always drains).
+    loop {
+        if gated {
+            let openers = win.iter().take_while(|l| is_input_opener(l)).count();
+            win.drain(..openers);
+        }
+        if !win.is_empty() && !is_footer_segment(&win) {
+            break;
+        }
+        match cands.pop() {
+            Some((prev, prev_rule)) => {
+                win = prev;
+                gated = prev_rule;
             }
-            if !win.is_empty() && !is_footer_segment(&win) {
-                break;
-            }
-            match cands.pop() {
-                Some((prev, prev_rule)) => {
-                    win = prev;
-                    gated = prev_rule;
-                }
-                None => return Vec::new(),
-            }
+            None => return Vec::new(),
         }
     }
     win
@@ -251,6 +255,9 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
 #[cfg(test)]
 #[path = "segment_bounds_tests.rs"]
 mod bounds_tests;
+#[cfg(test)]
+#[path = "segment_more_tests.rs"]
+mod more_tests;
 #[cfg(test)]
 #[path = "segment_tests.rs"]
 mod tests;

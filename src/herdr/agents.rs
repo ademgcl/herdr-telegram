@@ -34,7 +34,10 @@ pub async fn get_agent(socket: &str, pane: &str) -> Res<AgentDetail> {
     // object is never "agent exists" — callers treat Ok as liveness
     // (focus moves, spawn verifies). Malformed rows must Err, never
     // invent "?" rows that mint success with ghost kinds.
-    let a = v.get("agent").filter(|a| a.is_object()).ok_or("agent.get returned no agent")?;
+    let a = v
+        .get("agent")
+        .filter(|a| a.is_object())
+        .ok_or("agent.get returned no agent")?;
     // Validated once (list_agents parity above): bind the id here so the
     // row below can never fall back to guessing the requested pane.
     let pid = a

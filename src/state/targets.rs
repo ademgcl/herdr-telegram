@@ -58,9 +58,14 @@ impl State {
             eprintln!("[state] refusing invalid focus {pane:?}");
             return;
         }
-        // Memory first, disk second: concurrent focuses must converge
-        // disk vs RAM on the same winner (disk-first can resurrect loser).
-        *self.focus.lock().await = Some(pane.to_string());
+        // Hold the focus lock across memory+disk (short local write, no
+        // RPC): releasing after RAM let a slower writer's rename land
+        // last with the loser's pane while RAM held the winner —
+        // concurrent focuses must converge disk vs RAM on the same
+        // winner. Memory first, disk second inside the critical section
+        // (disk-first can resurrect a loser once the lock is held).
+        let mut focus = self.focus.lock().await;
+        *focus = Some(pane.to_string());
         let file = super::persist_paths::focus_file();
         // Unique tmp (never shared `<file>.tmp`): concurrent focuses
         // must not interleave into one torn file.
@@ -90,5 +95,29 @@ mod tests {
         assert!(!should_record_msg(Some(7), 9));
         // DM mode records nothing (write-only disk growth).
         assert!(!should_record_msg(None, 9));
+    }
+
+    #[tokio::test]
+    async fn test_set_focus_disk_matches_ram_under_races() {
+        // Lock-across-write: concurrent focuses serialize, so the last
+        // RAM winner is also the last disk rename — disk ≠ RAM was the
+        // pre-fix race (disk could hold a loser while RAM held winner).
+        let (s, _dir) = crate::state::cancel::isolated_state();
+        let mut handles = Vec::new();
+        for i in 0..16 {
+            let s = s.clone();
+            handles.push(tokio::spawn(async move {
+                s.set_focus(&format!("w1:p{i}")).await;
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        let ram = s.get_focus().await.expect("focus set");
+        let disk = std::fs::read_to_string(super::super::persist_paths::focus_file())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        assert_eq!(disk, ram, "focus disk and RAM must converge");
     }
 }

@@ -81,7 +81,11 @@ fn settle_commit(status: &str, armed: &mut SettledArm, now: Instant, fatal_stuck
 /// `settled_since` arms on the first confirmed sample (recording its
 /// kind); the working recheck below clears it, kind flips re-arm it,
 /// and the caller clears it on working samples, herdr errors, and
-/// epoch changes.
+/// epoch changes. `loop_epoch` is the runner's generation at loop top:
+/// an entry epoch that differs means a submit landed between the
+/// runner's epoch load and this snapshot — the arm belongs to the old
+/// generation and must never back the new turn's commit (cleared here,
+/// before any select/RPC, so the rule is unit-testable).
 #[allow(clippy::too_many_arguments)]
 pub async fn settle_step(
     s: &AppState,
@@ -92,6 +96,7 @@ pub async fn settle_step(
     retry_wait: &mut u64,
     settled_since: &mut SettledArm,
     fatal_stuck: bool,
+    loop_epoch: u64,
 ) -> SettleStep {
     // Collapse done↔idle flapping before committing to a report. A
     // failed recheck is unknown, not settled: clear the timer (the
@@ -115,10 +120,27 @@ pub async fn settle_step(
     // the snapshot itself.
     let pre_epoch = job.epoch.load(Ordering::Relaxed);
     let (entry_epoch, entry_pending, entry_prompt) = job.snapshot_entry().await;
+    // Generation-bound arm (runner last_epoch parity): a submit landing
+    // after the runner's loop-top load but before this snapshot moves
+    // entry_epoch off loop_epoch — the arm was armed under the OLD
+    // generation and must not count as persistence for the new turn.
+    if entry_epoch != loop_epoch {
+        *settled_since = None;
+        return SettleStep::Continue;
+    }
     if pre_epoch != entry_epoch
         || job.epoch.load(Ordering::Relaxed) != entry_epoch
         || job.is_stopped()
     {
+        *settled_since = None;
+        return SettleStep::Continue;
+    }
+    // Watcher spawn races the submit RPC (enqueue spawns before
+    // publish_submit): a settled idle screen with nothing owed would
+    // finalize the pre-submit tail (empty prompt → screen takeover) and
+    // settle_books with pending==0. Wait for cover; clear any arm that
+    // accrued while still unpaid so it never commits post-publish.
+    if entry_pending == 0 {
         *settled_since = None;
         return SettleStep::Continue;
     }

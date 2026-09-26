@@ -90,10 +90,13 @@ pub(crate) async fn handle_cmd(s: &AppState, line: &str) -> String {
             }
         }
         "inspect" => {
-            if args.is_empty() {
+            // Exact arity (trigger parity): trailing junk must not flow
+            // into the pane inspect (fail-closed).
+            let parts: Vec<&str> = args.split_whitespace().collect();
+            if parts.len() != 1 {
                 USAGE_INSPECT.to_string()
             } else {
-                crate::ctl_inspect::inspect_pane(s, args).await
+                crate::ctl_inspect::inspect_pane(s, parts[0]).await
             }
         }
         _ => UNKNOWN_CTL.to_string(),
@@ -191,6 +194,8 @@ mod tests {
             USAGE_TRIGGER
         );
         assert_eq!(handle_cmd(&s, "inspect").await, USAGE_INSPECT);
+        // Trailing junk refuses too (exact arity, never silent OK).
+        assert_eq!(handle_cmd(&s, "inspect w1:p1 junk").await, USAGE_INSPECT);
         // Status shape (count varies with live data — assert the frame).
         let st = handle_cmd(&s, "status").await;
         assert!(st.starts_with("OK: herdr-telegram running, "));

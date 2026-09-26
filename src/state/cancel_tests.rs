@@ -144,35 +144,68 @@ async fn test_clear_pending_if_epoch_matches_is_exact() {
     // vacant slot clears nothing. An identical re-prompt ("continue"×2)
     // bumps the epoch without changing the text, so text equality alone
     // must not wipe it.
-    use std::sync::atomic::AtomicU64;
     let (s, _dir) = isolated_state();
-    let epoch = AtomicU64::new(0);
+    let job = Job::new(vec![], 1, None);
     s.remember_pending("t:p1", 1, None, "make").await;
     assert!(
-        !s.clear_pending_if_epoch_matches("t:p1", 1, None, "other", 0, &epoch)
+        !s.clear_pending_if_epoch_matches("t:p1", &job, 1, None, "other", 0)
             .await
     );
     assert!(
-        !s.clear_pending_if_epoch_matches("t:p1", 2, None, "make", 0, &epoch)
+        !s.clear_pending_if_epoch_matches("t:p1", &job, 2, None, "make", 0)
             .await
     );
     assert!(s.pending.lock().await.contains_key("t:p1"));
     // Stale generation (identical text, bumped epoch): keep.
-    epoch.store(1, std::sync::atomic::Ordering::Relaxed);
+    job.epoch.store(1, std::sync::atomic::Ordering::Relaxed);
     assert!(
-        !s.clear_pending_if_epoch_matches("t:p1", 1, None, "make", 0, &epoch)
+        !s.clear_pending_if_epoch_matches("t:p1", &job, 1, None, "make", 0)
             .await
     );
     assert!(s.pending.lock().await.contains_key("t:p1"));
     assert!(
-        s.clear_pending_if_epoch_matches("t:p1", 1, None, "make", 1, &epoch)
+        s.clear_pending_if_epoch_matches("t:p1", &job, 1, None, "make", 1)
             .await
     );
     assert!(!s.pending.lock().await.contains_key("t:p1"));
     assert!(
-        !s.clear_pending_if_epoch_matches("t:p1", 1, None, "make", 1, &epoch)
+        !s.clear_pending_if_epoch_matches("t:p1", &job, 1, None, "make", 1)
             .await
     );
+}
+
+#[tokio::test]
+async fn test_clear_pending_if_epoch_matches_refuses_successor_arc() {
+    // Atomic jobs ptr_eq inside the clear: books' detached guard used to
+    // release the jobs lock before clearing, so a failed-submit retire
+    // (map remove, no epoch bump) + same-text re-prompt in that window
+    // matched text+epoch and wiped the successor's fresh intent. A
+    // mapped DIFFERENT Arc must refuse; vacant and self-owned still clear.
+    let (s, _dir) = isolated_state();
+    let old = Job::new(vec![], 1, None);
+    let successor = Job::new(vec![], 1, None);
+    s.jobs.lock().await.insert("t:p1".into(), successor.clone());
+    s.remember_pending("t:p1", 1, None, "continue").await;
+    // Successor owns the pane: old bookkeeping must NOT clear, even
+    // though its own epoch (0) and the text still match.
+    assert!(
+        !s.clear_pending_if_epoch_matches("t:p1", &old, 1, None, "continue", 0)
+            .await
+    );
+    assert!(s.pending.lock().await.contains_key("t:p1"));
+    // Same-arc owner still clears (epoch pinned).
+    assert!(
+        s.clear_pending_if_epoch_matches("t:p1", &successor, 1, None, "continue", 0)
+            .await
+    );
+    assert!(!s.pending.lock().await.contains_key("t:p1"));
+    // Vacant pane (we already retired the map entry) still clears ours.
+    s.remember_pending("t:p2", 1, None, "continue").await;
+    assert!(
+        s.clear_pending_if_epoch_matches("t:p2", &old, 1, None, "continue", 0)
+            .await
+    );
+    assert!(!s.pending.lock().await.contains_key("t:p2"));
 }
 
 #[tokio::test]
@@ -234,65 +267,4 @@ async fn test_cancel_all_counts_and_stops() {
     assert_eq!(s.cancel_all_jobs().await, 2);
     assert!(a.is_stopped() && b.is_stopped());
     assert!(s.jobs.lock().await.is_empty());
-}
-
-#[tokio::test]
-async fn test_cas_with_time_keeps_original_stamp() {
-    // Failed-notice restore into a vacant slot must keep the ORIGINAL
-    // timestamp: a fresh stamp per retry would defeat the 24h stale
-    // bound and keep the corpse intent immortal. A racing submit's
-    // newer text still wins (CAS refuses).
-    let (s, _dir) = isolated_state();
-    assert!(
-        s.remember_pending_cas_with_time("t:p1", (1, None, "hi"), (1, None, "hi"), Some(42))
-            .await
-    );
-    assert_eq!(s.pending.lock().await["t:p1"].started_unix, 42);
-    // Same-triple re-restore without a stamp keeps it too.
-    assert!(
-        s.remember_pending_cas_with_time("t:p1", (1, None, "hi"), (1, None, "hi"), None)
-            .await
-    );
-    assert_eq!(s.pending.lock().await["t:p1"].started_unix, 42);
-    // Foreign triple never clobbers.
-    assert!(
-        !s.remember_pending_cas_with_time("t:p1", (1, None, "no"), (1, None, "no"), None)
-            .await
-    );
-    assert_eq!(s.pending.lock().await["t:p1"].prompt, "hi");
-}
-
-#[tokio::test]
-async fn test_cas_occupied_match_keeps_live_stamp() {
-    // Corpse-stamp regression: an identical re-prompt racing the
-    // close/vanish RPCs holds a fresh stamp — restoring the corpse's
-    // older stamp over it would age the fresh intent toward the 24h
-    // stale drop. The passed stamp applies to vacant slots only.
-    let (s, _dir) = isolated_state();
-    s.remember_pending("t:p1", 1, None, "continue").await;
-    let fresh = s.pending.lock().await["t:p1"].started_unix;
-    assert!(
-        s.remember_pending_cas_with_time(
-            "t:p1",
-            (1, None, "continue"),
-            (1, None, "continue"),
-            Some(42)
-        )
-        .await
-    );
-    assert_eq!(s.pending.lock().await["t:p1"].started_unix, fresh);
-}
-
-#[tokio::test]
-async fn test_job_live_ignores_stopped_corpse() {
-    // A stopped corpse between mark_stopped() and map removal must not
-    // read as an active watcher (one-shot settle checks would abort
-    // and lose their reply with no retry).
-    let (s, _dir) = isolated_state();
-    assert!(!s.job_live("t:p1").await);
-    let job = Job::new(vec![], 1, None);
-    s.jobs.lock().await.insert("t:p1".into(), job.clone());
-    assert!(s.job_live("t:p1").await);
-    job.mark_stopped();
-    assert!(!s.job_live("t:p1").await);
 }

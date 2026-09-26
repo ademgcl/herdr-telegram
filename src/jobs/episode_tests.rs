@@ -1,7 +1,8 @@
 //! Tests for [`super::BuzzEpisode`] (split: 300-line file limit).
-//! `rate-limit` is stuck-gated like `error`/`provider`: transient
-//! quota/auto-retry flashes stay silent, only a banner that persists
-//! the full gate pages. STRONG `auth` still fires immediately.
+//! `rate-limit` is stuck-gated like `error`: transient quota/auto-retry
+//! flashes stay silent, only a banner that persists the full gate pages.
+//! `provider` (overload/retry chatter) never pages at all — the agent
+//! retries on its own. STRONG `auth` still fires immediately.
 use super::super::notices::types::ERROR_KIND;
 use super::*;
 
@@ -30,13 +31,13 @@ fn test_immediate_kinds_buzz_on_change_only() {
     assert!(ep.tick(Some(&a), t).is_some());
     assert!(ep.tick(Some(&a), t).is_none());
     // A single-tick flip is scroll noise: silent…
-    let p = hit("provider");
-    assert!(ep.tick(Some(&p), t).is_none());
-    assert!(ep.tick(Some(&p), t).is_none());
+    let r = hit("rate-limit");
+    assert!(ep.tick(Some(&r), t).is_none());
+    assert!(ep.tick(Some(&r), t).is_none());
     // …but held stable it becomes a genuine new episode (gated → silent first).
-    assert!(ep.tick(Some(&p), t).is_none());
-    // provider is stuck-gated: buzzes only after STUCK_SECS.
-    assert!(ep.tick(Some(&p), t + Duration::from_secs(91)).is_some());
+    assert!(ep.tick(Some(&r), t).is_none());
+    // rate-limit is stuck-gated: buzzes only after STUCK_SECS.
+    assert!(ep.tick(Some(&r), t + Duration::from_secs(91)).is_some());
 }
 
 #[test]
@@ -96,15 +97,28 @@ fn test_error_stuck_gate_state() {
 }
 
 #[test]
-fn test_provider_stuck_gate() {
+fn test_provider_never_pages() {
+    // Transient overload/retry noise (and agent prose discussing upstream
+    // handling, which trips the WEAK match): the agent retries on its own,
+    // so even a banner that persists past the stuck gate stays silent —
+    // but the episode still tracks, so a genuine stall that follows flips
+    // and gates normally instead of inheriting stale state.
     let mut ep = BuzzEpisode::new();
     let t0 = Instant::now();
     let p = hit("provider");
-    // Transient timeout blip: silent until stuck.
     assert!(ep.tick(Some(&p), t0).is_none());
     assert!(ep.tick(Some(&p), t0 + Duration::from_secs(30)).is_none());
-    assert!(ep.tick(Some(&p), t0 + Duration::from_secs(90)).is_some());
+    assert!(ep.tick(Some(&p), t0 + Duration::from_secs(90)).is_none());
     assert!(ep.tick(Some(&p), t0 + Duration::from_secs(200)).is_none());
+    assert!(ep.tick(Some(&p), t0 + Duration::from_secs(3600)).is_none());
+    assert!(!ep.is_fresh());
+    // A genuine stall still flips (stability) and gates (90s) to a page.
+    let r = hit("rate-limit");
+    assert!(ep.tick(Some(&r), t0 + Duration::from_secs(3601)).is_none());
+    assert!(ep.tick(Some(&r), t0 + Duration::from_secs(3602)).is_none());
+    assert!(ep.tick(Some(&r), t0 + Duration::from_secs(3603)).is_none());
+    assert!(ep.tick(Some(&r), t0 + Duration::from_secs(3604)).is_none());
+    assert!(ep.tick(Some(&r), t0 + Duration::from_secs(3694)).is_some());
 }
 
 #[test]
@@ -202,4 +216,33 @@ fn test_strong_auth_fires_immediately() {
     let s = hit("auth");
     assert!(ep.tick(Some(&s), t).is_some());
     assert!(ep.tick(Some(&s), t).is_none());
+}
+
+#[test]
+fn test_agy_upstream_prose_never_pages() {
+    // Live agy noise: the agent DISCUSSING upstream handling in working
+    // prose trips the WEAK `provider` match (`upstream` + `fail` on one
+    // line) and persists on screen past the stuck gate — but the agent
+    // retries on its own, so the full watch path (detect → episode) must
+    // never page. Detection itself is unchanged; the silence lives in
+    // `is_transient_silent`, consulted by both buzz paths.
+    use super::super::notices::{detect_limit, is_transient_silent};
+    let screen = vec![
+        "> 4. If upstream signal metadata resolution is unavailable, evidence attachment fails gracefully without rolling back or blocking event creation."
+            .to_string(),
+    ];
+    let hit = detect_limit(&screen).expect("prose still matches provider");
+    assert_eq!(hit.kind, "provider");
+    assert!(is_transient_silent(hit.kind));
+    let mut ep = BuzzEpisode::new();
+    let t0 = Instant::now();
+    assert!(ep.tick(Some(&hit), t0).is_none());
+    assert!(
+        ep.tick(Some(&hit), t0 + Duration::from_secs(3600))
+            .is_none()
+    );
+    // Genuine stalls still page: only `provider` is silent.
+    assert!(!is_transient_silent("rate-limit"));
+    assert!(!is_transient_silent("auth"));
+    assert!(!is_transient_silent(ERROR_KIND));
 }

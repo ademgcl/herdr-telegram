@@ -46,28 +46,15 @@ pub async fn settle_books(
     if job.epoch.load(Ordering::Relaxed) != entry_epoch {
         return;
     }
-    // Successor-Arc guard (no await under it): a re-arm minted a NEW job
-    // while the submit RPC was in flight — our books landed on the
-    // retired Arc and the durable slot now belongs to the successor. An
-    // identical re-prompt ("continue"×2) matches textually, so text
-    // equality alone would wipe the live intent (silent reply loss).
-    if !s
-        .jobs
-        .lock()
-        .await
-        .get(pane)
-        .map(|j| Arc::ptr_eq(j, job))
-        .unwrap_or(false)
-    {
-        return;
-    }
-    // Final generation-checked clear (single critical section inside:
-    // pending lock held across the atomic epoch load): an identical
-    // re-prompt ("continue"×2) landing between a detached check and the
-    // clear bumps the epoch without changing the text — text equality
-    // alone would wipe the successor's intent (silent reply loss).
+    // Atomic owner-checked clear (jobs ptr_eq + epoch + text under ONE
+    // jobs→pending hold, retire.rs order): the old detached successor
+    // guard released the jobs lock before the clear, so a failed-submit
+    // retire (mark_stopped + map remove, NO epoch bump) + same-text
+    // re-prompt landing in that window matched text+epoch and wiped the
+    // successor's intent (silent reply loss). Vacant (already retired)
+    // or self-owned slots still clear; a mapped successor refuses inside.
     // Shell parity: clear_shell_if_matches.
-    s.clear_pending_if_epoch_matches(pane, chat, th, &prompt, entry_epoch, &job.epoch)
+    s.clear_pending_if_epoch_matches(pane, job, chat, th, &prompt, entry_epoch)
         .await;
     // Re-check the epoch under the map guard with no await after: reuse
     // keeps the SAME Arc (ptr_eq alone cannot tell a successor apart),

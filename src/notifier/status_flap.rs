@@ -60,7 +60,10 @@ mod tests {
         assert!(should_anchor_baseline(&["out".to_string()]));
         // A cleared pane (all-blank lines) is outage, not content —
         // anchoring it wipes a good baseline the same way.
-        assert!(!should_anchor_baseline(&["".to_string(), "   ".to_string()]));
+        assert!(!should_anchor_baseline(&[
+            "".to_string(),
+            "   ".to_string()
+        ]));
         assert!(should_anchor_baseline(&["".to_string(), "out".to_string()]));
     }
 }

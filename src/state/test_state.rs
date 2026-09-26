@@ -40,6 +40,13 @@ static TEST_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 #[cfg(test)]
 pub(crate) fn isolated_state() -> (super::AppState, TestStateDir) {
+    isolated_state_with_forum(None)
+}
+
+/// Forum-mode isolated state: typing tasks need `cfg.forum` (they
+/// no-op in DM), so cancel/typing ownership tests mint with a chat id.
+#[cfg(test)]
+pub(crate) fn isolated_state_with_forum(forum: Option<i64>) -> (super::AppState, TestStateDir) {
     let guard = TEST_ENV_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let old = std::env::var_os("HERDR_STATE_DIR");
     let old_home = std::env::var_os("HOME");
@@ -61,7 +68,7 @@ pub(crate) fn isolated_state() -> (super::AppState, TestStateDir) {
         token: "test-token".to_string(),
         socket: "nonexistent-test.sock".to_string(),
         owners: vec![],
-        forum: None,
+        forum,
     };
     let s = State::new(cfg).expect("test state");
     (

@@ -132,14 +132,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // must not wait behind up to 10s of dial.
         if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
             // Split to `runner_cancel::reopen_events` (300-line file limit).
-            match super::runner_cancel::reopen_events(
-                &s,
-                &pane,
-                &job,
-                &mut ev,
-                &mut last_open,
-            )
-            .await
+            match super::runner_cancel::reopen_events(&s, &pane, &job, &mut ev, &mut last_open)
+                .await
             {
                 super::runner_cancel::Reopen::Break => break,
                 // Epoch moved (or stopped): skip the dial entirely —
@@ -234,6 +228,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
                 &mut retry_wait,
                 &mut settled_since,
                 episode.error_stuck(std::time::Instant::now()),
+                last_epoch,
             )
             .await
             {
@@ -262,7 +257,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
         // Stream whatever is new into the accumulator (see live.rs
         // for the baseline/delta details).
-        super::live::stream_live(&s, &job, screen, &mut acc).await;
+        super::live::stream_live(&job, screen, &mut acc).await;
     }
 
     // Every `break` above converges here: single abort site for the

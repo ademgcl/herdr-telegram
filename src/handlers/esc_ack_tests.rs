@@ -25,3 +25,24 @@ async fn test_heal_stripped_spawns_without_blocking() {
         "heal schedule blocked instead of spawning"
     );
 }
+
+#[test]
+fn test_esc_unchanged_pages_only_true_stayput() {
+    // Escape dialog_moved ORDER (regression): the raced-dialog check
+    // runs first — a moved screen must follow, never page "still
+    // blocked" ahead of the follower (misreports a moved dialog); an
+    // unreadable re-read follows (never page on a blip); only a true
+    // stay-put pages.
+    let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let dlg = v(&[
+        "△ Permission required",
+        "Allow once   Allow always   Reject",
+    ]);
+    let working = v(&["⠋ working…", "editing src/main.rs"]);
+    assert_eq!(esc_unchanged(&dlg, &working), EscStay::FollowMoved);
+    assert_eq!(esc_unchanged(&dlg, &[]), EscStay::FollowUnread);
+    assert_eq!(esc_unchanged(&dlg, &dlg), EscStay::Page);
+    // Turned-over non-empty screen is moved, not stay-put.
+    let after = v(&["Confirm apply?", "Confirm   Cancel"]);
+    assert_eq!(esc_unchanged(&dlg, &after), EscStay::FollowMoved);
+}

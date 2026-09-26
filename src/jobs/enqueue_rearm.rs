@@ -1,9 +1,7 @@
 //! Post-submit re-arm: mint a watcher when the submit landed on a
 //! retired job. Split from `enqueue` (300-line file limit).
 use super::runner::watch_job;
-use crate::{
-    herdr::client::read_screen_adaptive, jobs::job::Job, state::AppState,
-};
+use crate::{herdr::client::read_screen_adaptive, jobs::job::Job, state::AppState};
 use std::sync::Arc;
 
 /// Re-arm a watcher for delivered-but-watcherless books (see
@@ -60,11 +58,7 @@ pub(crate) async fn rearm_watcher(
                 // watcher for dead intent — tear down our own insert.
                 if !s.pending_matches(pane, chat_id, thread_id, text).await {
                     let mut map = s.jobs.lock().await;
-                    if map
-                        .get(pane)
-                        .map(|j| Arc::ptr_eq(j, &j2))
-                        .unwrap_or(false)
-                    {
+                    if map.get(pane).map(|j| Arc::ptr_eq(j, &j2)).unwrap_or(false) {
                         map.remove(pane);
                     }
                     return;

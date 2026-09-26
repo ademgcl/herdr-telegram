@@ -6,9 +6,7 @@
 use crate::{
     herdr::client::read_screen_adaptive,
     jobs::{
-        arbitrate::select_final_body,
-        books::settle_books,
-        finalize_blocked::try_finalize_blocked,
+        arbitrate::select_final_body, books::settle_books, finalize_blocked::try_finalize_blocked,
         job::Job,
     },
     notifier::observe_status,

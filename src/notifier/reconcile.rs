@@ -174,14 +174,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // Already-shell panes run shell commands, not
                             // agents: their pending intent is live work.
                             // Only a fresh agent→shell flip owns the
-                            // vanished-agent retire below. Status is
-                            // volatile (empty at boot), so an unknown
-                            // status consults the durable shell marker
-                            // (creation tag/icon) before crying flip.
-                            let was_shell = match s.status.lock().await.get(&pane).cloned() {
-                                Some(st) => st == "shell",
-                                None => s.topics.is_shell_tagged(&pane),
-                            };
+                            // vanished-agent retire below.
                             // Agent gone (shell reuse): its stall episode dies here
                             // or the next agent on this pane name inherits stale
                             // dedup (working flicker no longer clears — only
@@ -210,12 +203,13 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                             // active shell command — a blind retire here
                             // ate it every tick, so long runs posted only
                             // their start card and never the follow-up.
-                            let owed = s.pending.lock().await.get(&pane).cloned();
-                            // Live-only: a stopped corpse between
-                            // mark_stopped() and map removal must not
-                            // read as an active watcher (else Ignore
-                            // misroutes to CancelJob/RetireVanished).
-                            let has_job = s.job_live(&pane).await;
+                            // All three classify inputs read together,
+                            // immediately before classify (single source:
+                            // shell_reuse_inputs — an early was_shell went
+                            // stale vs owed/job across the side-effect
+                            // awaits above and skipped RetireVanished).
+                            let (owed, has_job, was_shell) =
+                                crate::handlers::shell_common::shell_reuse_inputs(s, &pane).await;
                             match classify_shell_reuse(was_shell, owed.is_some(), has_job) {
                                 ShellReuse::Ignore => {
                                     s.status

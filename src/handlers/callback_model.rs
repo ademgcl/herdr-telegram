@@ -28,18 +28,20 @@ pub(crate) async fn handle_model_tap(
     r: &str,
 ) {
     let Some((idx, pane)) = r.split_once(':') else {
-        // Malformed tap (no pane): visible ack like B:/X: arms, never a
-        // silent drop — a dead spinner looks wedged.
-        s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+        // Malformed tap (no pane): notice beside the card — an in-place
+        // `edit_msg(None)` would drop the live keyboard (Telegram omits
+        // `reply_markup` ⇒ removes buttons). A dead spinner looks wedged.
+        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
             .await;
         return;
     };
     if idx == "list" {
         // Fail-closed like the K/R arms: an unreadable herdr never moves
         // focus, remembers routing, or renders a "?" card (ambiguous
-        // read → no write, visible retry).
+        // read → no write, visible retry). Notice keeps the picker
+        // keyboard for the retry tap (`edit_msg(None)` would strip it).
         let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
-            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
         };
@@ -64,16 +66,17 @@ pub(crate) async fn handle_model_tap(
         return;
     }
     let Ok(i) = idx.parse::<usize>() else {
-        s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+        s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
             .await;
         return;
     };
     let Some((filter, marker)) = super::model_parse::free_tap(i) else {
         // Out-of-range index (stale shortlist button): fresh picker beats
         // a dead end — the next tap can't miss. Fail-closed like M:list:
-        // an unreadable herdr refuses instead of rendering a "?" card.
+        // an unreadable herdr refuses with a notice so the live picker
+        // keyboard survives (`edit_msg(None)` would strip it).
         let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
-            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
         };
@@ -161,6 +164,8 @@ pub(crate) async fn handle_model_tap(
                 // "Contributor" filter): swap the dead card for a fresh one
                 // so the next tap can't miss. Fail-closed like M:list.
                 let Ok(agent) = get_agent(&s.cfg.socket, pane).await else {
+                    // Progress already stripped the keyboard: edit the
+                    // text in place (no live buttons left to drop).
                     s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                     return;

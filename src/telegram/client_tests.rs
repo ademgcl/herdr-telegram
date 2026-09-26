@@ -49,18 +49,36 @@ fn test_is_unauthorized_matches_token_death_only() {
         "Bad Request: chat not found"
     ));
     // Wrapped non-JSON 404: `call` maps decode failures to
-    // `telegram http 404: Not Found (…)` — matched via the `: Not Found`
-    // arm and the http-404+marker arm alike.
+    // `telegram http 404: Not Found (…)` — body-preserved marker,
+    // no `service unavailable` shield.
     assert!(TelegramClient::is_unauthorized(
         "telegram http 404: Not Found (cannot parse response)"
     ));
-    assert!(TelegramClient::is_unauthorized(
-        "telegram http 404 Not Found: service unavailable ((Not Found error)"
+    // Status Display injects "Not Found" into every `http 404 Not Found`
+    // wrapper — a proxy/intermediary HTML 404 must never FATAL-exit a
+    // healthy daemon (only bare/token-death shapes are unauthorized).
+    assert!(!TelegramClient::is_unauthorized(
+        "telegram http 404 Not Found: service unavailable (<html>404 Not Found</html> unexpected token)"
+    ));
+    assert!(!TelegramClient::is_unauthorized(
+        "telegram http 404 Not Found: service unavailable ((unexpected)"
     ));
     // A proxy-404 wrapper without a Not Found marker is a blip, never
     // token death (must not FATAL-exit a healthy daemon into a stop).
     assert!(!TelegramClient::is_unauthorized(
         "telegram http 404: service unavailable (<html>proxy error)"
+    ));
+    // Status-injected 401 must never FATAL: StatusCode Display writes
+    // `401 Unauthorized:` into every wrapper, and the `service
+    // unavailable` arm (proxy/intermediary fault) never carries a real
+    // body marker past the shield.
+    assert!(!TelegramClient::is_unauthorized(
+        "telegram http 401 Unauthorized: service unavailable (<html>proxy auth required)"
+    ));
+    // A body-preserved Unauthorized marker (raw body arm, no shield)
+    // IS a dead token even inside a wrapper.
+    assert!(TelegramClient::is_unauthorized(
+        "telegram http 401 Unauthorized: Unauthorized (cannot parse response)"
     ));
     // But a bare 404-ish number elsewhere is not token death.
     assert!(!TelegramClient::is_unauthorized("retry after 404s"));
@@ -138,23 +156,50 @@ fn test_retry_after_parsing() {
 }
 
 #[test]
-fn test_retry_after_caps_huge_waits_and_overflow() {
+fn test_retry_after_uncapped_so_callers_can_fail_fast() {
     use std::time::Duration;
-    // Uncapped, `retry after 1000000` would stall the caller for ~11
-    // days — the cap bounds every retry loop (≤3 waits × cap).
+    // Uncapped: over-cap waits surface raw so `flood_wait_exceeds_cap`
+    // fails the caller fast (cap-in-parse made 11-day waits look
+    // sleepable and stalled a tick for the full 60s every retry).
     assert_eq!(
         TelegramClient::retry_after("Too Many Requests: retry after 1000000"),
-        Some(Duration::from_secs(TelegramClient::MAX_FLOOD_WAIT_SECS))
+        Some(Duration::from_secs(1_000_001))
     );
     // u64::MAX parses but must not overflow the +1 bias.
     assert_eq!(
         TelegramClient::retry_after(&format!("retry after {}", u64::MAX)),
-        Some(Duration::from_secs(TelegramClient::MAX_FLOOD_WAIT_SECS))
+        Some(Duration::from_secs(u64::MAX))
     );
-    // Small waits keep the +1s bias under the cap.
+    // Within-cap waits keep the +1s bias and are sleepable.
     assert_eq!(
         TelegramClient::retry_after("retry after 30"),
         Some(Duration::from_secs(31))
+    );
+    // The cap gate is the single fail-fast verdict for every caller.
+    assert!(!TelegramClient::flood_wait_exceeds_cap(
+        Duration::from_secs(31)
+    ));
+    assert!(TelegramClient::flood_wait_exceeds_cap(Duration::from_secs(
+        1_000_001
+    )));
+}
+
+#[test]
+fn test_send_stage_transient_includes_mid_request_reset() {
+    // Pure flag matrix: mid-request resets (`is_request`) must tag
+    // transient — connect/timeout alone miss "connected then dropped".
+    // Mirrors `send_stage_transient`'s OR (reqwest::Error is not
+    // constructible in tests).
+    let classified = |is_connect: bool, is_timeout: bool, is_request: bool, server: bool| {
+        is_connect || is_timeout || is_request || server
+    };
+    assert!(classified(false, false, true, false), "mid-request reset");
+    assert!(classified(true, false, false, false), "connect refused");
+    assert!(classified(false, true, false, false), "deadline");
+    assert!(classified(false, false, false, true), "HTTP 5xx");
+    assert!(
+        !classified(false, false, false, false),
+        "builder/redirect never transient"
     );
 }
 

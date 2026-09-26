@@ -110,6 +110,10 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
                 || cur.prompt != pp.prompt
                 || cur.started_unix != pp.started_unix)
         {
+            // Racer owns the slot — undo our `shell` status claim or the
+            // live turn is hidden from the limit scanner / spontaneous
+            // suppress forever (restore_status parity with the early arms).
+            restore_status(s, pane, prev_status).await;
             return;
         }
     }
@@ -158,5 +162,109 @@ pub async fn retire_vanished(s: &AppState, pane: &str, owed: Option<PendingPromp
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs::persist::PendingPrompt;
+    use crate::state::cancel::isolated_state;
+
+    fn pp(prompt: &str, stamp: u64) -> PendingPrompt {
+        PendingPrompt {
+            chat: 1,
+            thread: None,
+            prompt: prompt.into(),
+            started_unix: stamp,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_restore_status_undoes_shell_claim_only() {
+        // The report-slot claim belongs to the dead turn: restore puts
+        // the prior value back ONLY while the slot still reads "shell"
+        // (a live successor's status must never be clobbered).
+        let (s, _dir) = isolated_state();
+        // Vacant: nothing to undo.
+        restore_status(&s, "t:p1", Some("working".into())).await;
+        assert!(!s.status.lock().await.contains_key("t:p1"));
+        // Claimed shell + prior value → restored.
+        s.status.lock().await.insert("t:p1".into(), "shell".into());
+        restore_status(&s, "t:p1", Some("working".into())).await;
+        assert_eq!(s.status.lock().await["t:p1"], "working");
+        // Claimed shell + no prior → removed (boot-empty parity).
+        s.status.lock().await.insert("t:p1".into(), "shell".into());
+        restore_status(&s, "t:p1", None).await;
+        assert!(!s.status.lock().await.contains_key("t:p1"));
+        // Successor flipped the slot off shell: leave it alone.
+        s.status
+            .lock()
+            .await
+            .insert("t:p1".into(), "working".into());
+        restore_status(&s, "t:p1", Some("idle".into())).await;
+        assert_eq!(s.status.lock().await["t:p1"], "working");
+    }
+
+    #[tokio::test]
+    async fn test_retire_vanished_turned_over_restores_status_keeps_successor() {
+        // Racer-owned slot (stamp mismatch): the shell claim must be
+        // undone (or the live turn hides from limit scan / spontaneous
+        // forever) and the successor's pending + waiter job survive.
+        let (s, _dir) = isolated_state();
+        s.status
+            .lock()
+            .await
+            .insert("t:p1".into(), "working".into());
+        s.pending
+            .lock()
+            .await
+            .insert("t:p1".into(), pp("fresh", 99));
+        let job = crate::jobs::job::Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), job.clone());
+        retire_vanished(&s, "t:p1", Some(pp("corpse", 42))).await;
+        assert_eq!(
+            s.status.lock().await["t:p1"],
+            "working",
+            "shell claim must be restored for the successor"
+        );
+        assert_eq!(s.pending.lock().await["t:p1"].prompt, "fresh");
+        assert_eq!(s.pending.lock().await["t:p1"].started_unix, 99);
+        assert!(
+            !s.jobs.lock().await.contains_key("t:p1"),
+            "stale corpse watcher still retires job-only"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retire_vanished_late_pending_restores_status() {
+        // owed=None (job-only flip) with a submit landing mid-flight:
+        // job-only retire, status restored — the fresh intent serves its
+        // own reply, never hidden behind the shell claim.
+        let (s, _dir) = isolated_state();
+        s.status
+            .lock()
+            .await
+            .insert("t:p1".into(), "working".into());
+        let job = crate::jobs::job::Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), job.clone());
+        s.pending.lock().await.insert("t:p1".into(), pp("late", 7));
+        retire_vanished(&s, "t:p1", None).await;
+        assert_eq!(s.status.lock().await["t:p1"], "working");
+        assert_eq!(s.pending.lock().await["t:p1"].prompt, "late");
+        assert!(!s.jobs.lock().await.contains_key("t:p1"));
+    }
+
+    #[tokio::test]
+    async fn test_retire_vanished_double_claim_stands_down() {
+        // Concurrent tick already claimed the report slot ("shell"):
+        // the loser returns before any retire — never double-report.
+        let (s, _dir) = isolated_state();
+        s.status.lock().await.insert("t:p1".into(), "shell".into());
+        let job = crate::jobs::job::Job::new(vec![], 1, None);
+        s.jobs.lock().await.insert("t:p1".into(), job.clone());
+        retire_vanished(&s, "t:p1", None).await;
+        assert_eq!(s.status.lock().await["t:p1"], "shell");
+        assert!(s.jobs.lock().await.contains_key("t:p1"));
     }
 }

@@ -34,3 +34,16 @@ fn test_count_topics_parses_store_not_lines() {
     assert_eq!(count_topics_in_text(r#"{"w1:p1":1}"#), 1);
     assert_eq!(count_topics_in_text("not json"), 0);
 }
+
+#[test]
+fn test_follow_pos_after_shrink_resets_to_zero() {
+    // Rotation/truncate: the new file is shorter than the cursor —
+    // re-read from 0, never clamp to EOF (that skips the whole
+    // replacement and follow sits idle on a file it never prints).
+    assert_eq!(follow_pos_after(1000, 100), 0);
+    assert_eq!(follow_pos_after(1, 0), 0);
+    // Unchanged / growth keep the append cursor.
+    assert_eq!(follow_pos_after(100, 100), 100);
+    assert_eq!(follow_pos_after(100, 200), 100);
+    assert_eq!(follow_pos_after(0, 0), 0);
+}

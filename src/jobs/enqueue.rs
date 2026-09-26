@@ -125,36 +125,21 @@ pub async fn enqueue_prompt(
                 req.chat_id,
                 req.message_thread_id,
                 &pane,
-                &format!("⚠️ error: {}", crate::types::mask_home(&e.to_string())),
+                &crate::ui::error_card(&e.to_string()),
             )
             .await;
         }
-        // Live re-read (never the pre-report snapshot): a concurrent
-        // success landing during the report bumped pending — retiring on
-        // a stale owed==0 would wipe its cover + durable intent.
-        if *job.pending.lock().await > 0 {
-            return;
+        // Live re-read + retire under ONE pending hold (retire_if_idle):
+        // a concurrent success must not land cover between the zero-read
+        // and the stop — rearm_verdict would see live self, skip rearm,
+        // and the delivered prompt strands watcherless.
+        if retire_if_idle(&s, &pane, &job).await {
+            // Stop our typing now: a parked watcher (5s tick / 60s
+            // backoff) would else type into the void until it exits —
+            // shell-aware (a racing shell submit's pending keeps its
+            // task; an agent successor re-mints via jobs).
+            s.stop_shell_typing(&pane).await;
         }
-        // Nothing owed: retire the map entry synchronously so the next
-        // enqueue starts clean (never clear the durable slot here: any
-        // intent present belongs to a racing shell/corpsed submit).
-        // No notify: the watcher exits silently at its loop top.
-        job.mark_stopped();
-        {
-            let mut map = s.jobs.lock().await;
-            if map
-                .get(&pane)
-                .map(|j| Arc::ptr_eq(j, &job))
-                .unwrap_or(false)
-            {
-                map.remove(&pane);
-            }
-        }
-        // Stop our typing now: a parked watcher (5s tick / 60s backoff)
-        // would else type into the void until it exits — shell-aware (a
-        // racing shell submit's pending keeps its task; an agent
-        // successor re-mints via jobs).
-        s.stop_shell_typing(&pane).await;
         return;
     }
     // Stopped mid-submit (cancel or a concurrent fail-path retire): the
@@ -251,3 +236,32 @@ pub async fn enqueue_prompt(
         .await;
     }
 }
+
+/// Fail-path retire: zero-check + `mark_stopped` + map remove under ONE
+/// `job.pending` hold. `publish_submit` bumps cover under the same lock,
+/// so a racing success cannot land between the read and the stop (else
+/// `rearm_verdict` sees live self, returns, and the delivered prompt
+/// strands with durable intent but no watcher). Never clears the durable
+/// slot — any intent present belongs to a racing shell/corpsed submit.
+/// Lock order `pending`→`jobs`: nothing nests `jobs`→`job.pending`
+/// (state's `pending` map is a different lock; cancel keeps jobs→that).
+/// True when retired (nothing owed).
+async fn retire_if_idle(s: &AppState, pane: &str, job: &Arc<Job>) -> bool {
+    let owed = job.pending.lock().await;
+    if *owed > 0 {
+        return false;
+    }
+    job.mark_stopped();
+    {
+        let mut map = s.jobs.lock().await;
+        if map.get(pane).map(|j| Arc::ptr_eq(j, job)).unwrap_or(false) {
+            map.remove(pane);
+        }
+    }
+    drop(owed);
+    true
+}
+
+#[cfg(test)]
+#[path = "enqueue_tests.rs"]
+mod tests;

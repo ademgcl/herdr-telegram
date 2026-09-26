@@ -1,5 +1,6 @@
 //! herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer
 //! over local Unix socket RPC. Init + poll/watchdog loop live here.
+mod boot;
 mod config;
 mod ctl;
 mod ctl_auth;
@@ -20,13 +21,13 @@ mod ui;
 
 use crate::{
     config::cfg_from_env,
-    herdr::{event_task, ping},
+    herdr::event_task,
     jobs::recover_pending,
     notifier::reconcile,
     shutdown::{shutdown_signal, sleep_or_shutdown},
     state::State,
     telegram::{get_updates, handle_update},
-    types::{HERDR_PROTOCOL, Res, TG_POLL_SECS, home_masked},
+    types::{Res, TG_POLL_SECS, home_masked},
 };
 use std::time::Duration;
 
@@ -67,53 +68,8 @@ async fn main() -> Res<()> {
     let s = State::new(cfg)?;
     tokio::spawn(ctl::run_control_server(s.clone(), listener));
 
-    // Verify Herdr connectivity and protocol
-    let mut pong = None;
-    let mut ping_err = String::new();
-    for attempt in 1..=5 {
-        match ping(&s.cfg.socket).await {
-            Ok(p) => {
-                pong = Some(p);
-                break;
-            }
-            Err(e) => {
-                ping_err = crate::types::mask_home(&e.to_string());
-                if attempt == 5 {
-                    break;
-                }
-                eprintln!(
-                    "[herdr] ping failed (attempt {attempt}/5): {ping_err} — retrying in 10s"
-                );
-                // Signal-aware: a deaf 40s boot stall starves TERM.
-                tokio::select! {
-                    _ = shutdown_signal() => return Ok(()),
-                    _ = tokio::time::sleep(Duration::from_secs(10)) => {}
-                }
-            }
-        }
-    }
-    let Some(pong) = pong else {
-        return Err(format!("herdr ping failed after 5 attempts: {ping_err}").into());
-    };
-    println!(
-        "[herdr] server v{}, protocol {} (bot built against protocol {HERDR_PROTOCOL})",
-        pong["version"], pong["protocol"]
-    );
-    if pong["protocol"].as_u64() != Some(HERDR_PROTOCOL) {
-        eprintln!("[herdr] WARNING: unexpected protocol version — commands may fail");
-    }
-
-    if s.cfg.forum.is_some() {
-        println!("[telegram] forum supergroup mode enabled (chat id masked)");
-    } else {
-        println!("[telegram] operating in direct message mode");
-    }
-
-    // Register Telegram menu commands without failing the boot: the
-    // menu persists server-side once set, so an outage at boot must not
-    // crash-loop the process under launchd — converge in background.
-    s.tg.clone().spawn_menu_sync();
-
+    // Herdr ping, mode banner, menu, forum probes (split: boot.rs).
+    crate::boot::boot(&s).await?;
     // Re-arm prompt watchers orphaned by a restart FIRST (replies would
     // else be lost), then seed agent status without alert noise. Order
     // matters: the seed retire paths (dead-pane silent close,
@@ -122,47 +78,6 @@ async fn main() -> Res<()> {
     // an empty in-memory status would misclassify live shells as fresh
     // flips (ghost quit card). Recovered watchers racing the seed lose
     // deterministically to its last-writer-wins retires.
-    if let Some(forum_id) = s.cfg.forum {
-        // F9: probe bot permissions in forum supergroup
-        match s.tg.check_forum_permissions(forum_id).await {
-            Ok(perms) => {
-                if !perms.is_admin {
-                    eprintln!("[telegram] WARNING: bot is NOT an admin in the forum!");
-                } else {
-                    println!(
-                        "[telegram] bot permissions: manage_topics={}, delete_messages={}",
-                        perms.can_manage_topics, perms.can_delete_messages
-                    );
-                    if !perms.can_manage_topics {
-                        eprintln!("[telegram] WARNING: bot lacks 'can_manage_topics' admin right!");
-                    }
-                }
-            }
-            Err(e) => eprintln!(
-                "[telegram] permission probe failed: {}",
-                s.tg.redact(&e.to_string())
-            ),
-        }
-
-        // F4: verify custom emoji topic icon stickers
-        match s.tg.get_forum_topic_icon_stickers().await {
-            Ok(stickers) => {
-                let missing = topics::names::check_context_icons(&stickers);
-                if missing.is_empty() {
-                    println!(
-                        "[telegram] forum icon stickers verified ({} available; kind glyphs valid)",
-                        stickers.len()
-                    );
-                } else {
-                    eprintln!("[telegram] WARNING: kind icon stickers missing in set: {missing:?}");
-                }
-            }
-            Err(e) => eprintln!(
-                "[telegram] forum icon stickers probe failed: {}",
-                s.tg.redact(&e.to_string())
-            ),
-        }
-    }
     recover_pending(&s).await;
     // Seed agent status without emitting alert noise
     reconcile(&s, true, "seed").await;
@@ -226,6 +141,8 @@ async fn main() -> Res<()> {
                         if !list.is_empty() {
                             println!("[tg] poll ok: {} update(s)", list.len());
                         }
+                        let batch_len = list.len();
+                        let mut handled = 0u32;
                         for u in list {
                             let id = u["update_id"].as_u64().unwrap_or(0);
                             // Poison id 0 (no update_id) would re-submit
@@ -251,6 +168,26 @@ async fn main() -> Res<()> {
                             // a mid-batch crash would replay handled prompts
                             // as duplicate submits).
                             s.save_offset().await;
+                            handled += 1;
+                        }
+                        // All-poison batch: id 0 never acks, so the same
+                        // undeliverable window would re-fetch forever
+                        // (Telegram returns immediately when updates are
+                        // pending — hot loop). Step the offset and back off.
+                        if batch_len > 0 && handled == 0 {
+                            {
+                                let mut off = s.offset.lock().await;
+                                *off = crate::shutdown::poison_advance_offset(*off);
+                            }
+                            s.save_offset().await;
+                            poll_fails = poll_fails.saturating_add(1);
+                            let wait = crate::telegram::polling::poll_backoff_secs(poll_fails);
+                            eprintln!("[tg] poison-only batch ({batch_len}), backing off {wait}s");
+                            if sleep_or_shutdown(wait).await {
+                                println!("[main] shutdown signal during backoff — saving offset");
+                                s.save_offset().await;
+                                return Ok(());
+                            }
                         }
                     }
                     Err(e) => {

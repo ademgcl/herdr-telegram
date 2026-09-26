@@ -39,3 +39,14 @@ pub fn is_stuck_gated(kind: &str) -> bool {
 pub fn needs_stuck_gate(hit: &LimitHit) -> bool {
     is_stuck_gated(hit.kind) || (hit.kind == "auth" && !hit.strong)
 }
+
+/// Kinds that never page mid-run: transient auto-retry noise the agent
+/// recovers from on its own (overload flashes, `[retrying attempt #N]`
+/// banners that succeed seconds later). Worse, agent prose discussing
+/// upstream handling trips the WEAK `provider` match and persists on
+/// screen past the stuck gate — paging it is pure noise. Single source:
+/// both buzz paths (`jobs::episode::tick`, `notifier::limits`) consult
+/// this, so a newly-silenced kind stays silent everywhere.
+pub fn is_transient_silent(kind: &str) -> bool {
+    kind == "provider"
+}

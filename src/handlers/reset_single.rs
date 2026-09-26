@@ -59,6 +59,17 @@ pub fn spawn_single_topic_reset(s: &AppState, chat: i64, thread_id: Option<i64>,
     });
 }
 
+/// Never-silent Err arm (single source, structural-test pinned): the
+/// spawn discards Err — a bare `return Err` looks wedged with no ack.
+/// Sends only when `chat != 0` (chat 0 = internal/structural call — no
+/// surface, no network), always returns Err(msg).
+async fn refuse_reset(s: &AppState, chat: i64, thread_id: Option<i64>, msg: &str) -> Res<String> {
+    if chat != 0 {
+        s.tg.send_msg(chat, thread_id, msg, None).await;
+    }
+    Err(msg.to_string().into())
+}
+
 pub async fn run_single_topic_reset(
     s: &AppState,
     chat: i64,
@@ -66,42 +77,31 @@ pub async fn run_single_topic_reset(
     target: &str,
 ) -> Res<String> {
     let Some(forum) = s.cfg.forum else {
-        // DM-mode ack parity with the paced reset: an explicit command
-        // must never go silent (the spawn discards our Err).
-        let msg = crate::ui::RESET_FORUM_ONLY;
-        if chat != 0 {
-            s.tg.send_msg(chat, thread_id, msg, None).await;
-        }
-        return Err(msg.into());
+        return refuse_reset(s, chat, thread_id, crate::ui::RESET_FORUM_ONLY).await;
     };
 
     // F9: permission guard
     if let Ok(perms) = s.tg.check_forum_permissions(forum).await
         && !perms.can_manage_topics
     {
-        let msg = crate::ui::RESET_NO_PERM;
-        if chat != 0 {
-            s.tg.send_msg(chat, thread_id, msg, None).await;
-        }
-        return Err(msg.into());
+        return refuse_reset(s, chat, thread_id, crate::ui::RESET_NO_PERM).await;
     }
 
     // Share the paced-reset lock: without it the watchdog renames the
     // topic mid-mint and a concurrent paced reset double-migrates it.
     let Some(_guard) = super::reset::try_begin_reset() else {
-        let msg = crate::ui::RESET_BUSY;
-        if chat != 0 {
-            s.tg.send_msg(chat, thread_id, msg, None).await;
-        }
-        return Err(msg.into());
+        return refuse_reset(s, chat, thread_id, crate::ui::RESET_BUSY).await;
     };
 
     let pane = match split_reset_target(target) {
-        Ok(th) => s
-            .topics
-            .storage
-            .get_pane(th)
-            .ok_or_else(|| format!("no pane found for topic #{th}"))?,
+        Ok(th) => match s.topics.storage.get_pane(th) {
+            Some(p) => p,
+            // Never silent (spawn discards Err — silence looks wedged).
+            None => {
+                let msg = format!("no pane found for topic #{th}");
+                return refuse_reset(s, chat, thread_id, &msg).await;
+            }
+        },
         Err(p) => p,
     };
 
@@ -112,11 +112,13 @@ pub async fn run_single_topic_reset(
         pane_facts(&s.cfg.socket).await.ok(),
         tab_labels(&s.cfg.socket).await.ok(),
     ) else {
-        let msg = "⚠️ reset aborted: herdr read failed, topic untouched";
-        if chat != 0 {
-            s.tg.send_msg(chat, thread_id, msg, None).await;
-        }
-        return Err(msg.into());
+        return refuse_reset(
+            s,
+            chat,
+            thread_id,
+            "⚠️ reset aborted: herdr read failed, topic untouched",
+        )
+        .await;
     };
     let census = tab_census(&facts);
 
@@ -124,10 +126,7 @@ pub async fn run_single_topic_reset(
     // never mint a ghost topic for a name herdr never reported.
     if !facts.contains_key(&pane) {
         let msg = format!("⚠️ no such pane `{pane}` — see /agents");
-        if chat != 0 {
-            s.tg.send_msg(chat, thread_id, &msg, None).await;
-        }
-        return Err(msg.into());
+        return refuse_reset(s, chat, thread_id, &msg).await;
     }
 
     let had_job = s.cancel_jobs_for(&pane).await;
@@ -199,10 +198,7 @@ pub async fn run_single_topic_reset(
         }
         None => {
             let msg = format!("⚠️ Failed to reset topic for {pane}");
-            if chat != 0 {
-                s.tg.send_msg(chat, thread_id, &msg, None).await;
-            }
-            Err(msg.into())
+            refuse_reset(s, chat, thread_id, &msg).await
         }
     }
 }
@@ -218,5 +214,28 @@ mod tests {
         assert_eq!(split_reset_target("  #627  "), Ok(627));
         assert_eq!(split_reset_target("w1:p2"), Err("w1:p2".to_string()));
         assert_eq!(split_reset_target(""), Err("".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_refuse_reset_chat0_still_errs_silently() {
+        // chat 0 = no surface (never network); the Err still carries
+        // the message so the spawn's discard never eats the verdict.
+        let (s, _dir) = crate::state::cancel::isolated_state();
+        let e = refuse_reset(&s, 0, None, "boom").await.unwrap_err();
+        assert_eq!(e.to_string(), "boom");
+    }
+
+    #[test]
+    fn test_run_single_topic_reset_never_bare_err() {
+        // Structural pin: every Err arm routes through refuse_reset
+        // (never silent when a chat surface exists). A bare
+        // `return Err(` would ship a wedged, unacked reset. Slice to
+        // the fn body — this test's own string literal must not self-match.
+        let src = include_str!("reset_single.rs");
+        let body = &src[..src.find("#[cfg(test)]").expect("tests module")];
+        assert!(
+            !body.contains("return Err("),
+            "reset Err arms must go through refuse_reset"
+        );
     }
 }

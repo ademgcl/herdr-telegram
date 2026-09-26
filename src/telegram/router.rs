@@ -79,14 +79,17 @@ pub async fn handle_update(s: AppState, u: &Value) {
     // (wedging kind-heal until the next manual clear). Stale or dateless
     // icon edits drop — fail-closed, no write on ambiguous (renames stay
     // fresh-agnostic: see below. Text re-checks with its loud notice).
-    let msg_fresh = msg["date"].as_u64().map(|d| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .saturating_sub(d)
-            <= STALE_SECS
-    }).unwrap_or(false);
+    let msg_fresh = msg["date"]
+        .as_u64()
+        .map(|d| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(d)
+                <= STALE_SECS
+        })
+        .unwrap_or(false);
 
     // User customized topic icon in Telegram: persist so bot never overwrites it.
     // Same forum gate as renames below: thread ids are small ints that

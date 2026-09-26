@@ -130,6 +130,96 @@ fn test_settle_commit_fatal_stuck_bypasses_gate() {
 }
 
 #[tokio::test]
+async fn test_settle_step_loop_epoch_mismatch_clears_arm() {
+    // Generation-bound arm: a submit landing after the runner's
+    // loop-top load but before snapshot_entry moves entry_epoch off
+    // loop_epoch — the arm from the old generation must clear, never
+    // back the new turn's commit. Checked before any select/RPC, so
+    // this returns promptly with no herdr/Telegram.
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    let job = crate::jobs::job::Job::new(Vec::new(), 1, None);
+    // Arm under loop_epoch 0, then a submit bumps the epoch to 1.
+    let mut since: SettledArm = Some((Instant::now(), "done".to_string()));
+    job.epoch.store(1, std::sync::atomic::Ordering::Relaxed);
+    let mut acc = Vec::new();
+    let mut retry_wait = 5u64;
+    let step = settle_step(
+        &s,
+        "w:p1",
+        &job,
+        "done",
+        &mut acc,
+        &mut retry_wait,
+        &mut since,
+        false,
+        0, // runner still believes generation 0
+    )
+    .await;
+    assert!(matches!(step, SettleStep::Continue));
+    assert!(
+        since.is_none(),
+        "old-generation arm must clear, never commit the new turn"
+    );
+}
+
+#[tokio::test]
+async fn test_settle_step_matching_epoch_reaches_recheck_gate() {
+    // Matching loop_epoch falls through to the existing stopped/epoch
+    // gates (a stopped job still returns Continue with arm cleared —
+    // never finalize a retired job's stale screen).
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    let job = crate::jobs::job::Job::new(Vec::new(), 1, None);
+    job.mark_stopped();
+    let mut since: SettledArm = Some((Instant::now(), "done".to_string()));
+    let mut acc = Vec::new();
+    let mut retry_wait = 5u64;
+    let step = settle_step(
+        &s,
+        "w:p1",
+        &job,
+        "done",
+        &mut acc,
+        &mut retry_wait,
+        &mut since,
+        false,
+        0,
+    )
+    .await;
+    assert!(matches!(step, SettleStep::Continue));
+    assert!(since.is_none());
+}
+
+#[tokio::test]
+async fn test_settle_step_zero_pending_returns_before_confirm() {
+    // Watcher spawned before publish_submit: pending still 0, epochs
+    // match — must return before the 750ms confirm (and never finalize
+    // the pre-submit screen as the reply).
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    let job = crate::jobs::job::Job::new(Vec::new(), 1, None);
+    let mut since: SettledArm = Some((Instant::now(), "done".to_string()));
+    let mut acc = Vec::new();
+    let mut retry_wait = 5u64;
+    let step = tokio::time::timeout(
+        Duration::from_millis(100),
+        settle_step(
+            &s,
+            "w:p1",
+            &job,
+            "done",
+            &mut acc,
+            &mut retry_wait,
+            &mut since,
+            false,
+            0,
+        ),
+    )
+    .await
+    .expect("zero pending must return before the 750ms confirm");
+    assert!(matches!(step, SettleStep::Continue));
+    assert!(since.is_none(), "unpaid arm must clear, never commit later");
+}
+
+#[tokio::test]
 async fn test_sleep_or_superseded_exits_on_stop_and_epoch() {
     // A stopped job (failed-submit retire: no notify, no epoch bump) must
     // not park the backoff for the full minute — the loop top retires it.

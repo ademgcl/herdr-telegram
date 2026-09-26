@@ -25,6 +25,26 @@ pub(crate) fn pick_resume(
     prev.unwrap_or((wpane, at))
 }
 
+/// Same-generation consume + focus-follow (single source for the DM /
+/// forum / General typewait success arms): drop only THIS arm's
+/// generation — a re-arm during the slow send owns the next message —
+/// then focus the pane that just took the answer so the next bare
+/// message routes there (send parity). No I/O: tests pin both halves.
+pub(crate) async fn finish_typed_answer(
+    s: &crate::state::AppState,
+    key: (i64, Option<i64>),
+    at: std::time::Instant,
+    wpane: &str,
+) {
+    {
+        let mut tw = s.typewait.lock().await;
+        if tw.get(&key).map(|(_, t)| *t == at).unwrap_or(false) {
+            tw.remove(&key);
+        }
+    }
+    s.set_focus(wpane).await;
+}
+
 /// An armed typed-answer waiter wins over every command except the
 /// escapes checked before (like /cancel, /card, /esc). Peek-first: a
 /// blockop race or failed send keeps the waiter; a resume race falls
@@ -95,11 +115,9 @@ pub(crate) async fn consume_typewait(
     }
     match super::tap::type_text(s, &wpane, text).await {
         Ok(()) => {
-            let mut tw = s.typewait.lock().await;
-            if tw.get(&key).map(|(_, t)| *t == at).unwrap_or(false) {
-                tw.remove(&key);
-            }
-            drop(tw);
+            // Consume + focus-follow (single source, tested): same
+            // generation only, then focus the answered pane.
+            finish_typed_answer(s, key, at, &wpane).await;
             s.tg.send_silent(chat, Some(thread_id), &crate::ui::typed_ack(&wpane))
                 .await;
             // Resumed work owns no job — follow it to the final reply.
@@ -177,6 +195,7 @@ pub(crate) async fn serve_resumed_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::cancel::isolated_state;
 
     #[test]
     fn test_pick_resume_removed_value_wins() {
@@ -193,5 +212,41 @@ mod tests {
         let (p, t) = pick_resume(None, "w1:p1".into(), at);
         assert_eq!(p, "w1:p1");
         assert_eq!(t, at);
+    }
+
+    #[tokio::test]
+    async fn test_finish_typed_answer_consumes_and_focuses() {
+        // set_focus arm (DM/forum/General parity): a successful typed
+        // answer focuses its pane so the next bare message routes there.
+        let (s, _dir) = isolated_state();
+        let at = std::time::Instant::now();
+        s.typewait
+            .lock()
+            .await
+            .insert((7, None), ("w1:p9".into(), at));
+        s.set_focus("w1:other").await;
+        finish_typed_answer(&s, (7, None), at, "w1:p9").await;
+        assert!(s.typewait.lock().await.is_empty(), "waiter consumed");
+        assert_eq!(s.get_focus().await.as_deref(), Some("w1:p9"));
+    }
+
+    #[tokio::test]
+    async fn test_finish_typed_answer_rearmed_generation_survives() {
+        // Re-arm during the slow send owns the next message: the consume
+        // must not delete the newer generation (focus still follows the
+        // pane that took THIS answer).
+        let (s, _dir) = isolated_state();
+        let old = std::time::Instant::now();
+        let fresh = old + std::time::Duration::from_secs(1);
+        s.typewait
+            .lock()
+            .await
+            .insert((7, Some(9)), ("w1:p9".into(), fresh));
+        finish_typed_answer(&s, (7, Some(9)), old, "w1:p9").await;
+        assert!(
+            s.typewait.lock().await.contains_key(&(7, Some(9))),
+            "re-arm generation must survive the stale consume"
+        );
+        assert_eq!(s.get_focus().await.as_deref(), Some("w1:p9"));
     }
 }

@@ -31,6 +31,8 @@ pub(crate) fn load_spawndone() -> HashMap<String, Instant> {
 }
 
 /// Stamp one minted key (RAM + disk, single lock, disk after).
+/// Atomic tmp+rename (persist parity): a crash mid-write must never
+/// leave a torn `spawn.done` (partial lines → next boot re-mints).
 pub(crate) async fn stamp_spawndone(s: &AppState, key: String) {
     let keys: Vec<String> = {
         let mut done = s.spawndone.lock().await;
@@ -40,7 +42,16 @@ pub(crate) async fn stamp_spawndone(s: &AppState, key: String) {
     // Same dedup set the next boot loads: stale lines never survive a
     // post-boot stamp (only live RAM keys persist).
     let body = keys.join("\n");
-    let _ = crate::types::write_private(&spawn_done_path(), body.as_bytes());
+    let path = spawn_done_path();
+    let tmp = crate::types::unique_tmp(&path);
+    if crate::types::write_private(&tmp, body.as_bytes()).is_ok() {
+        if std::fs::rename(&tmp, &path).is_err() {
+            eprintln!("[spawn] spawn.done rename failed (disk full?)");
+            let _ = std::fs::remove_file(&tmp);
+        }
+    } else {
+        eprintln!("[spawn] spawn.done write failed (disk full?)");
+    }
 }
 
 /// True when a billable resource was minted (workspace / agent): the
@@ -58,6 +69,7 @@ pub(crate) async fn handle_new_space(
     // Auto-label needs a readable list: an outage refuses before any
     // billable mint, never guesses a colliding `space-1`.
     let Some(label) = super::space::next_label(s).await else {
+        // Post-progress: keyboard already stripped — text-only reconcile.
         s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
             .await;
         return false;
@@ -66,6 +78,7 @@ pub(crate) async fn handle_new_space(
     let ws_id = match create_workspace(&s.cfg.socket, &label).await {
         Ok(id) => id,
         Err(e) => {
+            // Post-progress: keyboard already stripped — text-only reconcile.
             s.tg.edit_msg(
                 chat,
                 msg_id,
@@ -89,6 +102,7 @@ pub(crate) async fn handle_new_space(
     ) {
         (Ok(spaces), Ok(agents)) => (spaces, agents),
         _ => {
+            // Post-progress: keyboard already stripped — text-only reconcile.
             s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return true;
@@ -137,8 +151,7 @@ pub(crate) async fn handle_spawn(
                 }
                 // Routing follows delivery (a-arm parity): a deleted card
                 // must not pin focus/routing to a dead msg_id.
-                if s
-                    .tg
+                if s.tg
                     .try_edit_msg(
                         chat,
                         msg_id,

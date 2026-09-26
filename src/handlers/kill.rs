@@ -2,7 +2,7 @@
 /// or shell topics — mode doesn't matter. Irreversible, so it always
 /// confirms first via stateless inline buttons (`X:kill:` / `X:keep:` carry
 /// the pane; no pending-state map to leak).
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     herdr::client::{close_pane, get_agent, list_panes},
@@ -14,6 +14,30 @@ pub fn kill_confirm_text(pane: &str, desc: &str) -> String {
     format!(
         "☠️ kill {pane} ({desc})?\nThis closes the pane completely — agent or shell, work and all."
     )
+}
+
+/// Kill/Keep keyboard (pure, tested): single source for the confirm
+/// card AND the failure re-attach — an actionable edit must keep the
+/// buttons (`edit_msg(None)` strips them, stranding keep-intent).
+pub fn kill_kb(pane: &str) -> Value {
+    json!([[
+        {"text": "☠️ Kill", "callback_data": format!("X:kill:{pane}")},
+        {"text": "Keep", "callback_data": format!("X:keep:{pane}")},
+    ]])
+}
+
+/// Failure edit (pure, tested): confirmed-gone is terminal (no
+/// buttons); a live pane keeps the Kill/Keep keyboard so the tap can
+/// retry Kill or take Keep — never strip on the failure path.
+pub fn kill_failure_edit(pane: &str, err: &str, gone: bool) -> (String, Option<Value>) {
+    if gone {
+        (format!("☠️ {pane} already closed."), None)
+    } else {
+        (
+            format!("⚠️ kill failed: {}", crate::types::mask_home(err)),
+            Some(kill_kb(pane)),
+        )
+    }
 }
 
 /// Describe the pane for the confirm card, or None when already gone.
@@ -59,13 +83,14 @@ pub async fn ask_kill(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) 
         }
         Ok(Some(desc)) => desc,
     };
-    let kb = json!([[
-        {"text": "☠️ Kill", "callback_data": format!("X:kill:{pane}")},
-        {"text": "Keep", "callback_data": format!("X:keep:{pane}")},
-    ]]);
     let mid =
-        s.tg.send_msg(chat, thread, &kill_confirm_text(pane, &desc), Some(kb))
-            .await;
+        s.tg.send_msg(
+            chat,
+            thread,
+            &kill_confirm_text(pane, &desc),
+            Some(kill_kb(pane)),
+        )
+        .await;
     s.remember(chat, mid, pane).await;
 }
 
@@ -128,21 +153,8 @@ pub async fn handle_kill_action(s: &AppState, chat: i64, msg_id: i64, action: &s
                 .await
                 .map(|l| !l.contains(&pane.to_string()))
                 .unwrap_or(false);
-            if gone {
-                s.tg.edit_msg(chat, msg_id, &format!("☠️ {pane} already closed."), None)
-                    .await;
-            } else {
-                s.tg.edit_msg(
-                    chat,
-                    msg_id,
-                    &format!(
-                        "⚠️ kill failed: {}",
-                        crate::types::mask_home(&e.to_string())
-                    ),
-                    None,
-                )
-                .await;
-            }
+            let (text, kb) = kill_failure_edit(pane, &e.to_string(), gone);
+            s.tg.edit_msg(chat, msg_id, &text, kb).await;
         }
     }
 }
@@ -157,5 +169,24 @@ mod tests {
         assert!(t.contains("w1:p1"));
         assert!(t.contains("opencode, idle"));
         assert!(t.contains("completely"));
+    }
+
+    #[test]
+    fn test_kill_failure_keeps_keyboard_while_live() {
+        // Keep-intent hole: the failure edit must re-attach Kill/Keep
+        // (edit_msg(None) strips them — a failed kill then strands the
+        // card with no retry and no Keep). Confirmed-gone is terminal.
+        let (text, kb) = kill_failure_edit("w1:p1", "boom", false);
+        assert!(text.contains("kill failed") && text.contains("boom"));
+        let kb = kb.expect("live failure keeps the keyboard");
+        assert_eq!(kb[0][0]["callback_data"], "X:kill:w1:p1");
+        assert_eq!(kb[0][1]["callback_data"], "X:keep:w1:p1");
+        let (text, kb) = kill_failure_edit("w1:p1", "x", true);
+        assert!(text.contains("already closed"));
+        assert!(kb.is_none(), "terminal ack never re-arms buttons");
+        // Confirm card shares the same keyboard source.
+        let kb = kill_kb("w1:p2");
+        assert_eq!(kb[0][0]["callback_data"], "X:kill:w1:p2");
+        assert_eq!(kb[0][1]["text"], "Keep");
     }
 }

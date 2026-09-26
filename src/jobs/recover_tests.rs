@@ -1,5 +1,6 @@
 //! Boot-recovery tests. Split from `recover` (300-line file limit).
 use super::*;
+use crate::jobs::recover_gate::STALE_KEEP_MAX_SECS;
 
 #[test]
 fn test_recoverable_windows() {
@@ -60,4 +61,44 @@ fn test_stale_drop_should_clear_bounded() {
     ));
     // Inside the keep window, future-jump corpses still wait.
     assert!(!stale_drop_should_clear(false, now + 7200, now));
+}
+
+#[tokio::test]
+async fn test_recover_clear_spares_resubmit_from_report_window() {
+    // report() awaits up to 90s between the pre-check and the clear: a
+    // user resubmitting in that window owns the slot — recover's clear
+    // must wipe only the exact boot snapshot, never the fresh intent
+    // (unconditional clear_pending lost the reply's durable intent).
+    use crate::jobs::persist::PendingPrompt;
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    let boot = PendingPrompt {
+        chat: 1,
+        thread: None,
+        prompt: "hi".into(),
+        started_unix: 100,
+    };
+    s.pending.lock().await.insert("w1:p1".into(), boot.clone());
+    // Pre-report ownership check passes for the boot copy…
+    assert!(s.pending_matches("w1:p1", 1, None, "hi").await);
+    // …then the user resubmits mid-report (fresh stamp, same text).
+    let fresh = PendingPrompt {
+        started_unix: 200,
+        ..boot.clone()
+    };
+    s.pending.lock().await.insert("w1:p1".into(), fresh.clone());
+    // Delivered verdict + superseded slot: keep the fresh intent.
+    assert!(!recover_clear(&s, "w1:p1", &boot, true).await);
+    assert!(
+        s.pending
+            .lock()
+            .await
+            .get("w1:p1")
+            .is_some_and(|p| p == &fresh)
+    );
+    // Undelivered verdict never clears (bounded separately by the 7d cap).
+    assert!(!recover_clear(&s, "w1:p1", &fresh, false).await);
+    assert!(s.pending.lock().await.contains_key("w1:p1"));
+    // Unchanged snapshot + delivered verdict still clears (stale/gone parity).
+    assert!(recover_clear(&s, "w1:p1", &fresh, true).await);
+    assert!(!s.pending.lock().await.contains_key("w1:p1"));
 }

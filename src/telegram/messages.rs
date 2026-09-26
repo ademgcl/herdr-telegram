@@ -1,43 +1,17 @@
 //! Telegram send-message params + silent/buzz sends.
 use super::client::TelegramClient;
-use crate::{
-    types::{LIVE_RPC_TIMEOUT_SECS, Res},
-    ui::fit_msg,
-};
+use crate::types::{LIVE_RPC_TIMEOUT_SECS, Res};
 use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Telegram animated message effect ID for fire/flame (urgent alerts: blocked, limit stall).
 pub const EFFECT_FIRE: &str = "5104841245755180586";
 
-// Single-source verdicts live in `errors` (300-line file limit):
-// re-exported so every `messages::edit_gone` call site keeps working.
+// Single-source verdicts live in `errors`; builders live in `markup`
+// (300-line file limit): re-exported so `messages::*` call sites and
+// tests keep working.
 pub use super::errors::{edit_gone, is_effect_rejection};
-
-pub fn build_send_msg_params(
-    chat_id: i64,
-    thread_id: Option<i64>,
-    text: &str,
-    keyboard: Option<Value>,
-    effect_id: Option<&str>,
-    silent: bool,
-) -> Value {
-    let body = fit_msg(text);
-    let mut params = json!({"chat_id": chat_id, "text": body});
-    if let Some(th) = thread_id {
-        params["message_thread_id"] = json!(th);
-    }
-    if let Some(kb) = keyboard {
-        params["reply_markup"] = json!({"inline_keyboard": kb});
-    }
-    if let Some(eff) = effect_id {
-        params["message_effect_id"] = json!(eff);
-    }
-    if silent {
-        params["disable_notification"] = json!(true);
-    }
-    params
-}
+pub use super::markup::{build_edit_msg_params, build_send_msg_params};
 
 impl TelegramClient {
     pub async fn send_msg(
@@ -111,6 +85,12 @@ impl TelegramClient {
                     let msg = e.to_string();
                     // Flood-wait always wins over the effect strip below.
                     if let Some(wait) = Self::retry_after(&msg) {
+                        // Over-cap flood: fail fast — next tick retries;
+                        // sleeping the raw wait stalls the caller for days.
+                        if Self::flood_wait_exceeds_cap(wait) {
+                            eprintln!("sendMessage failed: {}", self.redact(&msg));
+                            break;
+                        }
                         used += 1;
                         if used > 6 {
                             eprintln!("sendMessage failed: {}", self.redact(&msg));
@@ -134,8 +114,7 @@ impl TelegramClient {
                     // Telegram 5xx arrives as plain strings via `call`
                     // (never a reqwest downcast match): same transient
                     // set as `call_retrying` or buzz alerts drop silently.
-                    let retryable =
-                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
+                    let retryable = Self::is_transient_msg(&msg);
                     used += 1;
                     if !retryable || used > 6 {
                         eprintln!("sendMessage failed: {}", self.redact(&msg));
@@ -167,15 +146,7 @@ impl TelegramClient {
         text: &str,
         keyboard: Option<Value>,
     ) -> Res<()> {
-        let body = fit_msg(text);
-        let mut params = json!({
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": body,
-        });
-        if let Some(kb) = keyboard {
-            params["reply_markup"] = json!({"inline_keyboard": kb});
-        }
+        let params = build_edit_msg_params(chat_id, message_id, text, keyboard.as_ref());
         let mut sends = 0;
         let mut waits = 0;
         loop {
@@ -194,6 +165,11 @@ impl TelegramClient {
                         return Err(self.redact(&msg).into());
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
+                        // Over-cap flood: fail fast — the next tick retries;
+                        // sleeping the raw wait stalls the settle for days.
+                        if Self::flood_wait_exceeds_cap(wait) {
+                            return Err(self.redact(&msg).into());
+                        }
                         waits += 1;
                         if waits > 3 {
                             return Err(self.redact(&msg).into());
@@ -205,8 +181,7 @@ impl TelegramClient {
                     // Send-path parity: fatals (revoked token, kicked,
                     // rights loss) fail fast — retrying them burns 3 calls
                     // + 2s per card per tick fleet-wide.
-                    let retryable =
-                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
+                    let retryable = Self::is_transient_msg(&msg);
                     if !retryable || sends >= 3 {
                         eprintln!("editMessageText failed: {}", self.redact(&msg));
                         return Err(self.redact(&msg).into());

@@ -1,17 +1,29 @@
 //! Shutdown signal: split from `main` (300-line file limit).
-/// SIGINT or SIGTERM (launchd/docker send TERM): break the poll loop so
-/// the offset flushes instead of replaying the batch on next boot.
+/// SIGINT, SIGTERM (launchd/docker send TERM), or SIGHUP (reload-style
+/// stop): break the poll loop so the offset flushes instead of replaying
+/// the batch on next boot.
 /// Pending intents are already durable per-write; topics/focus likewise.
 pub async fn shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => tokio::select! {
+        let term = signal(SignalKind::terminate());
+        let hup = signal(SignalKind::hangup());
+        match (term, hup) {
+            (Ok(mut term), Ok(mut hup)) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = term.recv() => {},
+                _ = hup.recv() => {},
+            },
+            (Ok(mut term), Err(_)) => tokio::select! {
                 _ = tokio::signal::ctrl_c() => {},
                 _ = term.recv() => {},
             },
-            Err(_) => {
+            (Err(_), Ok(mut hup)) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = hup.recv() => {},
+            },
+            (Err(_), Err(_)) => {
                 let _ = tokio::signal::ctrl_c().await;
             }
         }
@@ -40,6 +52,15 @@ pub fn should_advance_offset(id: u64, off: u64) -> bool {
     id > 0 && id >= off
 }
 
+/// Offset after dropping a poison-only batch (pure, tested): id-0
+/// updates never ack individually, so an all-poison `getUpdates` reply
+/// would re-fetch forever (hot loop — Telegram returns immediately when
+/// updates are pending). Step the cursor so the undeliverable batch is
+/// not pinned at the same offset; from 0 reach 1 (past the poison).
+pub fn poison_advance_offset(off: u64) -> u64 {
+    if off == 0 { 1 } else { off + 1 }
+}
+
 /// Ack-after-handling (single source for main's poll loop): bump the
 /// offset only past the poison guard above (at-least-once — bumping
 /// before the handler acked a never-handled update on TERM is a silent
@@ -65,5 +86,14 @@ mod tests {
         assert!(!should_advance_offset(0, 10));
         // Old replays never move the offset backwards.
         assert!(!should_advance_offset(9, 10));
+    }
+
+    #[test]
+    fn test_poison_advance_offset_makes_progress() {
+        // All-poison batch: always step so the next poll is not the
+        // same undeliverable window (hot-loop guard).
+        assert_eq!(poison_advance_offset(0), 1);
+        assert_eq!(poison_advance_offset(1), 2);
+        assert_eq!(poison_advance_offset(41), 42);
     }
 }

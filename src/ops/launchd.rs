@@ -48,9 +48,13 @@ pub fn render_plist(exe: &str, dir: &str) -> String {
          \t<key>RunAtLoad</key>\n\
          \t<true/>\n\
          \t<key>KeepAlive</key>\n\
-         \t<true/>\n\
-         \t<key>SuccessfulExit</key>\n\
-         \t<false/>\n\
+         \t<dict>\n\
+         \t\t<!-- SuccessfulExit must nest under KeepAlive: a sibling\n\
+         \t\t     key is ignored, so restart-only-on-failure never\n\
+         \t\t     applied and a clean exit still relaunched forever. -->\n\
+         \t\t<key>SuccessfulExit</key>\n\
+         \t\t<false/>\n\
+         \t</dict>\n\
          \t<key>StandardOutPath</key>\n\
          \t<string>{dir}/bot.log</string>\n\
          \t<key>StandardErrorPath</key>\n\
@@ -170,7 +174,9 @@ pub async fn install(home: &str) -> Res<()> {
         let (rok, rerr) =
             launchctl(&["bootstrap", &format!("gui/{id}"), &path.to_string_lossy()]).await;
         if !rok {
-            return Err(format!("bootstrap failed: {err} (previous job restore FAILED: {rerr})").into());
+            return Err(
+                format!("bootstrap failed: {err} (previous job restore FAILED: {rerr})").into(),
+            );
         }
         return Err(format!("bootstrap failed: {err} (previous plist restored)").into());
     }
@@ -220,6 +226,18 @@ mod tests {
             assert!(p.contains(key), "plist missing {key}");
         }
         assert!(!p.contains("__REPO_DIR__"), "placeholder leaked");
+        // SuccessfulExit must NEST under KeepAlive (sibling key is
+        // ignored by launchd — "restart only on failure" never applied).
+        let ka = p.find("<key>KeepAlive</key>").expect("KeepAlive");
+        let se = p.find("<key>SuccessfulExit</key>").expect("SuccessfulExit");
+        let ka_end = p
+            .find("<key>StandardOutPath</key>")
+            .expect("after KeepAlive");
+        assert!(
+            ka < se && se < ka_end,
+            "SuccessfulExit not inside KeepAlive"
+        );
+        assert!(p[ka..ka_end].contains("<dict>"), "KeepAlive must be a dict");
     }
 
     #[test]

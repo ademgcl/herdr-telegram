@@ -3,9 +3,7 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 // Re-exported file helpers (split to `fsutil`, 300-line file limit):
 // existing `types::{write_private, chmod_private, unique_tmp}` call
 // sites keep working unchanged.
-pub(crate) use crate::fsutil::{
-    chmod_private, prune_corrupt_backups, unique_tmp, write_private,
-};
+pub(crate) use crate::fsutil::{chmod_private, prune_corrupt_backups, unique_tmp, write_private};
 
 pub const TG_POLL_SECS: i64 = 25;
 pub const STALE_SECS: u64 = 600;
@@ -161,6 +159,13 @@ pub fn anchorable_screen(screen: &[String]) -> bool {
     !screen.is_empty() && !screen.iter().all(|l| l.trim().is_empty())
 }
 
+/// Corpse / non-agent status verdict (pure, tested): quit-to-shell or
+/// pane death — never a live agent turn. Single source for follow's
+/// stand-down and stall's live-agent gate (dup'd status sets re-drift).
+pub fn is_non_agent_status(status: &str) -> bool {
+    matches!(status, "shell" | "dead" | "closed" | "exited")
+}
+
 /// Pane-id shape for `focus.state` (fail-closed load: garbage, torn
 /// writes, and hand-edits must never become the DM routing focus).
 /// Herdr pane ids are `ws:pane` (`w8:p1`) — exactly one colon with a
@@ -246,6 +251,21 @@ mod tests {
         assert!(!anchorable_screen(&["".to_string(), "   ".to_string()]));
         assert!(anchorable_screen(&["out".to_string()]));
         assert!(anchorable_screen(&["".to_string(), "out".to_string()]));
+    }
+
+    #[test]
+    fn test_is_non_agent_status_corpse_vocab() {
+        assert!(is_non_agent_status("shell"));
+        assert!(is_non_agent_status("dead"));
+        assert!(is_non_agent_status("closed"));
+        assert!(is_non_agent_status("exited"));
+        // Live agent statuses (incl. blocked — still an agent waiting
+        // on input) are never corpse.
+        assert!(!is_non_agent_status("working"));
+        assert!(!is_non_agent_status("idle"));
+        assert!(!is_non_agent_status("done"));
+        assert!(!is_non_agent_status("blocked"));
+        assert!(!is_non_agent_status(""));
     }
 
     #[test]

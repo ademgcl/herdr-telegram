@@ -119,8 +119,11 @@ async fn test_derive_branch_subprocess_fallback() {
         run(&["symbolic-ref", "HEAD", "refs/heads/feat-fallback"]),
         "git symbolic-ref"
     );
-    std::fs::write(pane.join(".git"), format!("gitdir: {}\n", repo.join(".git").display()))
-        .unwrap();
+    std::fs::write(
+        pane.join(".git"),
+        format!("gitdir: {}\n", repo.join(".git").display()),
+    )
+    .unwrap();
 
     let branch = derive_branch(&json!({}), pane.to_str().unwrap()).await;
     assert_eq!(branch, Some("feat-fallback".to_string()));

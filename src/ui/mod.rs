@@ -29,6 +29,13 @@ pub const ESC_IN_FLIGHT: &str = "answer in flight — wait a beat, then /esc";
 /// is already up (or owned in flight): plain text, no second ❗ buzz.
 pub const BLOCKED_SEE_CARD: &str = "⛔ blocked — see question card";
 
+/// Single source for the masked submit-error card (`enqueue`,
+/// `enqueue_blocked` empty-screen, and the dropped-card fallback share
+/// it — dup'd `⚠️ error:` literals re-drift).
+pub fn error_card(err: &str) -> String {
+    format!("⚠️ error: {}", crate::types::mask_home(err))
+}
+
 /// Single source for the /card contention ack (an answer owns the pane).
 pub const CARD_IN_FLIGHT: &str = "answer in flight — wait a beat, then /card";
 

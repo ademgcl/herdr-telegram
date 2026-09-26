@@ -7,50 +7,26 @@ use crate::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Boot-rearm eligibility, pure so tests pin it: stale (>24h) or
-/// future-dated (>1h ahead — a clock jump forward then corrected would
-/// otherwise re-arm a dead prompt on every boot forever) intents never
-/// re-arm.
-pub fn recoverable(started_unix: u64, now: u64) -> bool {
-    now.saturating_sub(started_unix) <= 86400 && started_unix <= now.saturating_add(3600)
-}
+// Re-exports: pure gates live in `recover_gate` (300-line split) but
+// every historical path (`recover::recoverable`, enqueue/follow
+// `claim_watcher`, tests) keeps working unchanged.
+pub(crate) use super::recover_gate::claim_watcher;
+pub use super::recover_gate::{recoverable, stale_drop_should_clear};
 
-/// Stale-drop clear verdict (pure, tested): delivery-gated, but bounded
-/// so a dead Telegram never retries forever. Clear when the notice
-/// landed, or when the intent is older than 7d / further than 7d in the
-/// future (clock-jump corpse) — disk + boot scans stay bounded either
-/// way. Single source for the stale arm below.
-pub const STALE_KEEP_MAX_SECS: u64 = 7 * 86400;
-
-pub fn stale_drop_should_clear(delivered: bool, started_unix: u64, now: u64) -> bool {
-    if delivered {
-        return true;
-    }
-    if now.saturating_sub(started_unix) > STALE_KEEP_MAX_SECS {
-        return true;
-    }
-    if started_unix.saturating_sub(now) > STALE_KEEP_MAX_SECS {
-        return true;
-    }
-    false
-}
-
-/// Atomic watcher claim: check + insert under the caller's single
-/// jobs-lock hold. Returns false when a LIVE watcher already owns the pane
-/// (a concurrent re-arm won the race) — caller must stand down, never
-/// run two watchers. A stopped corpse never blocks a re-arm (enqueue
-/// leaves stopped jobs in the map; they are replaced, never reused).
-/// Pure over the map so tests pin the verdict.
-pub(crate) fn claim_watcher(
-    jobs: &mut std::collections::HashMap<String, std::sync::Arc<Job>>,
+/// Ownership-guarded intent clear after a recover report (single source
+/// for all three arms below). `report` awaits up to 90s; a resubmit
+/// landing in that window owns the slot — an unconditional
+/// `clear_pending` wiped its fresh intent (silent reply loss; the
+/// pre-report `pending_matches` only covers the check-then-report gap,
+/// not the report-then-clear one). Clear only while the slot still holds
+/// the exact boot snapshot (full stamp equality, `clear_pending_if_unchanged`).
+pub(crate) async fn recover_clear(
+    s: &crate::state::AppState,
     pane: &str,
-    job: std::sync::Arc<Job>,
+    pp: &crate::jobs::persist::PendingPrompt,
+    verdict: bool,
 ) -> bool {
-    if jobs.get(pane).is_some_and(|j| !j.is_stopped()) {
-        return false;
-    }
-    jobs.insert(pane.to_string(), job);
-    true
+    verdict && s.clear_pending_if_unchanged(pane, Some(pp.clone())).await
 }
 
 /// Boot recovery: re-arm watchers for prompts orphaned by a restart so
@@ -89,9 +65,13 @@ pub async fn recover_pending(s: &AppState) {
                 "⚠️ dropped: this prompt went stale while the bot was down (>24h) — please resend",
             )
             .await;
-            if stale_drop_should_clear(delivered, pp.started_unix, now) {
-                s.clear_pending(&pane).await;
-            }
+            recover_clear(
+                s,
+                &pane,
+                &pp,
+                stale_drop_should_clear(delivered, pp.started_unix, now),
+            )
+            .await;
             continue;
         }
         // A boot-time herdr blip must not misclassify an agent pane as a
@@ -184,17 +164,20 @@ pub async fn recover_pending(s: &AppState) {
                                 {
                                     continue;
                                 }
-                                if report(
+                                let delivered = report(
                                     s,
                                     pp.chat,
                                     pp.thread,
                                     &pane,
                                     &format!("recovered after restart:\n{tail}"),
                                 )
-                                .await
-                                {
-                                    s.clear_pending(&pane).await;
+                                .await;
+                                if recover_clear(s, &pane, &pp, delivered).await {
                                     println!("[recover] shell recovered {pane}");
+                                } else if delivered {
+                                    println!(
+                                        "[recover] shell recovered {pane}, intent superseded mid-report"
+                                    );
                                 } else {
                                     println!("[recover] shell notice undelivered, keeping {pane}");
                                 }
@@ -220,17 +203,20 @@ pub async fn recover_pending(s: &AppState) {
                         {
                             continue;
                         }
-                        if report(
+                        let delivered = report(
                             s,
                             pp.chat,
                             pp.thread,
                             &pane,
                             &format!("pane gone before reply arrived [{pane}]"),
                         )
-                        .await
-                        {
+                        .await;
+                        if recover_clear(s, &pane, &pp, delivered).await {
                             println!("[recover] pane gone, dropping {pane}");
-                            s.clear_pending(&pane).await;
+                        } else if delivered {
+                            println!(
+                                "[recover] gone-notice sent {pane}, intent superseded mid-report"
+                            );
                         } else {
                             println!("[recover] gone-notice undelivered, keeping {pane}");
                         }

@@ -34,10 +34,16 @@ fn test_keys_first_blocked_matrix() {
     // Any kind blocks even when ambiguous across rows.
     assert!(keys_first_blocked("opencode", &panes, &kinds));
     assert!(!keys_first_blocked("claude", &panes, &kinds));
-    // Colon-shaped always blocks (shell/dead panes have no kind row).
+    // Pane-shaped always blocks (shell/dead panes have no kind row).
     assert!(keys_first_blocked("w9:p2", &panes, &kinds));
+    assert!(keys_first_blocked("dead:p9", &panes, &kinds));
     // Ordinary first words pass — own-pane keys still send.
     assert!(!keys_first_blocked("y", &panes, &kinds));
     assert!(!keys_first_blocked("enter", &panes, &kinds));
     assert!(!keys_first_blocked("Escape", &panes, &kinds));
+    // Vim keys with `:` are not pane-shaped (empty side refuses the
+    // old `first.contains(':')` blanket block).
+    assert!(!keys_first_blocked(":", &panes, &kinds));
+    assert!(!keys_first_blocked(":w", &panes, &kinds));
+    assert!(!keys_first_blocked("g:", &panes, &kinds));
 }

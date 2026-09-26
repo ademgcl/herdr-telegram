@@ -123,9 +123,8 @@ pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::Unbounded
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
                 let len = std::fs::metadata(proc::log_path()).map(|m| m.len()).unwrap_or(pos);
-                if len <= pos {
-                    pos = len;
-                } else if let Ok((bytes, at)) = read_tail_from(&proc::log_path(), pos, len, POLL_CAP) {
+                pos = follow_pos_after(pos, len);
+                if len > pos && let Ok((bytes, at)) = read_tail_from(&proc::log_path(), pos, len, POLL_CAP) {
                     pos = at;
                     // Hold back a partial trailing line for next poll.
                     let end = bytes.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
@@ -155,6 +154,15 @@ pub(crate) async fn follow_log(home: &str, rx: &mut tokio::sync::mpsc::Unbounded
             }
         }
     }
+}
+
+/// Pure follow-cursor after a size poll: a shrink (rotation/truncate)
+/// resets to 0 so the replacement file's `0..len` is re-read — clamping
+/// to the new len would skip everything and follow would sit at EOF of
+/// a file whose content never gets printed. Unchanged/growth keep `pos`
+/// (append window only). Pure for tests.
+pub(crate) fn follow_pos_after(pos: u64, len: u64) -> u64 {
+    if len < pos { 0 } else { pos }
 }
 
 /// Read at most `cap` bytes of `path` ending at `len`, starting from

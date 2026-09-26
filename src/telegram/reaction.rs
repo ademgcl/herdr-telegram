@@ -65,6 +65,11 @@ impl TelegramClient {
                         return Ok(());
                     }
                     if let Some(wait) = Self::retry_after(&msg) {
+                        // Over-cap flood: fail fast — next tick retries;
+                        // sleeping the raw wait stalls the caller for days.
+                        if Self::flood_wait_exceeds_cap(wait) {
+                            return Err(e);
+                        }
                         waits += 1;
                         if waits > 3 {
                             return Err(e);
@@ -73,8 +78,7 @@ impl TelegramClient {
                         continue;
                     }
                     sends += 1;
-                    let retryable =
-                        Self::is_transport_transient(e.as_ref()) || Self::is_transient_msg(&msg);
+                    let retryable = Self::is_transient_msg(&msg);
                     if !retryable || sends >= 3 {
                         return Err(e);
                     }

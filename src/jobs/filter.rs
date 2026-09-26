@@ -90,7 +90,7 @@ const CHROME_PREFIXES: &[&str] = &[
     "+ Thought",
     "▸ Thought",
     "▸ ", // agy ▸ Subagents group headers (▸ Thought covered too)
-    "▾", // agy expanded ▾ Subagents group header
+    "▾",  // agy expanded ▾ Subagents group header
     "Thinking…",
     "Thinking...",
     "Working…",

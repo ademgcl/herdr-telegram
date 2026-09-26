@@ -77,10 +77,9 @@ pub(crate) async fn handle_status(
             // unreadable herdr refuses visibly, never guesses.
             match list_panes(&s.cfg.socket).await {
                 Ok(l) if l.contains(&pane) => {
-                    let mid = s
-                        .tg
-                        .send_msg(chat, None, &crate::ui::shell_gone_text(&pane), None)
-                        .await;
+                    let mid =
+                        s.tg.send_msg(chat, None, &crate::ui::shell_gone_text(&pane), None)
+                            .await;
                     s.remember(chat, mid, &pane).await;
                     // Focus follows delivery (card arm parity above).
                     if mid.is_some() {
@@ -92,8 +91,7 @@ pub(crate) async fn handle_status(
                         .await;
                 }
                 Err(_) => {
-                    s.tg
-                        .send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
+                    s.tg.send_msg(chat, None, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                 }
             }

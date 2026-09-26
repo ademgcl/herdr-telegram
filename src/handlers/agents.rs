@@ -20,8 +20,7 @@ pub(crate) async fn show_panel(s: &AppState, chat: i64, thread: Option<i64>) {
     ) {
         (Ok(sp), Ok(ag)) => (sp, ag),
         _ => {
-            s.tg
-                .send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
         }

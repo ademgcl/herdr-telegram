@@ -198,6 +198,29 @@ fn test_final_block_codex_footer_fallback() {
 }
 
 #[test]
+fn test_final_block_prompted_codex_footer_never_wins() {
+    // Watcher finals pass the prompt (`want` non-empty): the footer
+    // pop/drain loop must run there too — gated to the spontaneous path
+    // it posted the model footer as the reply and dropped the answer.
+    let screen_with_answer = v(&[
+        "     All tests passed successfully.",
+        "› Ask Codex to do anything",
+        "gpt-5.6-sol medium · ~/develop/ws/omnitrack · Resume product brief",
+    ]);
+    assert_eq!(
+        final_block(&screen_with_answer, "run tests"),
+        v(&["     All tests passed successfully."])
+    );
+    // Prompted idle screen still yields nothing (footer-only tail pops
+    // all the way out instead of delivering the footer).
+    let idle_screen = v(&[
+        "› Ask Codex to do anything",
+        "gpt-5.6-sol medium · ~/develop/ws/omnitrack · Resume product brief",
+    ]);
+    assert_eq!(final_block(&idle_screen, "run tests"), Vec::<String>::new());
+}
+
+#[test]
 fn test_transient_inventory_never_posts_answer_always_wins() {
     use crate::jobs::{
         filter::is_chrome,
@@ -251,45 +274,4 @@ fn test_transient_inventory_never_posts_answer_always_wins() {
             "spontaneous prose lost: {p}"
         );
     }
-}
-
-#[test]
-fn test_final_block_drops_agy_thought_title() {
-    // Agy auto titles ("Prioritizing Tool Usage") sit between the `▸ Thought`
-    // header and the answer: the title drains, the answer posts alone.
-    // Fatal errors after the header still surface; opencode headers (answer
-    // directly after) drop nothing — both pinned here.
-    let lines = v(&[
-        "> build the project",
-        "▸ Thought for 11s, 1.5k tokens",
-        "Prioritizing Tool Usage",
-        "     Build succeeded with 0 errors.",
-    ]);
-    assert_eq!(
-        final_block(&lines, "build the project"),
-        v(&["     Build succeeded with 0 errors."])
-    );
-    let err = "Error from provider (Console): Upstream request failed: boom";
-    assert_eq!(
-        final_block(&v(&["▸ Thought for 2s", err, "     Retrying."]), "q"),
-        v(&[err, "     Retrying."])
-    );
-    assert_eq!(
-        final_block(&v(&["     Thought · 539ms", "     Short answer."]), "q"),
-        v(&["     Short answer."])
-    );
-}
-
-#[test]
-fn test_final_block_drops_claude_tool_marker() {
-    // D3: Claude ⏺ tool marker splits turns just like ●.
-    let lines = v(&[
-        "     Preparing changes...",
-        "⏺ Write(src/main.rs)",
-        "     Applied all modifications.",
-    ]);
-    assert_eq!(
-        final_block(&lines, "apply changes"),
-        v(&["     Applied all modifications."])
-    );
 }

@@ -84,6 +84,28 @@ pub(crate) async fn get_err_msg(
     }
 }
 
+/// Esc Unchanged-arm verdict (pure, tested): vanished-dialog race
+/// FIRST — a moved screen follows (never pages "still blocked" ahead of
+/// the follower: the notice would misreport a moved dialog), an
+/// unreadable re-read follows too (a blip never pages), only a true
+/// stay-put pages the way out. Single source so the order cannot drift.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum EscStay {
+    FollowMoved,
+    FollowUnread,
+    Page,
+}
+
+pub(crate) fn esc_unchanged(before: &[String], after: &[String]) -> EscStay {
+    if super::tap_classify::dialog_moved(before, after) {
+        EscStay::FollowMoved
+    } else if after.is_empty() {
+        EscStay::FollowUnread
+    } else {
+        EscStay::Page
+    }
+}
+
 #[cfg(test)]
 #[path = "esc_ack_tests.rs"]
 mod tests;

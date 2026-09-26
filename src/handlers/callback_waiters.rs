@@ -32,7 +32,8 @@ pub(crate) async fn handle_keys_arm(
                 return;
             }
             Err(_) => {
-                s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                // Notice keeps the card keyboard (`edit_msg(None)` drops it).
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                     .await;
                 return;
             }
@@ -73,7 +74,8 @@ pub(crate) async fn handle_run_arm(
     let spaces = match list_workspaces(&s.cfg.socket).await {
         Ok(sp) => sp,
         Err(_) => {
-            s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+            // Notice keeps the card keyboard (`edit_msg(None)` drops it).
+            s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                 .await;
             return;
         }
@@ -114,6 +116,7 @@ async fn read_output_or_gate(
     s: &AppState,
     chat: i64,
     msg_id: i64,
+    thread: Option<i64>,
     pane: &str,
     agent: bool,
 ) -> Option<String> {
@@ -139,7 +142,8 @@ async fn read_output_or_gate(
         Ok(out) => Some(out),
         Err(_) => {
             if pane_live(s, pane).await {
-                s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                // Notice keeps the output-card keyboard (`edit_msg(None)` drops it).
+                s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                     .await;
             } else {
                 gone_card(s, chat, msg_id, pane).await;
@@ -157,7 +161,7 @@ pub(crate) async fn handle_pane_output(
     thread: Option<i64>,
     pane: &str,
 ) {
-    let Some(out) = read_output_or_gate(s, chat, msg_id, pane, false).await else {
+    let Some(out) = read_output_or_gate(s, chat, msg_id, thread, pane, false).await else {
         return;
     };
     // A read can succeed for a just-deleted pane: tracking it would
@@ -186,7 +190,7 @@ pub(crate) async fn handle_agent_output(
     thread: Option<i64>,
     pane: &str,
 ) {
-    let Some(out) = read_output_or_gate(s, chat, msg_id, pane, true).await else {
+    let Some(out) = read_output_or_gate(s, chat, msg_id, thread, pane, true).await else {
         return;
     };
     if !pane_live(s, pane).await {

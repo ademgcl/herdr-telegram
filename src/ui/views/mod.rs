@@ -3,6 +3,9 @@ use crate::types::{AgentDetail, AgentRow, MAX_MSG_UNITS, WorkspaceInfo};
 
 mod help;
 #[cfg(test)]
+#[path = "mask_tests.rs"]
+mod mask_tests;
+#[cfg(test)]
 mod tests;
 pub use help::*;
 
@@ -84,7 +87,10 @@ pub fn chunks(text: &str, max_units: usize) -> Vec<String> {
         cur.push_str(line);
         cur_units += line_units;
     }
-    if !cur.is_empty() || out.is_empty() {
+    // Newline-only bodies must not emit `[""]` (Telegram 400s it) —
+    // only push a non-empty remainder (`out.is_empty()` would force an
+    // empty chunk for `"\n"` / `"\n\n"`).
+    if !cur.is_empty() {
         out.push(cur);
     }
     out
@@ -104,7 +110,8 @@ pub fn build_menu_text(spaces: &[WorkspaceInfo], agents: &[AgentRow]) -> String 
         let label = crate::types::mask_home(&s.label);
         text.push_str(&format!(
             "{emo} #{} {} — {} agent(s)\n",
-            s.number, label,
+            s.number,
+            label,
             mine.len()
         ));
     }

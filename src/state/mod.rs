@@ -14,6 +14,7 @@ use std::{
 use tokio::sync::Mutex;
 
 pub(crate) mod cancel;
+pub(crate) mod cancel_all;
 mod clear;
 pub(crate) mod guard;
 pub(crate) mod history;

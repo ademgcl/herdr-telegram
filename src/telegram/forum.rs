@@ -10,7 +10,7 @@ use std::time::Duration;
 /// the strip gate below.
 pub fn is_color_rejection(msg: &str) -> bool {
     let low = msg.to_lowercase();
-    msg.contains("COLOR_INVALID") || low.contains("icon_color") || low.contains("icon color")
+    low.contains("color_invalid") || low.contains("icon_color") || low.contains("icon color")
 }
 
 pub fn build_create_forum_topic_params(
@@ -252,6 +252,7 @@ mod tests {
     fn test_is_color_rejection_only_color_shaped() {
         for m in [
             "Bad Request: COLOR_INVALID",
+            "Bad Request: color_invalid",
             "Bad Request: Icon_color_invalid",
             "Bad Request: icon color invalid",
         ] {

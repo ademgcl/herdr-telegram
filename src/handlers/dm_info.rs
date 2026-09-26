@@ -37,8 +37,7 @@ pub(crate) async fn handle_keys(
         _ => (None, keys),
     };
     let Some(pane) = pane else {
-        s.tg
-            .send_msg(chat, None, crate::ui::scope_text::USAGE_KEYS_DM, None)
+        s.tg.send_msg(chat, None, crate::ui::scope_text::USAGE_KEYS_DM, None)
             .await;
         return;
     };

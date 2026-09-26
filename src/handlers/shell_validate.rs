@@ -47,7 +47,9 @@ pub fn validate_keys_len(n: usize) -> Result<(), String> {
 /// count keep `validate_keys_len`.
 pub fn validate_keys_text(text: &str) -> Result<Vec<&str>, String> {
     if text.chars().count() > INPUT_MAX_CHARS {
-        return Err(format!("too many keys — shorten it (max {INPUT_MAX_CHARS} chars)"));
+        return Err(format!(
+            "too many keys — shorten it (max {INPUT_MAX_CHARS} chars)"
+        ));
     }
     let keys: Vec<&str> = text.split_whitespace().collect();
     validate_keys_len(keys.len())?;

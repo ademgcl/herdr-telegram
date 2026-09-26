@@ -139,9 +139,8 @@ pub async fn handle_run_command(s: &AppState, chat: i64, thread: Option<i64>, ws
             .await;
         return;
     }
-    let mid = s
-        .tg
-        .send_msg(
+    let mid =
+        s.tg.send_msg(
             chat,
             thread,
             &format!("⏳ running in {space} [{pane}]\n$ {cmd}"),

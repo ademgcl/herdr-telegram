@@ -1,9 +1,11 @@
 //! Mid-run buzz episodes: which stall banner already alerted this
-//! watcher. `error`, `provider`, `rate-limit` and WEAK `auth` matches
-//! buzz only when stuck — transient flashes (upstream blips, 429
-//! auto-retry bursts, common words + ambient context in agent prose or
-//! log dumps) recover into the final reply, and settle arbitration
-//! already surfaces terminal errors there. STRONG-`auth` buzzes
+//! watcher. `error`, `rate-limit` and WEAK `auth` matches buzz only when
+//! stuck — transient flashes (429 auto-retry bursts, common words +
+//! ambient context in agent prose or log dumps) recover into the final
+//! reply, and settle arbitration already surfaces terminal errors there.
+//! `provider` (overload/retry chatter, including agent prose discussing
+//! upstream handling) never buzzes at all — the agent retries on its own
+//! (see [`super::notices::is_transient_silent`]). STRONG-`auth` buzzes
 //! immediately: specific denials persist until login is fixed. The
 //! stuck gate is Instant-based (watcher wakes are event-driven, not
 //! periodic).
@@ -17,11 +19,12 @@
 //! counts as a new episode, so scroll-order oscillation between
 //! co-present banners never spams.
 use super::notices::types::ERROR_KIND;
-use super::notices::{LimitHit, needs_stuck_gate};
+use super::notices::{LimitHit, is_transient_silent, needs_stuck_gate};
 use std::time::{Duration, Instant};
 
-/// Ticks with a gated (`error`/`provider`/`rate-limit`/WEAK-`auth`)
-/// banner and no settle before buzzing once. Single source for the
+/// Ticks with a gated (`error`/`rate-limit`/WEAK-`auth`) banner and no
+/// settle before buzzing once (`provider` never buzzes — see
+/// [`super::notices::is_transient_silent`]). Single source for the
 /// watchdog scanner too (`notifier::limits` shares these — watcher and
 /// watchdog handoffs must never drift apart).
 pub(crate) const STUCK_SECS: u64 = 90;
@@ -116,10 +119,13 @@ impl BuzzEpisode {
             self.pending_kind = None;
             self.pending_n = 0;
             // Fire once: immediately for immediate hits, after the stuck
-            // interval for gated ones. A WEAK-`auth` episode that upgrades
-            // to STRONG wording (same kind) still fires — the denial just
-            // proved itself genuine.
+            // interval for gated ones. Transient-silent kinds (provider
+            // overload/retry noise) never fire — the episode still tracks
+            // so a later genuine stall flips cleanly. A WEAK-`auth`
+            // episode that upgrades to STRONG wording (same kind) still
+            // fires — the denial just proved itself genuine.
             if !self.alerted
+                && !is_transient_silent(hit.kind)
                 && (!needs_stuck_gate(hit)
                     || self
                         .since

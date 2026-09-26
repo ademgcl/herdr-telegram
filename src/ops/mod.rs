@@ -115,6 +115,38 @@ async fn ctl_trigger(pane: &str, status: &str) {
     }
 }
 
+/// Parse `logs` args (pure, tested): bare number = `-n`, `-n N` sets
+/// the count, `-f`/`--follow` follows. Fail-closed: `-n` without a
+/// numeric value and unknown flags refuse (never silently fall back
+/// to 50 lines / no-follow and mislead the operator).
+pub(crate) fn parse_logs_args(rest: &[&String]) -> Res<(usize, bool)> {
+    let mut n = 50usize;
+    let mut follow = false;
+    let mut i = 0;
+    // Bare number (`logs 25`) means -n, like tail.
+    if rest.first().is_some_and(|a| a.parse::<usize>().is_ok()) {
+        n = rest[0].parse()?;
+        i = 1;
+    }
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "-n" => {
+                i += 1;
+                let Some(v) = rest.get(i) else {
+                    return Err("-n requires a number".into());
+                };
+                n = v
+                    .parse()
+                    .map_err(|_| format!("-n expects a number, got {v}"))?;
+            }
+            "--follow" | "-f" => follow = true,
+            other => return Err(format!("unknown logs flag: {other}").into()),
+        }
+        i += 1;
+    }
+    Ok((n, follow))
+}
+
 /// INT/TERM/HUP trap (dev.sh `trap cleanup_and_exit` parity): a signal
 /// kills the process without running drops, so `kill_on_drop` alone
 /// would orphan the supervised daemon behind the guard port. Shared by
@@ -157,23 +189,7 @@ pub async fn run(args: &[String]) -> Res<()> {
         }
         "logs" | "log" | "tail" => {
             let rest: Vec<&String> = args.iter().skip(1).collect();
-            let mut n = 50usize;
-            let mut follow = false;
-            let mut i = 0;
-            // Bare number (`logs 25`) means -n, like tail.
-            if rest.first().is_some_and(|a| a.parse::<usize>().is_ok()) {
-                n = rest[0].parse().unwrap_or(50);
-                i = 1;
-            }
-            while i < rest.len() {
-                if rest[i] == "-n" {
-                    i += 1;
-                    n = rest.get(i).and_then(|v| v.parse().ok()).unwrap_or(50);
-                } else if rest[i] == "--follow" || rest[i] == "-f" {
-                    follow = true;
-                }
-                i += 1;
-            }
+            let (n, follow) = parse_logs_args(&rest)?;
             if follow {
                 // History first, like `tail -n N -f` (follow starts at EOF).
                 let lines = cmd::tail_log(n);

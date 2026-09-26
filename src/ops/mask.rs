@@ -46,7 +46,8 @@ fn mask_user_dirs(s: &str) -> String {
     out
 }
 
-/// `chat_id = -123` → `chat_id=***`.
+/// `chat_id = -123` / `chat_id: -123` → `chat_id=***` (YAML/log form
+/// uses `:`; only `=` was masked, so `chat_id: -42` leaked the id).
 fn mask_chat_id_assign(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -57,7 +58,7 @@ fn mask_chat_id_assign(s: &str) -> String {
             j += 1;
         }
         let mut e = usize::MAX;
-        if j < b.len() && b[j] == b'=' {
+        if j < b.len() && (b[j] == b'=' || b[j] == b':') {
             j += 1;
             while j < b.len() && b[j] == b' ' {
                 j += 1;
@@ -196,5 +197,15 @@ mod tests {
             mask_line("a 12:34 b -100 c TELEGRAM_X", home),
             "a 12:34 b -100 c TELEGRAM_X"
         );
+    }
+
+    #[test]
+    fn test_mask_chat_id_colon_form() {
+        // YAML/log `chat_id: -42` leaks the numeric id unless `:` is
+        // accepted like `=` (mask_chat_id_assign).
+        assert_eq!(mask_line("chat_id: -42", ""), "chat_id=***");
+        assert_eq!(mask_line("chat_id:-42", ""), "chat_id=***");
+        // Non-numeric after `:` still not an id assign (unchanged).
+        assert_eq!(mask_line("chat_id: abc", ""), "chat_id: abc");
     }
 }

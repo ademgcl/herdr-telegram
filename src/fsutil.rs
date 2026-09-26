@@ -96,8 +96,21 @@ pub(crate) fn prune_corrupt_backups(path: &std::path::Path, keep: usize) {
     if hits.len() <= keep {
         return;
     }
-    hits.sort();
-    for old in hits.iter().take(hits.len() - keep) {
+    // Sort by mtime (newest last), tie-break path: lexicographic order
+    // on `corrupt-<secs>[-<pid>].bak` names keeps an OLD high-epoch
+    // name forever when pids/time disagree — the prune must keep the
+    // chronologically newest backups regardless of name shape.
+    let mut hits: Vec<(std::time::SystemTime, std::path::PathBuf)> = hits
+        .into_iter()
+        .map(|p| {
+            let m = std::fs::metadata(&p)
+                .and_then(|md| md.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            (m, p)
+        })
+        .collect();
+    hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    for (_, old) in hits.iter().take(hits.len() - keep) {
         let _ = std::fs::remove_file(old);
     }
 }
@@ -108,7 +121,10 @@ mod tests {
 
     #[test]
     fn test_is_corrupt_backup_match() {
-        assert!(is_corrupt_backup("jobs.state", "jobs.state.corrupt-1-2.bak"));
+        assert!(is_corrupt_backup(
+            "jobs.state",
+            "jobs.state.corrupt-1-2.bak"
+        ));
         assert!(is_corrupt_backup("jobs.state", "jobs.state.corrupt-1.bak"));
         assert!(!is_corrupt_backup("jobs.state", "jobs.state.prev"));
         assert!(!is_corrupt_backup("jobs.state", "jobs.state.corrupt-1.tmp"));
@@ -135,11 +151,44 @@ mod tests {
         let left: usize = std::fs::read_dir(&dir)
             .unwrap()
             .flatten()
-            .filter(|e| {
-                is_corrupt_backup("jobs.state", &e.file_name().to_string_lossy())
-            })
+            .filter(|e| is_corrupt_backup("jobs.state", &e.file_name().to_string_lossy()))
             .count();
         assert_eq!(left, 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_prune_corrupt_backups_mtime_not_lexicographic() {
+        // Lexicographic order on the name would keep the HIGH epoch
+        // forever: `corrupt-9999999999` (created first) sorts after
+        // `corrupt-10000000000` (created second). mtime order keeps the
+        // chronologically newer backup regardless of name shape.
+        let dir = std::env::temp_dir().join(format!(
+            "ht-prune-mtime-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("jobs.state");
+        std::fs::write(&base, "{}").unwrap();
+        let old_name = dir.join("jobs.state.corrupt-9999999999-9.bak");
+        std::fs::write(&old_name, "old").unwrap();
+        // Ensure a strictly newer mtime (some filesystems have 1s
+        // granularity).
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let new_name = dir.join("jobs.state.corrupt-10000000000-1.bak");
+        std::fs::write(&new_name, "new").unwrap();
+        prune_corrupt_backups(&base, 1);
+        assert!(
+            !old_name.exists(),
+            "lexicographically-newer but chronologically-older backup must go"
+        );
+        assert!(
+            new_name.exists(),
+            "chronologically newest must survive keep=1"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

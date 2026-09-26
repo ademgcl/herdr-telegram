@@ -8,9 +8,7 @@ use crate::{
         AppState, OpGuard,
         guard::{SPAWNDEDUP_SECS, SPAWNOP_STALE_SECS},
     },
-    ui::{
-        build_menu_text, build_ws_text, main_menu_kb, spawn_kb, workspace_kb,
-    },
+    ui::{build_menu_text, build_ws_text, main_menu_kb, spawn_kb, workspace_kb},
 };
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -166,7 +164,9 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             ) {
                 (Ok(spaces), Ok(agents)) => (spaces, agents),
                 _ => {
-                    s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                    // Notice keeps the menu keyboard (`edit_msg(None)`
+                    // would drop it — Telegram omits `reply_markup`).
+                    s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                     return;
                 }
@@ -187,7 +187,8 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             ) {
                 (Ok(spaces), Ok(agents)) => (spaces, agents),
                 _ => {
-                    s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                    // Notice keeps the workspace keyboard (see m: arm).
+                    s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                     return;
                 }
@@ -203,7 +204,7 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             s.forget_target(chat, msg_id).await;
         }
         ("a", Some(pane)) => {
-            super::callback_agent::handle_agent_card(&s, chat, msg_id, pane).await;
+            super::callback_agent::handle_agent_card(&s, chat, msg_id, thread, pane).await;
         }
         ("o", Some(pane)) => {
             handle_agent_output(&s, chat, msg_id, thread, pane).await;
@@ -217,7 +218,9 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
             if let Some((action, pane)) = split_action(r) {
                 super::tap::answer_tap(&s, chat, msg_id, thread, pane, action).await;
             } else {
-                s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+                // Notice keeps the blocked-card buttons (owner-only tap —
+                // no spam oracle; `edit_msg(None)` would strip them).
+                s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
                     .await;
             }
         }
@@ -241,15 +244,16 @@ pub async fn handle_callback(s: AppState, cbq: &Value) {
                     super::kill::handle_kill_action(&s, chat, msg_id, action, pane).await;
                 }
             } else {
-                s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+                // Notice keeps the confirm-card buttons (owner-only — see B: arm).
+                s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
                     .await;
             }
         }
         _ => {
-            // Edit in place (B/X malformed parity): unknown data is a
-            // version-skew/crafted tap — a loud send spams the chat
-            // (spam oracle), an edit stays on the tapped card.
-            s.tg.edit_msg(chat, msg_id, crate::ui::UNKNOWN_BUTTON, None)
+            // Notice beside the card: unknown data is version-skew/crafted,
+            // and `edit_msg(None)` would drop whatever keyboard the card
+            // still shows (owner-only — no spam oracle).
+            s.tg.send_msg(chat, thread, crate::ui::UNKNOWN_BUTTON, None)
                 .await;
         }
     }

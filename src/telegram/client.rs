@@ -36,20 +36,19 @@ impl TelegramClient {
             .send()
             .await
             .map_err(|e| {
-                // `Res` erases the reqwest type, so the transport verdict
-                // (`is_transport_transient` downcast) can never fire on
-                // send-stage errors — and `e.to_string()` shows only the
+                // `Res` erases the reqwest type, so no downcast verdict
+                // can ever fire on send-stage errors — and
+                // `e.to_string()` shows only the
                 // outer "error sending request" line, hiding the inner
                 // timeout/connect cause from `is_transient_msg`. Tag
                 // transport faults here so the retry loop sees them.
-                let transient = e.is_connect()
-                    || e.is_timeout()
-                    || e.status().map(|s| s.is_server_error()).unwrap_or(false);
-                let m = self.redact(&e.to_string());
-                if transient {
+                // `is_request` covers mid-request resets (connected, then
+                // dropped while sending) — connect/timeout alone miss them.
+                if send_stage_transient(&e) {
+                    let m = self.redact(&e.to_string());
                     format!("service unavailable (transient transport): {m}")
                 } else {
-                    m
+                    self.redact(&e.to_string())
                 }
             })?;
         let status = resp.status();
@@ -179,18 +178,22 @@ impl TelegramClient {
     /// match is deliberate: contextual "…not found" (message/thread/chat
     /// corpses) must never FATAL-exit a healthy daemon into a stop.
     pub(crate) fn is_unauthorized(msg: &str) -> bool {
-        msg.contains("Unauthorized")
-            || msg.contains("unauthorized")
-            || msg.trim() == "Not Found"
-            || msg.contains(": Not Found")
-            // Non-JSON bare-404 bodies decode-fail inside `call` and get
-            // wrapped as `telegram http 404: Not Found (…)` — the colon
-            // sits AFTER `Not Found`, so neither arm above fires and token
-            // death reads as transient (backoff forever, squatting the
-            // single-instance guard). The `Not Found` marker is required:
-            // a bare proxy-404 wrapper (`telegram http 404: service
-            // unavailable (…)`) is a blip, never token death.
-            || (msg.contains("http 404") && msg.to_lowercase().contains("not found"))
+        if msg.starts_with("telegram http ") {
+            // StatusCode Display injects the reason phrase into every
+            // wrapper (`401 Unauthorized: …` / `404 Not Found: …`) — a
+            // proxy 401/404 must never FATAL-exit a healthy daemon.
+            // The `service unavailable` shield only ever wraps bodies
+            // that LACKED the markers (client.rs call: 5xx/429, text
+            // read faults, and non-JSON bodies without them) — skip
+            // those outright. A body-preserved marker without the
+            // shield is a genuine token-death shape.
+            if msg.contains("service unavailable") {
+                return false;
+            }
+            let low = msg.to_lowercase();
+            return low.contains("unauthorized") || low.contains("not found");
+        }
+        msg.contains("Unauthorized") || msg.contains("unauthorized") || msg.trim() == "Not Found"
     }
     /// Fire-and-forget menu registration: the menu persists server-side
     /// once set, so a blip at boot must not fail the boot (fail-dead =
@@ -217,12 +220,17 @@ impl TelegramClient {
                         }
                         // Redact: error text can carry the token in URL form.
                         eprintln!("[telegram] setMyCommands failed, retry in {wait}s: {msg}");
-                        // Honor flood-wait: Telegram's `retry after N` can
-                        // exceed the fixed backoff — re-hitting early only
-                        // extends the flood.
-                        let pause = Self::retry_after(&msg)
-                            .map(|d| d.max(Duration::from_secs(wait)))
-                            .unwrap_or_else(|| Duration::from_secs(wait));
+                        // Honor flood-wait within the sleep cap: Telegram's
+                        // `retry after N` can exceed the fixed backoff —
+                        // re-hitting early only extends the flood. Over-cap
+                        // waits fail fast to the exponential backoff (never
+                        // stall the boot menu for days).
+                        let pause = match Self::retry_after(&msg) {
+                            Some(d) if !Self::flood_wait_exceeds_cap(d) => {
+                                d.max(Duration::from_secs(wait))
+                            }
+                            _ => Duration::from_secs(wait),
+                        };
                         tokio::time::sleep(pause).await;
                         wait = (wait * 2).min(300);
                     }
@@ -230,6 +238,16 @@ impl TelegramClient {
             }
         });
     }
+}
+
+/// Send-stage transport verdict (pure for tests): connect, timeout,
+/// mid-request (`is_request` — connected then reset while sending), and
+/// HTTP 5xx are transient; every other reqwest fault fails fast.
+pub(crate) fn send_stage_transient(e: &reqwest::Error) -> bool {
+    e.is_connect()
+        || e.is_timeout()
+        || e.is_request()
+        || e.status().map(|s| s.is_server_error()).unwrap_or(false)
 }
 
 #[cfg(test)]

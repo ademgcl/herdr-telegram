@@ -3,11 +3,13 @@
 //! Escape (blocked-status only, never into live work). Commands — not
 //! buttons — are the out-of-band path, so they work even when every
 //! card on screen is stale or gone.
-use super::esc_ack::{get_err_msg, gone_ack, heal_stripped, not_blocked_msg};
+use super::esc_ack::{
+    EscStay, esc_unchanged, get_err_msg, gone_ack, heal_stripped, not_blocked_msg,
+};
 use super::target::{resolve_target, unmatched_reply};
 use crate::{
     handlers::dialog::send_blocked_card,
-    handlers::tap_classify::{TapResult, classify_tap, dialog_moved},
+    handlers::tap_classify::{TapResult, classify_tap},
     herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_keys},
     state::{AppState, OpGuard},
     types::AgentRow,
@@ -147,27 +149,33 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             post_card(s, chat, thread, pane).await;
         }
         TapResult::Unchanged => {
-            s.tg.send_silent(
-                chat,
-                thread,
-                "still blocked — /card for fresh buttons, or /kill",
-            )
-            .await;
+            // Verdict via esc_ack::esc_unchanged (pinned by test): the
+            // vanished-dialog race runs FIRST — never page "still
+            // blocked" ahead of the follower (the notice would
+            // misreport a moved dialog). Unreadable re-read keeps the
+            // sig (never touch the card on a blip); only a true
+            // stay-put pages.
+            match esc_unchanged(&before, &after) {
+                EscStay::FollowMoved => {
+                    s.blocked_sig.lock().await.remove(pane);
+                    drop(_op);
+                    crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
+                }
+                EscStay::FollowUnread => {
+                    drop(_op);
+                    crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
+                }
+                EscStay::Page => {
+                    s.tg.send_silent(
+                        chat,
+                        thread,
+                        "still blocked — /card for fresh buttons, or /kill",
+                    )
+                    .await;
+                }
+            }
             // Dead-end buttons stay off (tap Unchanged parity): the
             // explainer above carries the way out, heal re-renders below.
-            // Vanished-dialog race (tap parity): Esc resumed the agent
-            // but status still samples `blocked` — follow the turn to
-            // its final, still-blocked stands down inside. An unreadable
-            // re-read keeps the sig (never touch the card on a blip);
-            // the follower polls status itself and stands down on outage.
-            if dialog_moved(&before, &after) {
-                s.blocked_sig.lock().await.remove(pane);
-                drop(_op);
-                crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
-            } else if after.is_empty() {
-                drop(_op);
-                crate::jobs::follow::follow_answer(s, pane, chat, thread, "esc").await;
-            }
             heal_stripped(s, pane);
         }
     }

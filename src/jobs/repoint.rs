@@ -11,12 +11,7 @@ use std::sync::atomic::Ordering;
 /// Forum-topic jobs only (DM dests must never gain a thread); epoch +
 /// pending guarded like the reconcile restores so a submit racing the
 /// migration wins over the corpse's text.
-pub async fn repoint_dest_if_remapped(
-    s: &AppState,
-    pane: &str,
-    job: &Arc<Job>,
-    epoch_before: u64,
-) {
+pub async fn repoint_dest_if_remapped(s: &AppState, pane: &str, job: &Arc<Job>, epoch_before: u64) {
     let Some(forum) = s.cfg.forum else {
         return;
     };

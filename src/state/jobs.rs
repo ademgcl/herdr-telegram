@@ -45,39 +45,36 @@ impl State {
         persist::save_file(&persist::store_path(), &snap);
     }
 
-    /// Returns true when a pending intent was actually removed.
-    pub async fn clear_pending(&self, pane: &str) -> bool {
-        let snap = {
-            let mut map = self.pending.lock().await;
-            if map.remove(pane).is_none() {
-                return false;
-            }
-            map.clone()
-        };
-        persist::save_file(&persist::store_path(), &snap);
-        true
-    }
-
-    /// Clear only when the slot still holds this exact submit AND the
-    /// generation still matches (single critical section: pending lock
-    /// held across the atomic epoch load, no await inside). An identical
-    /// resubmit ("continue"×2) bumps the generation without changing the
-    /// text — text equality alone would wipe the successor's intent
-    /// (silent reply loss). Agent-path parity with
-    /// `clear_shell_if_matches` (same TOCTOU shape as
-    /// `remember_pending_cas`).
+    /// Clear only when the jobs map still points at `job` (or the pane
+    /// is vacant — already retired by us), the slot still holds this
+    /// exact submit triple, AND the generation still matches (single
+    /// critical section: jobs → pending order held across the atomic
+    /// epoch load, no await inside). An identical re-prompt
+    /// ("continue"×2) bumps the generation without changing the text —
+    /// text equality alone would wipe the successor's intent (silent
+    /// reply loss). The jobs ptr_eq closes the books settle race: the
+    /// old detached guard spanned snapshot awaits, so a failed-submit
+    /// retire (no epoch bump) + same-text re-prompt in that window
+    /// matched text+epoch and wiped the live successor's intent.
+    /// Agent-path parity with `clear_shell_if_matches` (same TOCTOU
+    /// shape as `remember_pending_cas`).
     pub async fn clear_pending_if_epoch_matches(
         &self,
         pane: &str,
+        job: &Arc<crate::jobs::job::Job>,
         chat: i64,
         thread: Option<i64>,
         prompt: &str,
         entry_epoch: u64,
-        epoch: &std::sync::atomic::AtomicU64,
     ) -> bool {
         let snap = {
+            let jobs = self.jobs.lock().await;
+            if jobs.get(pane).is_some_and(|j| !Arc::ptr_eq(j, job)) {
+                // A successor owns the pane — its fresh intent survives.
+                return false;
+            }
             let mut map = self.pending.lock().await;
-            if epoch.load(std::sync::atomic::Ordering::Relaxed) != entry_epoch {
+            if job.epoch.load(std::sync::atomic::Ordering::Relaxed) != entry_epoch {
                 return false;
             }
             let mine = map

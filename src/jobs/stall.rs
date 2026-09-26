@@ -127,13 +127,10 @@ pub(crate) async fn watch_stall(
     // retry next tick. list_panes is not consulted: a live shell pane
     // would read as "present" and page the corpse thread. Fresh status
     // value (not just is_err): a quit-to-shell inside the read→send
-    // window still reports Ok with a shell/dead status.
+    // window still reports Ok with a shell/dead status. Shared
+    // non-agent vocab (follow parity): dup'd status sets re-drift.
     match get_agent(&s.cfg.socket, pane).await {
-        Ok(a)
-            if !matches!(
-                a.status.as_str(),
-                "shell" | "dead" | "closed" | "exited"
-            ) => {}
+        Ok(a) if !crate::types::is_non_agent_status(a.status.as_str()) => {}
         _ => {
             release_claim(s, pane, hit.kind, now).await;
             episode.unfire();

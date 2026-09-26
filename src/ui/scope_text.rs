@@ -64,12 +64,20 @@ pub fn parse_count(arg: &str, default: u32, cap: u32) -> Option<u32> {
 /// True when a topic `/keys` first token names a foreign target and must
 /// refuse instead of becoming keystrokes: an exact pane id, any agent
 /// kind (ambiguity still refuses — kinds must never be typed blind), or
-/// pane-shaped text (`:` covers shell/dead panes no row lists). Pure
-/// over injected lists for tests; callers fetch one `list_agents` and
-/// refuse-retry when it fails. Ordinary first words (`y`, `enter`)
-/// return false — own-pane keys still send.
+/// pane-shaped text with a non-empty side on both `:` (shell/dead panes
+/// no row lists). A bare vim `:` / `:w` / `g:` is a key sequence, not
+/// a pane — `first.contains(':')` blocked those. Pure over injected
+/// lists for tests; callers fetch one `list_agents` and refuse-retry
+/// when it fails. Ordinary first words (`y`, `enter`) return false —
+/// own-pane keys still send.
 pub fn keys_first_blocked(first: &str, panes: &[String], kinds: &[String]) -> bool {
-    panes.iter().any(|p| p == first) || kinds.iter().any(|k| k == first) || first.contains(':')
+    if panes.iter().any(|p| p == first) || kinds.iter().any(|k| k == first) {
+        return true;
+    }
+    matches!(
+        first.split_once(':'),
+        Some((a, b)) if !a.is_empty() && !b.is_empty()
+    )
 }
 
 #[cfg(test)]

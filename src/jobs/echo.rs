@@ -21,9 +21,23 @@ pub fn echo_rest(prompt: &str) -> Vec<&str> {
 
 /// Framing providers wrap input echoes in (opencode `┃`/`│`, agy `>`/`❯`/`›`,
 /// pi/codex `|`). Continuations compare by content, not chrome.
-fn strip_echo_framing(line: &str) -> &str {
-    line.trim()
-        .trim_start_matches(['┃', '│', '|', '❯', '>', '›', ' '])
+///
+/// Suffix match (pure, tested): the line equals `want`, or ends with
+/// `want` behind a run of frame glyphs/indent only. Suffix — never
+/// greedy `trim_start_matches` — so a prompt line that itself starts
+/// with `>`/space keeps its leading content (strip destroyed it and
+/// the opener failed to match).
+fn frame_suffix_match(line: &str, want: &str) -> bool {
+    let full = line.trim();
+    if full == want {
+        return true;
+    }
+    if want.is_empty() || !full.ends_with(want) {
+        return false;
+    }
+    full[..full.len() - want.len()]
+        .chars()
+        .all(|c| matches!(c, '┃' | '│' | '|' | '❯' | '>' | '›' | ' '))
 }
 
 /// The terminal's visible echo of our prompt (framed/`>` input line):
@@ -35,7 +49,7 @@ pub fn is_prompt_echo(line: &str, want: &str) -> bool {
     if !(t.starts_with('┃') || t.starts_with('│') || t.starts_with('|') || t.starts_with('>')) {
         return false;
     }
-    strip_echo_framing(line) == want
+    frame_suffix_match(line, want)
 }
 
 /// A wrapped line of a multi-line prompt echo, matched IN ORDER: after
@@ -48,11 +62,7 @@ pub fn is_echo_continuation(line: &str, rest: &[&str], pos: usize) -> bool {
     let Some(want) = rest.get(pos) else {
         return false;
     };
-    let t = line.trim();
-    if t.is_empty() {
-        return false;
-    }
-    t == *want || strip_echo_framing(line) == *want
+    frame_suffix_match(line, want)
 }
 
 /// A segment opener that is an input box, not an answer: agy's bare `>`
@@ -98,6 +108,20 @@ mod tests {
         // A pipe/table char buried mid-line is content, not framing.
         assert!(!is_prompt_echo("a | b", "a | b"));
         assert!(!is_prompt_echo("col ┃ val", "col ┃ val"));
+    }
+
+    #[test]
+    fn test_prompt_echo_suffix_keeps_prompt_leading_content() {
+        // Suffix match, not greedy strip: a prompt line that itself
+        // starts with `>`/space keeps its leading content — the old
+        // `trim_start_matches` destroyed it and the opener missed.
+        assert!(is_prompt_echo("> > run this", "> run this"));
+        assert!(is_prompt_echo("  ┃   indented", "  indented"));
+        assert!(is_prompt_echo("| > go", "> go"));
+        // Leading spaces are content: framed echo still matches.
+        assert!(is_prompt_echo("┃   hi", "  hi"));
+        // Non-frame prefix is never an echo opener.
+        assert!(!is_prompt_echo("answer > hi", "> hi"));
     }
 
     #[test]

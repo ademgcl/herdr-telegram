@@ -8,13 +8,18 @@ use crate::{
 
 /// Re-render the agent card in place. Routing follows delivery (M:list
 /// parity): a deleted card pins neither focus nor reply-routing.
-pub(crate) async fn handle_agent_card(s: &AppState, chat: i64, msg_id: i64, pane: &str) {
+pub(crate) async fn handle_agent_card(
+    s: &AppState,
+    chat: i64,
+    msg_id: i64,
+    thread: Option<i64>,
+    pane: &str,
+) {
     match get_agent(&s.cfg.socket, pane).await {
         Ok(agent) => {
             let spaces = list_workspaces(&s.cfg.socket).await.unwrap_or_default();
             let space = ws_label(&spaces, &agent.ws);
-            if s
-                .tg
+            if s.tg
                 .try_edit_msg(
                     chat,
                     msg_id,
@@ -40,14 +45,8 @@ pub(crate) async fn handle_agent_card(s: &AppState, chat: i64, msg_id: i64, pane
                     // delivery-gated: a deleted card must not pin
                     // reply-routing to a dead msg_id.
                     s.set_focus(pane).await;
-                    if s
-                        .tg
-                        .try_edit_msg(
-                            chat,
-                            msg_id,
-                            &crate::ui::shell_gone_text(pane),
-                            None,
-                        )
+                    if s.tg
+                        .try_edit_msg(chat, msg_id, &crate::ui::shell_gone_text(pane), None)
                         .await
                         .is_ok()
                     {
@@ -58,7 +57,9 @@ pub(crate) async fn handle_agent_card(s: &AppState, chat: i64, msg_id: i64, pane
                     gone_card(s, chat, msg_id, pane).await;
                 }
                 Err(_) => {
-                    s.tg.edit_msg(chat, msg_id, crate::ui::HERDR_UNREACHABLE, None)
+                    // Notice keeps the agent-card keyboard (`edit_msg(None)`
+                    // would drop it — Telegram omits `reply_markup`).
+                    s.tg.send_msg(chat, thread, crate::ui::HERDR_UNREACHABLE, None)
                         .await;
                 }
             }

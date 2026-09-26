@@ -2,6 +2,21 @@
 use super::*;
 
 #[test]
+fn test_build_edit_msg_params_none_drops_keyboard() {
+    // Regression: `reply_markup` omitted ⇒ Telegram REMOVES the inline
+    // keyboard. Keep-intent failures must re-attach `Some(kb)` or
+    // notice beside the card (`send_msg`) — never edit with `None`.
+    let bare = build_edit_msg_params(1, 2, "hi", None);
+    assert!(bare.get("reply_markup").is_none(), "None must omit markup");
+    let kb = json!([[{"text": "ok", "callback_data": "x"}]]);
+    let kept = build_edit_msg_params(1, 2, "hi", Some(&kb));
+    assert_eq!(kept["reply_markup"]["inline_keyboard"], kb);
+    let strip = json!([]);
+    let cleared = build_edit_msg_params(1, 2, "hi", Some(&strip));
+    assert_eq!(cleared["reply_markup"]["inline_keyboard"], json!([]));
+}
+
+#[test]
 fn test_build_send_msg_params_effect() {
     let p1 = build_send_msg_params(123, Some(456), "hello", None, Some(EFFECT_FIRE), false);
     assert_eq!(p1["chat_id"], 123);
