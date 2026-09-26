@@ -82,23 +82,6 @@ pub const PHOTO_HINT_SHELL: &str = "🖼️ images aren't shell commands — des
 pub const PHOTO_HINT_GENERAL: &str =
     "🖼️ send images in an agent topic or DM, with a caption saying what to do with them";
 
-/// Single source for the queued-prompt ack (enqueue shares it —
-/// silent: the turn's final still owns the buzz).
-pub fn queued_ack(pos: usize) -> String {
-    format!("⏳ queued #{pos} — runs after the live turn, one reply each")
-}
-
-/// Single source for the full-queue refuse (fail-visible, never
-/// silent growth).
-pub const QUEUE_FULL: &str =
-    "⚠️ prompt queue is full — wait for the live turn to finish, then resend";
-
-/// Single source for the reminted-topic queue drop (serve-time dest
-/// gone: the queued ack already promised a run, so the drop must be
-/// visible at the item's own dest, never log-only).
-pub const QUEUE_TOPIC_GONE: &str =
-    "⚠️ dropped a queued prompt — its topic is gone (reset/remint); please resend";
-
 /// Single source for photo + command captions (DM/topic-agent share
 /// it): the command runs as text, so the image would vanish silently
 /// without this note — fail-visible, never a quiet discard.

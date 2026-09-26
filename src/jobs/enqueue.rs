@@ -67,13 +67,6 @@ pub async fn enqueue_prompt(
         }
     };
 
-    // A turn is owed (or items already wait): hold FIFO behind it
-    // instead of superseding the live turn — like opencode's own input
-    // queue. Split to `queue::hold_if_owed` (300-line file limit).
-    if super::queue::hold_if_owed(&s, &pane, &job, chat_id, thread_id, req.text.clone()).await {
-        return;
-    }
-
     // Deliver FIRST, record after: a failed submit bumps nothing.
     // Instant feedback is the silent placeholder (edited live with the
     // transient tail, deleted when the buzzing final lands — see
@@ -123,9 +116,6 @@ pub async fn enqueue_prompt(
             &e.to_string(),
         )
         .await;
-        // Held prompts must not strand when this submit failed
-        // (split to `queue::serve_failed`).
-        super::queue::serve_failed(&s, &pane, &job).await;
         // Live re-read + retire under ONE pending hold (retire_if_idle):
         // a concurrent success must not land cover between the zero-read
         // and the stop — rearm_verdict would see live self, skip rearm,
@@ -242,30 +232,16 @@ pub async fn enqueue_prompt(
     }
 }
 
-/// Fail-path retire: zero-check + `mark_stopped` + map remove. Held
-/// queue counts as owed (the fail path serves it first, so a non-empty
-/// queue here means a live turn owns it — retiring would strand the
-/// serve). `publish_submit` bumps cover under the same pending lock, so
-/// a racing success cannot land between the read and the stop (else
+/// Fail-path retire: zero-check + `mark_stopped` + map remove.
+/// `publish_submit` bumps cover under the same pending lock, so a
+/// racing success cannot land between the read and the stop (else
 /// `rearm_verdict` sees live self, returns, and the delivered prompt
-/// strands with durable intent but no watcher). Lock order
-/// `pending`→`prompt_queue`→`jobs` (the queue read nests inside the
-/// `pending` hold; nothing anywhere inverts it: every other user takes
-/// these one at a time). Never clears the durable slot — any intent
-/// present belongs to a racing shell/corpsed submit. True when retired
-/// (nothing owed).
+/// strands with durable intent but no watcher). Never clears the
+/// durable slot — any intent present belongs to a racing shell/corpsed
+/// submit. True when retired (nothing owed).
 async fn retire_if_idle(s: &AppState, pane: &str, job: &Arc<Job>) -> bool {
     let owed = job.pending.lock().await;
     if *owed > 0 {
-        return false;
-    }
-    // The queue read nests inside the `pending` hold (the guard
-    // lives to end of scope — lock order `pending`→`prompt_queue`→`jobs`
-    // per the doc above). A push landing after this read but before the
-    // map remove strands: the loop-top serve + next submit drain it, and
-    // every cancel path now clears it (cancel means cancel).
-    let queued = super::queue::queue_len(s, pane).await > 0;
-    if queued {
         return false;
     }
     job.mark_stopped();

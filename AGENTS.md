@@ -29,7 +29,7 @@ herdr-telegram: Telegram (DMs + forum topics) ↔ Herdr multiplexer over local U
 - Icon = live kind (glyphs + fallback, customs kept); status in cards/typing (never pin). Buzz: answers, `blocked`, stuck limits.
 - Blocked cards follow content; taps edit in place; `/card` reposts, `/esc` dismisses (blocked-only; shell: Esc raw, card refused).
 - Topic: text = prompt + commands; General: panel + scoped cmds (see `/help`); DM: full set, reply→focus→sole-agent.
-- Prompts queue FIFO per pane while a turn is owed (one final each; RAM-only, `/cancel` drops); photos attach as `[attached image: path]` (caption = prompt), shells/General refuse visibly.
+- Prompts go straight to the agent (it orders concurrent input; no bot-side hold); photos attach as `[attached image: path]` (caption = prompt), shells/General refuse visibly.
 - Spontaneous settles stay silent when post-prompt, empty, or moved-on.
 
 ## 4. Replies

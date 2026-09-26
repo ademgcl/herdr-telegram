@@ -3,7 +3,7 @@
 You're away from the desk when an agent stalls on a question. Telegram buzzes with the prompt and answer buttons — you tap one, the run continues. Start on desktop, finish on the phone.
 
 - One topic per pane: plain text is the prompt, titles sync 1:1 with Herdr.
-- Prompts queue per pane while a turn runs (FIFO, one reply each); `/cancel` drops the queue.
+- Prompts go straight to the agent (it orders concurrent input itself); `/cancel` aborts the turn.
 - Blocked agents post answer cards: tap a button or type the answer.
 
 ## You need

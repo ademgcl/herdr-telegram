@@ -245,11 +245,6 @@ pub async fn settle_step(
         *settled_since = None;
         return SettleStep::Continue;
     }
-    // Turn complete with prompts held: serve the next queued item as a
-    // fresh turn (own submit, books, and final) instead of retiring.
-    if super::queue::serve_next(s, pane, job).await {
-        return SettleStep::Continue;
-    }
     SettleStep::Break
 }
 

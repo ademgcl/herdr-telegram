@@ -17,7 +17,6 @@ pub mod notices;
 pub mod persist;
 pub mod progress;
 pub mod progress_retire;
-pub mod queue;
 pub mod recover;
 pub mod recover_gate;
 pub mod repoint;

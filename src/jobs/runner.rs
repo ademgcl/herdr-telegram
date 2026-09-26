@@ -124,12 +124,6 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // so the next delta is exactly the new turn's output
             // (resetting drops the first burst — fresh and reused).
         }
-        // Freed turn serves held prompts (split to `queue::serve_if_freed`);
-        // a publish bumps the epoch and the next iteration syncs above.
-        if super::queue::serve_if_freed(&s, &pane, &job).await {
-            continue;
-        }
-
         // Reconnect the event stream lazily — never in a hot loop.
         // Bounded: a hung ack degrades to polling, never freezes pre-select.
         // Cancel-raced: the open await sits outside the select below, so
