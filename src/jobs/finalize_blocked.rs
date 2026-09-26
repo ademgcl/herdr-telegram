@@ -22,6 +22,7 @@ pub async fn try_finalize_blocked(
     snapshot: Vec<String>,
     entry_epoch: u64,
     entry_pending: usize,
+    live_entry: Option<(i64, u64)>,
     acc: &mut Vec<String>,
 ) -> Option<bool> {
     if settled != "blocked" {
@@ -44,8 +45,8 @@ pub async fn try_finalize_blocked(
         }
         observe_status(s, pane, settled, true, "job").await;
         // The question already buzzed elsewhere: retire the transient
-        // with the books (epoch-gated — a successor owns it now).
-        super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
+        // with the books (generation-gated — a successor owns it now).
+        super::progress::clear_live_if_epoch(s, pane, live_entry).await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }
@@ -82,7 +83,7 @@ pub async fn try_finalize_blocked(
             return Some(false);
         }
         observe_status(s, pane, settled, true, "job").await;
-        super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
+        super::progress::clear_live_if_epoch(s, pane, live_entry).await;
         settle_books(s, pane, job, entry_epoch, entry_pending).await;
         return Some(false);
     }
@@ -124,7 +125,7 @@ pub async fn try_finalize_blocked(
         if job.epoch.load(Ordering::Relaxed) == entry_epoch {
             // The buzzing question card landed: the silent transient
             // retires with it (the card is the final word on this turn).
-            super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
+            super::progress::clear_live_if_epoch(s, pane, live_entry).await;
             s.last_done
                 .lock()
                 .await
@@ -164,6 +165,7 @@ pub async fn try_finalize_empty(
     snapshot: Vec<String>,
     entry_epoch: u64,
     entry_pending: usize,
+    live_entry: Option<(i64, u64)>,
     acc: &mut Vec<String>,
 ) -> Option<bool> {
     // Gate before observing: a submit racing the RPCs above owns
@@ -176,9 +178,9 @@ pub async fn try_finalize_empty(
         return Some(false);
     }
     observe_status(s, pane, settled, true, "job").await;
-    // Nothing to buzz for an empty settle — but the silent transient
-    // must not linger beside nothing.
-    super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
+    // Nothing to buzz for an empty settle — the transient retires
+    // per the auto-remove flag (kept turns reuse it next).
+    super::progress::clear_live_if_epoch(s, pane, live_entry).await;
     // Superseded during the RPCs above: stamp nothing (blocked-path rule).
     if job.epoch.load(Ordering::Relaxed) == entry_epoch
         && crate::types::anchorable_screen(&snapshot)

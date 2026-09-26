@@ -135,9 +135,9 @@ pub(crate) async fn handle_topic_agent_message(
     }
 
     // Control plane works in-thread, after the waiters (an armed
-    // waiter owns the next message).
-    if cmd == "/agents" || cmd == "/spawn" {
-        super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
+    // waiter owns the next message). Split to `forum_control`
+    // (300-line file limit).
+    if super::forum_control::handle_control_plane(&s, chat, thread_id, cmd, arg).await {
         return;
     }
 

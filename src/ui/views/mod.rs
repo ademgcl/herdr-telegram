@@ -6,6 +6,9 @@ mod help;
 #[path = "mask_tests.rs"]
 mod mask_tests;
 #[cfg(test)]
+#[path = "parity_tests.rs"]
+mod parity_tests;
+#[cfg(test)]
 mod tests;
 pub use help::*;
 

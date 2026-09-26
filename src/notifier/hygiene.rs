@@ -236,6 +236,11 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             s.topics.prune_kinds(&live);
             // Shell generations are pane-scoped like the maps above.
             s.shell_gen.lock().await.retain(|p, _| live.contains(p));
+            // Transient pointers die with their panes (a dead pane's
+            // working message is history no turn will ever edit again);
+            // in-flight post claims the same (a dead pane serves nothing).
+            s.live.lock().await.retain(|p, _| live.contains(p));
+            s.live_sending.lock().await.retain(|p| live.contains(p));
             // Corpse-tap reap: a wedged OpGuard (drop lost the lock race)
             // must never brick answers until restart — every answer path
             // refuses while blockop holds the pane. Legit taps hold

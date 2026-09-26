@@ -107,6 +107,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
         super::agents::handle_control(&s, chat, Some(thread_id), cmd, arg).await;
         return;
     }
+    if cmd == "/transient" {
+        super::transient::handle_transient(&s, chat, Some(thread_id), arg).await;
+        return;
+    }
     if cmd == "/reset" {
         // Own-pane-only like the agent flavor: an arg is refused, never
         // a cross-pane reset on a typo. Spawned: must not stall the pump.

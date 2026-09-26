@@ -7,9 +7,9 @@ use crate::{
     types::Res,
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, atomic::AtomicBool},
 };
 use tokio::sync::Mutex;
 
@@ -19,12 +19,14 @@ mod clear;
 pub(crate) mod guard;
 pub(crate) mod history;
 mod jobs;
+pub(crate) mod live;
 mod pending_cas;
 mod persist_paths;
 mod retire;
 mod targets;
 #[cfg(test)]
 mod test_state;
+mod transient;
 mod typing;
 
 pub use self::guard::OpGuard;
@@ -149,6 +151,18 @@ pub struct State {
     pub shell_gen: Mutex<HashMap<String, u64>>,
     /// Active background typing indicator tasks for working panes.
     pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// Auto-remove the silent transient when the final lands
+    /// (`/transient on`; off by default so the working trace stays
+    /// readable). Plain bool flag, never a map — nothing to prune.
+    pub transient_remove: AtomicBool,
+    /// One silent working message per pane (see `live`): shared across
+    /// all turns so updates are edits (never notify), pruned with pane
+    /// death in hygiene.
+    pub live: Mutex<HashMap<String, crate::state::live::LiveSlot>>,
+    /// Panes with a transient post in flight (single-flight across
+    /// tasks). RAM-only, always released in the same call — nothing to
+    /// persist; dead entries pruned with pane death in hygiene.
+    pub live_sending: Mutex<HashSet<String>>,
 }
 
 pub type AppState = Arc<State>;
@@ -254,6 +268,13 @@ impl State {
             history: Mutex::new(HashMap::new()),
             shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
+            // Fail-open default off (keep transients): a torn write must
+            // never flip the user into auto-remove.
+            transient_remove: AtomicBool::new(Self::load_transient_remove()),
+            // Fresh boot owns no transient pointers (never persisted —
+            // rebuilt on demand) and no post flights.
+            live: Mutex::new(HashMap::new()),
+            live_sending: Mutex::new(HashSet::new()),
         });
         // Orphan-heal: `last_msgs` entries without a mapping are
         // write-only disk growth (stale mids also resurface via

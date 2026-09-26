@@ -126,6 +126,7 @@ impl TelegramClient {
         ),
         ("history", "recent prompts you sent (topic/DM)"),
         ("cancel", "abort pending prompts / keys-mode"),
+        ("transient", "working message: keep or auto-remove on final"),
         ("reset", "reset topics (paced all; per-topic inside topics)"),
         ("card", "re-post question + buttons (topic/DM)"),
         ("esc", "guarded Esc dismiss, blocked-only (topic/DM)"),

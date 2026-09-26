@@ -170,6 +170,11 @@ pub(crate) async fn handle_general_forum_message(
         return;
     }
 
+    if cmd == "/transient" {
+        super::transient::handle_transient(&s, chat, thread_id, arg).await;
+        return;
+    }
+
     if cmd == "/model" {
         s.tg.send_msg(
             chat,

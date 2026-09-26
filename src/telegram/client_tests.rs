@@ -222,7 +222,15 @@ fn test_menu_names_tags_and_no_alias() {
     ];
     // Global: full, redirect, or refusal on every surface.
     let global = [
-        "start", "agents", "spawn", "space", "shell", "pane", "cancel", "help",
+        "start",
+        "agents",
+        "spawn",
+        "space",
+        "shell",
+        "pane",
+        "cancel",
+        "transient",
+        "help",
     ];
     let names: Vec<&str> = TelegramClient::MENU_COMMANDS
         .iter()

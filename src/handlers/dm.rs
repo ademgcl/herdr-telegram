@@ -108,6 +108,11 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/transient" {
+        super::transient::handle_transient(&s, chat, None, arg).await;
+        return;
+    }
+
     if cmd == "/keys" {
         super::dm_info::handle_keys(&s, chat, &rows, arg, &reply_pane).await;
         return;

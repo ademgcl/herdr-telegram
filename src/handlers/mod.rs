@@ -18,6 +18,7 @@ pub mod esc_ack;
 pub mod esc_guard;
 pub mod escape;
 pub mod forum;
+pub mod forum_control;
 pub mod forum_topic;
 pub mod forum_topic_status;
 pub mod forum_typewait;
@@ -58,6 +59,7 @@ pub mod titles_space;
 pub mod topic_edit;
 pub mod topic_keys;
 pub mod topic_read;
+pub mod transient;
 
 pub use callback::handle_callback;
 pub use dm::handle_dm_message;

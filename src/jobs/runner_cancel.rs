@@ -29,7 +29,7 @@ pub(crate) async fn cancel_watch_parts(s: &AppState, pane: &str, job: &Arc<Job>)
     s.clear_pending_if_owner(pane, job, epoch_at_entry).await;
     // Genuine cancel owns the pane (a supersede never notifies): the
     // silent transient retires before the buzzing cancelled card lands.
-    super::progress::clear_live(s, job).await;
+    super::progress::clear_live(s, pane).await;
     let (chat, th) = *job.dest.lock().await;
     super::report::report(s, chat, th, pane, CANCELLED).await;
 }

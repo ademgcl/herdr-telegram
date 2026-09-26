@@ -60,6 +60,31 @@ impl TelegramClient {
         }
     }
 
+    /// Patient silent send for the instant placeholder: same no-buzz
+    /// semantics, longer single-attempt deadline. The 4s `send_silent`
+    /// bound can expire AFTER Telegram accepted the send on slow links —
+    /// the slot then stays empty and the next tick posts a duplicate
+    /// beside the delivered original. A miss here still retries next
+    /// tick (fail-closed), just far less often. Single attempt only: a
+    /// retry would itself double-post.
+    pub async fn send_silent_patient(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        text: &str,
+    ) -> Option<i64> {
+        let params = build_send_msg_params(chat_id, thread_id, text, None, None, true);
+        match self
+            .call("sendMessage", params, Duration::from_secs(25))
+            .await
+        {
+            Ok(v) => v["message_id"].as_i64(),
+            Err(e) => {
+                eprintln!("sendMessage silent failed: {}", self.redact(&e.to_string()));
+                None
+            }
+        }
+    }
     /// F8: Send message with optional message effect ID (e.g. fire/flame for urgent alerts).
     /// If Telegram rejects the effect (e.g. in unsupported chats), retries without effect.
     pub async fn send_msg_with_effect(

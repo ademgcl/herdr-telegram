@@ -29,12 +29,13 @@ pub async fn finalize(
     job: &Arc<Job>,
     settled: &str,
     acc: &mut Vec<String>,
-    entry: (u64, usize, String),
+    entry: (u64, usize, String, Option<(i64, u64)>),
 ) -> bool {
-    // Settle-owned entry triple: snapshotted before the remap RPCs, never
-    // re-read here — a cross-thread submit in the gap would else pair the
-    // new epoch/prompt with this old acc/screen.
-    let (entry_epoch, entry_pending, prompt) = entry;
+    // Settle-owned entry triple + live-slot entry: snapshotted before
+    // the remap RPCs, never re-read here — a cross-thread submit in the
+    // gap would else pair the new epoch/prompt with this old acc/screen
+    // (and a stale retire would take the new turn's shared message).
+    let (entry_epoch, entry_pending, prompt, live_entry) = entry;
     // One settled read, arbitrated against the stream (see
     // select_final_body): alt-screen TUIs starve the delta stream, so a
     // trivial fragment must not shadow the real answer. The same screen
@@ -90,7 +91,7 @@ pub async fn finalize(
             // Empty never anchors (anchor parity with
             // Job::anchor_baseline): a blank read would wipe a good
             // baseline and repost scrollback as fresh on reuse.
-            super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
+            super::progress::clear_live_if_epoch(s, pane, live_entry).await;
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -120,6 +121,7 @@ pub async fn finalize(
         snapshot.clone(),
         entry_epoch,
         entry_pending,
+        live_entry,
         acc,
     )
     .await
@@ -139,6 +141,7 @@ pub async fn finalize(
             snapshot.clone(),
             entry_epoch,
             entry_pending,
+            live_entry,
             acc,
         )
         .await
@@ -241,9 +244,9 @@ pub async fn finalize(
         return true;
     }
     // The buzzing final landed as NEW message(s): the silent transient
-    // retires (epoch-gated — a successor turn owns the slot now, and
+    // retires (generation-gated — a successor turn owns the slot now, and
     // its next tick re-posts when a racing delete took it).
-    super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
+    super::progress::clear_live_if_epoch(s, pane, live_entry).await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.

@@ -1,8 +1,20 @@
 use super::*;
+use crate::state::live::LiveSlot;
 use std::time::Duration;
 
 fn acc(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
+}
+
+fn slot(mid: i64, turn: u64) -> LiveSlot {
+    LiveSlot {
+        chat: 7,
+        thread: None,
+        mid,
+        text: "t".to_string(),
+        at: None,
+        turn,
+    }
 }
 
 #[test]
@@ -68,23 +80,32 @@ fn test_edit_due_throttles_then_releases() {
 }
 
 #[tokio::test]
-async fn test_adopt_moves_slot_without_traffic() {
-    let from = Job::new(vec!["b".into()], 7, None);
-    let to = Job::new(vec!["b".into()], 7, None);
-    *from.live_msg.lock().await = Some((7, None, 42));
-    *from.live_text.lock().await = "hi".to_string();
+async fn test_keep_mode_retire_leaves_slot_for_reuse() {
+    // Auto-remove off (the default): the retire is a no-op — same
+    // message, same slot, next turn reuses it with zero new
+    // notification entries. No RPC fires here either.
     let (s, _dir) = crate::state::cancel::isolated_state();
-    adopt_live(&s, &from, &to).await;
-    assert!(from.live_msg.lock().await.is_none());
-    assert_eq!(*to.live_msg.lock().await, Some((7, None, 42)));
-    assert_eq!(*to.live_text.lock().await, "hi");
+    assert!(!s.transient_remove());
+    s.live_put("w1:p1", slot(42, 3)).await;
+    clear_live_if_epoch(&s, "w1:p1", Some((42, 3))).await;
+    clear_live(&s, "w1:p1").await;
+    let kept = s.live_get("w1:p1").await.expect("slot kept");
+    assert_eq!((kept.mid, kept.turn), (42, 3));
 }
 
 #[tokio::test]
-async fn test_adopt_same_arc_noop() {
-    let j = Job::new(vec!["b".into()], 7, None);
-    *j.live_msg.lock().await = Some((7, None, 42));
+async fn test_moved_on_generation_stands_retire_down() {
+    // Entry mismatch returns before any RPC (safe with auto-remove on:
+    // no delete fires for a slot the retire does not own).
     let (s, _dir) = crate::state::cancel::isolated_state();
-    adopt_live(&s, &j, &j).await;
-    assert_eq!(*j.live_msg.lock().await, Some((7, None, 42)));
+    s.set_transient_remove(true).await;
+    s.live_put("w1:p1", slot(42, 4)).await;
+    // No entry at all: nothing to retire.
+    clear_live_if_epoch(&s, "w1:p1", None).await;
+    // Stale entry (old mid / old gen): successor owns it now.
+    clear_live_if_epoch(&s, "w1:p1", Some((41, 4))).await;
+    clear_live_if_epoch(&s, "w1:p1", Some((42, 3))).await;
+    let kept = s.live_get("w1:p1").await.expect("slot kept");
+    assert_eq!((kept.mid, kept.turn), (42, 4));
+    s.set_transient_remove(false).await;
 }

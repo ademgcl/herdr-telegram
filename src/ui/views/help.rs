@@ -19,6 +19,7 @@ pub fn help_text() -> &'static str {
       `/history [n]`  prompts you sent here (cross-device catch-up)\n\
       `/reset`    paced reset of all topics (re-sync from Herdr)\n\
       `/cancel [all|<pane>]` abort focused job(s), all = everything / exit keys-mode\n\
+      `/transient [on|off]` keep or auto-remove the working message\n\
      `/keys <pane> y enter`   send raw keys\n\n\
      ↩️ reply to any bot message → talks to that agent\n\
      plain text → focused agent\n\n\
@@ -41,7 +42,8 @@ pub fn general_help_text() -> String {
      • `/card` `/esc` — in an agent topic (or DM): fresh buttons / guarded dismiss\n\
      • `/quit` `/kill` `/split` `/read` `/output` `/status` `/keys` — inside the agent's topic (or DM)\n\
      • `/reset` — paced reset of all topics (re-sync from Herdr)\n\
-      • `/cancel [all|<pane>]` — abort focused job(s), all = everything\n\n\
+      • `/cancel [all|<pane>]` — abort focused job(s), all = everything\n\
+      • `/transient [on|off]` — keep or auto-remove the working message\n\n\
      {GENERAL_HINT}"
     )
 }
@@ -66,6 +68,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
           • `/split` — sibling shell pane (longer side; or right|down)\n\
            • `/keys y enter` — send keystrokes\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
+          • `/transient [on|off]` — keep or auto-remove the working message\n\
           • `/reset` — reset this topic (re-sync from Herdr)\n\
           • `/status` — refresh agent status card\n\
           • ✏️ rename this topic = renames in herdr (kept in sync)"
@@ -87,6 +90,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • `/history [n]` — recent shell commands\n\
          • `/esc` — send Esc (vim toggles mode)\n\
           • `/cancel [all|<pane>]` — abort this pane (or scope), re-prompt to resume\n\
+          • `/transient [on|off]` — keep or auto-remove the working message\n\
           • `/space [name]` — new space + shell topic\n\
           • `/reset` — reset this topic (re-sync from Herdr)\n\
           • `/keys y enter` — send keystrokes\n\

@@ -56,6 +56,19 @@ pub fn unknown_space(spec: &str) -> String {
 /// surface (pane/agent reads, shell results, topic reads).
 pub const NO_OUTPUT: &str = "(no output)";
 
+/// Single source for the `/transient` usage (unknown args must never
+/// flip the flag — DM/topic/General share it).
+pub const TRANSIENT_USAGE: &str = "usage: `/transient [on|off]` — bare shows the current setting";
+
+/// Single source for the `/transient` status line (every surface).
+pub fn transient_status(on: bool) -> String {
+    if on {
+        "🧹 transient auto-remove is on — working messages delete when the final lands".to_string()
+    } else {
+        "🧹 transient auto-remove is off — working messages stay as history".to_string()
+    }
+}
+
 /// Single source for the typed-answer ack (every typed-answer surface).
 pub fn typed_ack(pane: &str) -> String {
     format!("⌨️ typed into {pane} + ⏎")

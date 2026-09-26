@@ -146,7 +146,7 @@ pub async fn enqueue_prompt(
             // No successor owns the turn: the instant placeholder must
             // not linger beside the error card — the card below is the
             // final word on this submit.
-            super::progress::clear_live(&s, &job).await;
+            super::progress::clear_live(&s, &pane).await;
         }
         return;
     }
@@ -194,9 +194,8 @@ pub async fn enqueue_prompt(
             &req.text,
         )
         .await;
-        // The placeholder posted above moves to the live owner (no
-        // flicker, no duplicate) — the detached books retire with us.
-        super::progress::adopt_live(&s, &job, &j).await;
+        // Shared slot: the live owner keeps editing it — the detached
+        // books retire with us, the message stays single.
         return;
     }
     let rearm = match s.jobs.lock().await.get(&pane).cloned() {
@@ -233,7 +232,7 @@ pub async fn enqueue_prompt(
                 &req.text,
             )
             .await;
-            super::progress::adopt_live(&s, &job, &j).await;
+            // Shared slot: the live owner keeps editing it.
         }
         return;
     }
@@ -241,7 +240,6 @@ pub async fn enqueue_prompt(
         super::enqueue_rearm::rearm_watcher(
             &s,
             &pane,
-            &job,
             req.chat_id,
             req.message_thread_id,
             &req.text,

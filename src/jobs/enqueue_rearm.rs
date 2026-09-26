@@ -11,7 +11,6 @@ use std::sync::Arc;
 pub(crate) async fn rearm_watcher(
     s: &AppState,
     pane: &str,
-    prev: &Arc<Job>,
     chat_id: i64,
     thread_id: Option<i64>,
     text: &str,
@@ -25,7 +24,7 @@ pub(crate) async fn rearm_watcher(
     // Nobody will own the pre-submit placeholder then: retire it so no
     // orphan "thinking…" lingers beside nothing.
     if !s.pending_matches(pane, chat_id, thread_id, text).await {
-        super::progress::clear_live(s, prev).await;
+        super::progress::clear_live(s, pane).await;
         return;
     }
     // A concurrent enqueue may have won while the baseline read yielded
@@ -34,7 +33,7 @@ pub(crate) async fn rearm_watcher(
     // ownership first: a /cancel landing in the same window cleared the
     // slot — transferring now re-mints its durable intent (resurrection).
     if !s.pending_matches(pane, chat_id, thread_id, text).await {
-        super::progress::clear_live(s, prev).await;
+        super::progress::clear_live(s, pane).await;
         return;
     }
     let live_other = s
@@ -58,7 +57,6 @@ pub(crate) async fn rearm_watcher(
                 // Lost the insert race: the winner owns the turn — move
                 // the pre-submit placeholder to it (or drop the dupe) so
                 // no orphan lingers on this detached job.
-                super::progress::adopt_live(s, prev, &j).await;
             } else {
                 map.insert(pane.to_string(), j2.clone());
                 drop(map);
@@ -70,13 +68,12 @@ pub(crate) async fn rearm_watcher(
                     if map.get(pane).map(|j| Arc::ptr_eq(j, &j2)).unwrap_or(false) {
                         map.remove(pane);
                     }
-                    super::progress::clear_live(s, prev).await;
+                    super::progress::clear_live(s, pane).await;
                     return;
                 }
                 println!("[jobs] re-armed watcher for {pane} (retired mid-submit)");
                 // The placeholder posted pre-submit moves here (no flicker,
                 // no orphan beside the re-armed turn).
-                super::progress::adopt_live(s, prev, &j2).await;
                 tokio::spawn(watch_job(s.clone(), pane.to_string(), j2.clone()));
             }
         }
@@ -87,11 +84,10 @@ pub(crate) async fn rearm_watcher(
             // The pre-submit placeholder dies with the turn (nobody owns
             // it — the stopped successor serves nothing).
             if j.is_stopped() || !s.pending_matches(pane, chat_id, thread_id, text).await {
-                super::progress::clear_live(s, prev).await;
+                super::progress::clear_live(s, pane).await;
                 return;
             }
             super::enqueue_transfer::transfer_live(s, pane, &j, chat_id, thread_id, text).await;
-            super::progress::adopt_live(s, prev, &j).await;
         }
     }
 }

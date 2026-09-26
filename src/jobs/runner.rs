@@ -120,12 +120,6 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // Herdr-error streak belongs to the old prompt: 11 failures
             // there + 1 here must not back the new prompt off for 60s.
             fails = 0;
-            // Re-validate the transient slot: a stale finalize racing the
-            // submit may have deleted this shared message — resetting the
-            // text gate forces one edit attempt, which reposts when gone
-            // (a live message just takes the same-text edit, throttled).
-            *job.live_text.lock().await = String::new();
-            *job.live_at.lock().await = None;
             // Baseline persists: it already covers everything streamed,
             // so the next delta is exactly the new turn's output
             // (resetting drops the first burst — fresh and reused).

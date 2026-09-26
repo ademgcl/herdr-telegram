@@ -120,6 +120,12 @@ pub async fn settle_step(
     // the snapshot itself.
     let pre_epoch = job.epoch.load(Ordering::Relaxed);
     let (entry_epoch, entry_pending, entry_prompt) = job.snapshot_entry().await;
+    // Live-slot entry (retire parity): the shared transient's (mid,
+    // generation) at entry — a submit landing anywhere after this (like
+    // the job entry above) claims the slot, and the retire gate below
+    // stands the stale delete down. Snapshot alongside the job entry so
+    // both pin the same generation; finalize must NEVER re-snapshot.
+    let live_entry = s.live_get(pane).await.map(|l| (l.mid, l.turn));
     // Generation-bound arm (runner last_epoch parity): a submit landing
     // after the runner's loop-top load but before this snapshot moves
     // entry_epoch off loop_epoch — the arm was armed under the OLD
@@ -208,7 +214,7 @@ pub async fn settle_step(
         job,
         status,
         acc,
-        (entry_epoch, entry_pending, entry_prompt),
+        (entry_epoch, entry_pending, entry_prompt, live_entry),
     )
     .await;
     if job.epoch.load(Ordering::Relaxed) != epoch_before {
