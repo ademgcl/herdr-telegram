@@ -21,8 +21,8 @@ use crate::{
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::progress_retire::is_owner;
 pub use super::progress_retire::{clear_live, clear_live_if_epoch, clear_live_if_ownerless};
+use super::progress_retire::{is_owner, post_fresh};
 
 /// First instant reply: covers easy turns with no transient output yet.
 pub const THINKING: &str = "💭 thinking…";
@@ -32,9 +32,6 @@ const WORKING_HEAD: &str = "💭 working…";
 const EDIT_COOLDOWN_SECS: u64 = 4;
 /// Header reserve inside the Telegram size cap.
 const TAIL_RESERVE: usize = 64;
-/// Unsent-slot marker (see `post_fresh`): a failed post banks the
-/// render + attempt time so retries back off instead of firing hot.
-const UNSENT_MID: i64 = -1;
 
 /// Render the progress body: placeholder when nothing streamed yet,
 /// else the header plus the raw tail (unfiltered — transient lines are
@@ -51,14 +48,16 @@ pub fn render_progress(acc: &[String]) -> String {
 }
 
 /// Pure edit gate (tested): new text only, throttled to the cooldown.
-/// A first edit (no prior attempt) always goes through.
+/// A first edit (no prior attempt) always goes through. Saturating:
+/// a flood-wait banks a FUTURE attempt time, which must read as
+/// throttled, never panic.
 pub(crate) fn edit_due(last: &str, next: &str, last_at: Option<Instant>, now: Instant) -> bool {
     if last == next {
         return false;
     }
     match last_at {
         None => true,
-        Some(t) => now.duration_since(t) >= Duration::from_secs(EDIT_COOLDOWN_SECS),
+        Some(t) => now.saturating_duration_since(t) >= Duration::from_secs(EDIT_COOLDOWN_SECS),
     }
 }
 
@@ -220,74 +219,6 @@ pub async fn refresh_live(s: &AppState, pane: &str, job: &Arc<Job>, acc: &[Strin
                     .await;
                 }
             }
-        }
-    }
-}
-
-/// Silent fresh post + reply-route memory (targets only — progress is
-/// transient, so it never joins the reset-copy `last_msgs`). Misses
-/// bank an unsent slot (render + attempt time) so retries back off
-/// instead of firing hot. Single-flight across tasks: the loser skips
-/// and its next tick sees the slot. A post retired mid-send is dropped
-/// instead of orphaned. Patient deadline: the 4s bound can expire
-/// after Telegram accepted the send on slow links, and the next tick
-/// would post a duplicate beside the delivered original.
-async fn post_fresh(
-    s: &AppState,
-    pane: &str,
-    job: &Arc<Job>,
-    dest: (i64, Option<i64>),
-    text: &str,
-    turn: u64,
-) {
-    let (c, th) = dest;
-    if !s.live_claim(pane).await {
-        return;
-    }
-    let mid = s.tg.send_silent_patient(c, th, text).await;
-    s.live_unclaim(pane).await;
-    let now = Instant::now();
-    // Stopped mid-send (cancel/fail retired us during the RPC): the slot
-    // belongs to nobody — drop the message, never store it.
-    if job.is_stopped() {
-        if let Some(m) = mid {
-            println!("[live] post {pane} m{m} landed retired, dropping");
-            s.tg.delete_msg(c, m).await;
-            s.forget_target(c, m).await;
-        }
-        return;
-    }
-    match mid {
-        Some(m) => {
-            println!("[live] post {pane} m{m} ok");
-            s.live_put(
-                pane,
-                LiveSlot {
-                    chat: c,
-                    thread: th,
-                    mid: m,
-                    text: text.to_string(),
-                    at: Some(now),
-                    turn,
-                },
-            )
-            .await;
-            s.remember_reply(c, m, pane).await;
-        }
-        None => {
-            println!("[live] post {pane} missed, banking retry");
-            s.live_put(
-                pane,
-                LiveSlot {
-                    chat: c,
-                    thread: th,
-                    mid: UNSENT_MID,
-                    text: text.to_string(),
-                    at: Some(now),
-                    turn,
-                },
-            )
-            .await;
         }
     }
 }

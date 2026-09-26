@@ -7,7 +7,12 @@
 //! the stale retire stands down. Split from `progress` (300-line file
 //! limit) — call sites keep `progress::…` (re-exported there).
 //! Fail-closed like `progress`: best-effort, never a lock across RPC.
-use crate::state::{AppState, live::LiveSlot};
+use crate::{
+    jobs::job::Job,
+    state::{AppState, live::LiveSlot},
+};
+use std::sync::Arc;
+use std::time::Instant;
 
 /// Map-ownership check (pure lock read, never across RPC): a detached
 /// watcher must not post into its successor's turn.
@@ -106,4 +111,92 @@ pub async fn clear_live_if_ownerless(
         return;
     }
     clear_live(s, pane).await;
+}
+
+/// Unsent-slot marker: a failed post banks this mid so retries back
+/// off instead of firing hot (matched with `< 0`, never sent anywhere).
+const UNSENT_MID: i64 = -1;
+
+/// Silent fresh post + reply-route memory (targets only — progress is
+/// transient, so it never joins the reset-copy `last_msgs`). Misses
+/// bank an unsent slot (render + attempt time) so retries back off
+/// instead of firing hot. Single-flight across tasks: the loser skips
+/// and its next tick sees the slot. A post retired mid-send is dropped
+/// instead of orphaned. Patient deadline: the 4s bound can expire
+/// after Telegram accepted the send on slow links, and the next tick
+/// would post a duplicate beside the delivered original.
+pub(crate) async fn post_fresh(
+    s: &AppState,
+    pane: &str,
+    job: &Arc<Job>,
+    dest: (i64, Option<i64>),
+    text: &str,
+    turn: u64,
+) {
+    let (c, th) = dest;
+    if !s.live_claim(pane).await {
+        return;
+    }
+    let res = s.tg.send_silent_patient(c, th, text).await;
+    s.live_unclaim(pane).await;
+    let now = Instant::now();
+    // Stopped mid-send (cancel/fail retired us during the RPC): the slot
+    // belongs to nobody — drop the message, never store it.
+    if job.is_stopped() {
+        if let Some(m) = res.as_ref().ok().and_then(|o| *o) {
+            println!("[live] post {pane} m{m} landed retired, dropping");
+            s.tg.delete_msg(c, m).await;
+            s.forget_target(c, m).await;
+        }
+        return;
+    }
+    match res {
+        Ok(Some(m)) => {
+            println!("[live] post {pane} m{m} ok");
+            s.live_put(
+                pane,
+                LiveSlot {
+                    chat: c,
+                    thread: th,
+                    mid: m,
+                    text: text.to_string(),
+                    at: Some(now),
+                    turn,
+                },
+            )
+            .await;
+            s.remember_reply(c, m, pane).await;
+        }
+        // Miss: bank an unsent slot (render + attempt time) so retries
+        // back off instead of firing hot. A flood-wait banks its full
+        // window — retrying inside `retry after N` only extends the ban.
+        Ok(None) | Err(_) => {
+            let at = match &res {
+                Err(e) => match crate::telegram::TelegramClient::retry_after(e) {
+                    Some(wait) => {
+                        println!(
+                            "[live] post {pane} flooded, backing off {}s",
+                            wait.as_secs()
+                        );
+                        now + wait
+                    }
+                    None => now,
+                },
+                _ => now,
+            };
+            println!("[live] post {pane} missed, banking retry");
+            s.live_put(
+                pane,
+                LiveSlot {
+                    chat: c,
+                    thread: th,
+                    mid: UNSENT_MID,
+                    text: text.to_string(),
+                    at: Some(at),
+                    turn,
+                },
+            )
+            .await;
+        }
+    }
 }

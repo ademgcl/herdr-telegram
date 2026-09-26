@@ -62,6 +62,18 @@ fn test_edit_due_first_edit_always() {
 }
 
 #[test]
+fn test_edit_due_future_attempt_never_panics_and_throttles() {
+    // Flood-waits bank a FUTURE attempt time: must read as throttled.
+    let now = Instant::now();
+    assert!(!edit_due(
+        "a",
+        "b",
+        Some(now + Duration::from_secs(60)),
+        now
+    ));
+}
+
+#[test]
 fn test_edit_due_throttles_then_releases() {
     let t0 = Instant::now();
     assert!(!edit_due("a", "b", Some(t0), t0));

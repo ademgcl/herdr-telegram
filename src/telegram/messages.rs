@@ -66,22 +66,25 @@ impl TelegramClient {
     /// the slot then stays empty and the next tick posts a duplicate
     /// beside the delivered original. A miss here still retries next
     /// tick (fail-closed), just far less often. Single attempt only: a
-    /// retry would itself double-post.
+    /// retry would itself double-post. `Err` carries the redacted error
+    /// so the caller can honor flood-waits instead of hammering through
+    /// `retry after N` (which only extends the ban).
     pub async fn send_silent_patient(
         &self,
         chat_id: i64,
         thread_id: Option<i64>,
         text: &str,
-    ) -> Option<i64> {
+    ) -> Result<Option<i64>, String> {
         let params = build_send_msg_params(chat_id, thread_id, text, None, None, true);
         match self
             .call("sendMessage", params, Duration::from_secs(25))
             .await
         {
-            Ok(v) => v["message_id"].as_i64(),
+            Ok(v) => Ok(v["message_id"].as_i64()),
             Err(e) => {
-                eprintln!("sendMessage silent failed: {}", self.redact(&e.to_string()));
-                None
+                let msg = self.redact(&e.to_string());
+                eprintln!("sendMessage silent failed: {msg}");
+                Err(msg)
             }
         }
     }
