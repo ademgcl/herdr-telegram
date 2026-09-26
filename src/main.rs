@@ -15,6 +15,8 @@ mod ops;
 mod shutdown;
 mod state;
 mod telegram;
+#[cfg(test)]
+mod testkit;
 mod topics;
 mod types;
 mod ui;

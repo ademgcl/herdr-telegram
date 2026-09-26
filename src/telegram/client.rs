@@ -5,6 +5,9 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct TelegramClient {
     token: String,
+    /// API root. `new` pins the real endpoint; the e2e testkit points
+    /// it at a local fake so every send/edit/delete is observable.
+    base: String,
     http: reqwest::Client,
 }
 
@@ -13,7 +16,16 @@ impl TelegramClient {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()?;
-        Ok(Self { token, http })
+        // Test builds only: the e2e harness points the client at a local
+        // fake API (State owns the client behind an Arc, so the harness
+        // cannot swap the field). Release builds never read it — the
+        // endpoint is pinned in code.
+        #[cfg(test)]
+        let base = std::env::var("HERDR_TG_FAKE_BASE")
+            .unwrap_or_else(|_| "https://api.telegram.org".to_string());
+        #[cfg(not(test))]
+        let base = "https://api.telegram.org".to_string();
+        Ok(Self { token, base, http })
     }
 
     pub fn redact(&self, s: &str) -> String {
@@ -24,7 +36,7 @@ impl TelegramClient {
     }
 
     pub async fn call(&self, method: &str, body: Value, timeout: Duration) -> Res<Value> {
-        let url = format!("https://api.telegram.org/bot{}/{}", self.token, method);
+        let url = format!("{}/bot{}/{}", self.base, self.token, method);
         // Redact at the source: reqwest::Error's Display embeds the
         // request URL including the bot token — returning it raw leaks
         // the token to every caller that logs the error.
@@ -241,38 +253,9 @@ impl TelegramClient {
     }
 
     /// Download a Telegram file (photo `file_path` from `getFile`).
-    /// Single attempt with a generous bound (user-facing await in the
-    /// sequential pump — herdr reads already take this long). Returns
-    /// raw bytes; errors carry no token (the URL is built, never logged).
+    /// Split to `client_file` (300-line file limit).
     pub async fn download_file(&self, file_path: &str) -> Res<Vec<u8>> {
-        // Fail-closed: a path escaping the file host (`../`, absolute)
-        // must never fetch — Telegram sends server paths, but a forged
-        // update must not turn the bot into an open proxy.
-        if file_path.is_empty() || file_path.starts_with('/') || file_path.contains("..") {
-            return Err("refusing unsafe file path".into());
-        }
-        let url = format!(
-            "https://api.telegram.org/file/bot{}/{}",
-            self.token, file_path
-        );
-        let bytes = self
-            .http
-            .get(&url)
-            .timeout(Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| self.redact(&e.to_string()))?
-            .error_for_status()
-            .map_err(|e| self.redact(&e.to_string()))?
-            .bytes()
-            .await
-            .map_err(|e| self.redact(&e.to_string()))?;
-        // Empty body is a failed fetch, never a valid photo (an empty
-        // file downstream would pose as the user's image).
-        if bytes.is_empty() {
-            return Err("empty file body".into());
-        }
-        Ok(bytes.to_vec())
+        self.download_file_impl(file_path).await
     }
 }
 
@@ -285,6 +268,9 @@ pub(crate) fn send_stage_transient(e: &reqwest::Error) -> bool {
         || e.is_request()
         || e.status().map(|s| s.is_server_error()).unwrap_or(false)
 }
+
+#[path = "client_file.rs"]
+mod file;
 
 #[cfg(test)]
 #[path = "client_tests.rs"]

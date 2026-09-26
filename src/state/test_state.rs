@@ -47,6 +47,19 @@ pub(crate) fn isolated_state() -> (super::AppState, TestStateDir) {
 /// no-op in DM), so cancel/typing ownership tests mint with a chat id.
 #[cfg(test)]
 pub(crate) fn isolated_state_with_forum(forum: Option<i64>) -> (super::AppState, TestStateDir) {
+    isolated_state_for("nonexistent-test.sock", forum, vec![])
+}
+
+/// E2E harness state: like `isolated_state_with_forum` but pointed at
+/// the fake herdr socket, so prompts really submit and settle.
+/// E2E harness state: like `isolated_state_with_forum` but pointed at
+/// the fake herdr socket with real owners, so prompts route and submit.
+#[cfg(test)]
+pub(crate) fn isolated_state_for(
+    socket: &str,
+    forum: Option<i64>,
+    owners: Vec<i64>,
+) -> (super::AppState, TestStateDir) {
     let guard = TEST_ENV_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let old = std::env::var_os("HERDR_STATE_DIR");
     let old_home = std::env::var_os("HOME");
@@ -66,8 +79,8 @@ pub(crate) fn isolated_state_with_forum(forum: Option<i64>) -> (super::AppState,
     unsafe { std::env::set_var("HOME", &path) };
     let cfg = crate::config::Cfg {
         token: "test-token".to_string(),
-        socket: "nonexistent-test.sock".to_string(),
-        owners: vec![],
+        socket: socket.to_string(),
+        owners,
         forum,
     };
     let s = State::new(cfg).expect("test state");

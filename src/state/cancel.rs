@@ -185,7 +185,7 @@ impl State {
 /// limit): existing `state::cancel::isolated_state` call sites keep
 /// working unchanged.
 #[cfg(test)]
-pub(crate) use super::test_state::isolated_state;
+pub(crate) use super::test_state::{TestStateDir, isolated_state, isolated_state_for};
 
 #[cfg(test)]
 #[path = "cancel_cas_tests.rs"]
