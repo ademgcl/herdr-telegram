@@ -27,6 +27,8 @@ pub(crate) async fn cancel_watch_parts(s: &AppState, pane: &str, job: &Arc<Job>)
     // Atomic owner-checked clear (no detached check-then-clear across
     // awaits): a superseding enqueue landing mid-retire owns the slot.
     s.clear_pending_if_owner(pane, job, epoch_at_entry).await;
+    // Held prompts die with the turn (cancel wins ties, enqueue parity).
+    super::queue::clear_queue(s, pane).await;
     // Genuine cancel owns the pane (a supersede never notifies): the
     // silent transient retires before the buzzing cancelled card lands.
     super::progress::clear_live(s, pane).await;

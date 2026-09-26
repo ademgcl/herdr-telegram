@@ -6,8 +6,7 @@ use crate::{
     state::AppState,
     ui::{
         scope_text::{
-            READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, USAGE_RESET_TOPIC,
-            parse_count,
+            READ_CAP, TOPIC_READ_DEFAULT, USAGE_HISTORY_TOPIC, USAGE_READ_TOPIC, parse_count,
         },
         topic_help_text,
     },
@@ -25,6 +24,7 @@ pub(crate) async fn handle_topic_agent_message(
     thread_id: i64,
     pane: &str,
     text: &str,
+    photo: Option<&str>,
 ) {
     let (raw_cmd, arg) = match text.split_once(char::is_whitespace) {
         Some((c, a)) => (c, a.trim()),
@@ -53,9 +53,30 @@ pub(crate) async fn handle_topic_agent_message(
                 .await;
             return;
         }
+        // Shell topics take text commands — a photo is not one. Refuse
+        // visibly (never execute the caption blind, never drop silent).
+        if photo.is_some() {
+            s.tg.send_msg(chat, Some(thread_id), crate::ui::PHOTO_HINT_SHELL, None)
+                .await;
+            return;
+        }
         super::shell_topic::handle_shell_topic(s, chat, thread_id, pane, text).await;
         return;
     };
+    // Photos prompt with the image attached (downloaded first —
+    // caption-only would silently drop the image). Command captions
+    // skip the fetch (the command serves imageless). From here the flow
+    // is identical to text (waiters, blocked typing, prompts).
+    let text = match photo {
+        Some(fid) if !super::photo::is_command_caption(text) => {
+            match super::photo::fetch_prompt(&s, chat, Some(thread_id), fid, text).await {
+                Some(prompt) => prompt,
+                None => return,
+            }
+        }
+        _ => text.to_string(),
+    };
+    let text = text.as_str();
     // Args stay out of the log (prompts can carry pasted secrets); the
     // command word logs only when it IS a command — a bare single-word
     // prompt would else leak fully, a multi-word one its first word.
@@ -137,58 +158,17 @@ pub(crate) async fn handle_topic_agent_message(
     // Control plane works in-thread, after the waiters (an armed
     // waiter owns the next message). Split to `forum_control`
     // (300-line file limit).
-    if super::forum_control::handle_control_plane(&s, chat, thread_id, cmd, arg).await {
-        return;
-    }
-
-    if cmd == "/reset" {
-        // Own-pane-only: an arg names another pane — refuse (a typo must
-        // never reset the wrong pane). Spawned: must not stall the pump.
-        if !arg.is_empty() {
-            s.tg.send_msg(chat, Some(thread_id), USAGE_RESET_TOPIC, None)
-                .await;
-            return;
-        }
-        super::reset::spawn_single_topic_reset(&s, chat, Some(thread_id), pane.to_string());
-        return;
-    }
-
-    if cmd == "/quit" {
-        super::shell::quit_to_shell(&s, chat, Some(thread_id), pane).await;
-        return;
-    }
-
-    if cmd == "/kill" {
-        super::kill::ask_kill(&s, chat, Some(thread_id), pane).await;
-        return;
-    }
-
-    if cmd == "/split" {
-        let dir = match arg {
-            "" | "right" | "down" => arg,
-            _ => {
-                s.tg.send_msg(chat, Some(thread_id), crate::ui::USAGE_SPLIT, None)
-                    .await;
-                return;
-            }
-        };
-        super::shell::open_split(&s, chat, Some(thread_id), pane, dir).await;
-        return;
-    }
-
-    if cmd == "/pane" {
-        super::shell::open_pane_here(&s, chat, Some(thread_id), pane, arg).await;
-        return;
-    }
-
-    if cmd == "/shell" {
-        // No arg: shell next to this agent (same workspace).
-        let ws = if arg.is_empty() {
-            agent.ws.as_str()
-        } else {
-            arg
-        };
-        super::shell::open_shell(&s, chat, Some(thread_id), Some(ws)).await;
+    if super::forum_control::handle_control_plane(
+        &s,
+        chat,
+        thread_id,
+        pane,
+        agent.ws.as_str(),
+        cmd,
+        arg,
+    )
+    .await
+    {
         return;
     }
 

@@ -142,7 +142,9 @@ pub async fn handle_update(s: AppState, u: &Value) {
         return;
     }
 
-    if text.trim().is_empty() {
+    // Photos carry no text/caption yet still need handling (image
+    // support) — only truly content-free updates drop here.
+    if text.trim().is_empty() && msg["photo"].is_null() {
         return;
     }
 

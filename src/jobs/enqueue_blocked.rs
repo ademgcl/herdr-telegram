@@ -6,6 +6,27 @@ use crate::{
     ui::error_card,
 };
 
+/// Failed-submit report (single source for enqueue's fail path): the
+/// submitter always hears the truth about their own submit, even when
+/// older work stays covered by the running watcher. Case-insensitive:
+/// herdr ships the blocked marker in varying case and a missed
+/// blocked-submit strands the user with a dead error card instead of
+/// the answerable question (and vice versa on coincidental prose
+/// matches — the marker stays narrow by construction).
+pub async fn report_submit_error(
+    s: &AppState,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    pane: &str,
+    err: &str,
+) {
+    if err.to_lowercase().contains("blocked") {
+        report_blocked_submit(s, chat_id, thread_id, pane, err).await;
+    } else {
+        report(s, chat_id, thread_id, pane, &error_card(err)).await;
+    }
+}
+
 /// Fresh-card arm verdict (pure, tested): a delivered card is the
 /// submitter's answer; a dropped/blank card must still hear the masked
 /// error — silence strands them (enqueue's submitter-always-hears

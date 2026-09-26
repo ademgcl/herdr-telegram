@@ -11,14 +11,31 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         println!("[dm] ignoring non-owner message");
         return;
     }
-    let text = msg["text"]
+    let caption = msg["text"]
         .as_str()
         .or_else(|| msg["caption"].as_str())
         .unwrap_or("")
         .trim();
-    if text.is_empty() {
+    // Photos prompt with the image attached (downloaded first —
+    // caption-only would silently drop the image). Command captions
+    // skip the fetch (the command serves imageless — downloading first
+    // would burn the sequential pump to discard it). No photo and no
+    // text: nothing to serve, stay silent (Telegram never delivers
+    // truly empty text updates anyway).
+    let photo_id = crate::telegram::photo::largest_file_id(&msg["photo"]);
+    if photo_id.is_none() && caption.is_empty() {
         return;
     }
+    let text = match photo_id {
+        Some(fid) if !super::photo::is_command_caption(caption) => {
+            match super::photo::fetch_prompt(&s, chat, None, &fid, caption).await {
+                Some(prompt) => prompt,
+                None => return,
+            }
+        }
+        _ => caption.to_string(),
+    };
+    let text = text.as_str();
     // Message bodies stay out of the log (DMs can carry pasted
     // secrets); length suffices for traffic forensics.
     println!("[dm] message ({} chars)", text.chars().count());

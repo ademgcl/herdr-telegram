@@ -42,7 +42,11 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
         .or_else(|| msg["caption"].as_str())
         .unwrap_or("")
         .trim();
-    if text.is_empty() {
+    // Photos route with the image attached (empty caption still
+    // prompts — the marker alone describes what arrived). Only
+    // truly content-free updates drop here.
+    let photo_id = crate::telegram::photo::largest_file_id(&msg["photo"]);
+    if text.is_empty() && photo_id.is_none() {
         return;
     }
 
@@ -98,7 +102,15 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
             "[forum] topic msg for {pane} ({} chars)",
             text.chars().count()
         );
-        super::forum_topic::handle_topic_agent_message(s, chat, th, &pane, text).await;
+        super::forum_topic::handle_topic_agent_message(
+            s,
+            chat,
+            th,
+            &pane,
+            text,
+            photo_id.as_deref(),
+        )
+        .await;
         return;
     }
 
@@ -117,6 +129,13 @@ pub async fn handle_forum_message(s: AppState, chat: i64, msg: &Value) {
     let pane_found = thread_id.is_some_and(|th| s.topics.pane_of_thread(th).is_some());
     if is_orphan_thread(thread_id, pane_found) {
         s.tg.send_msg(chat, thread_id, crate::ui::UNKNOWN_TOPIC, None)
+            .await;
+        return;
+    }
+    // General is control-plane only: photos are not commands — refuse
+    // visibly instead of dropping silently.
+    if photo_id.is_some() {
+        s.tg.send_msg(chat, thread_id, crate::ui::PHOTO_HINT_GENERAL, None)
             .await;
         return;
     }

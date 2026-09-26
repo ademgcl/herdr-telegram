@@ -61,6 +61,9 @@ impl State {
             return false;
         }
         self.clear_waiters(pane).await;
+        // Held prompts die with the turn (cancel wins ties with a
+        // racing submit — the user said stop).
+        crate::jobs::queue::clear_queue(self, pane).await;
         // Fresh stall episode after cancel (no 30-min inherit).
         self.clear_limit_episode(pane).await;
         // Disarm a pending settle debounce (armed card must not land after).
@@ -128,6 +131,8 @@ impl State {
             return false;
         }
         self.clear_waiters(pane).await;
+        // Held prompts die with the turn (quiet parity with loud).
+        crate::jobs::queue::clear_queue(self, pane).await;
         // Fresh stall episode after quiet retire (loud parity): a
         // same-name remint must not inherit limit_alert/seen/miss/cool.
         self.clear_limit_episode(pane).await;

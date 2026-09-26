@@ -57,6 +57,11 @@ pub struct State {
     /// Prompts owed a reply (pane → dest + text), mirrored to jobs.state
     /// so boot re-arms watchers orphaned by a restart.
     pub pending: Mutex<HashMap<String, PendingPrompt>>,
+    /// Held prompts per pane (FIFO — submissions landing while a turn
+    /// is owed wait instead of superseding it). RAM-only like answer
+    /// follows: a restart loses queued-but-unserved prompts, never a
+    /// delivered turn. Dropped on cancel, pruned with pane death.
+    pub prompt_queue: Mutex<HashMap<String, VecDeque<crate::jobs::queue::QueuedPrompt>>>,
     /// Next message in this chat is sent as raw keys to the pane (set by
     /// the K button). (Pane, armed_at): age expiry in hygiene — stale
     /// keys executing into a live session is a write that must not fire
@@ -245,6 +250,7 @@ impl State {
             torder: Mutex::new(VecDeque::new()),
             focus: Mutex::new(focus),
             pending: Mutex::new(persist::load_file(&persist::store_path())),
+            prompt_queue: Mutex::new(HashMap::new()),
             keywait: Mutex::new(HashMap::new()),
             runwait: Mutex::new(HashMap::new()),
             typewait: Mutex::new(HashMap::new()),

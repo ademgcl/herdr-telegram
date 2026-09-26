@@ -3,6 +3,7 @@ pub mod errors;
 pub mod forum;
 pub mod markup;
 pub mod messages;
+pub mod photo;
 pub mod polling;
 pub mod reaction;
 pub mod retry;

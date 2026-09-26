@@ -69,6 +69,30 @@ pub fn transient_status(on: bool) -> String {
     }
 }
 
+/// Single source for the photo-fetch failure (DM/topic-agent share
+/// it — dup'd literals re-drift).
+pub const PHOTO_FETCH_FAILED: &str = "⚠️ couldn't fetch the image — please resend it";
+
+/// Single source for photos in shell topics (a photo is not a shell
+/// command — refuse visibly, never execute the caption blind).
+pub const PHOTO_HINT_SHELL: &str = "🖼️ images aren't shell commands — describe what you need as text, or send it in an agent topic";
+
+/// Single source for photos in General (control plane only — refuse
+/// visibly instead of dropping silently).
+pub const PHOTO_HINT_GENERAL: &str =
+    "🖼️ send images in an agent topic or DM, with a caption saying what to do with them";
+
+/// Single source for the queued-prompt ack (enqueue shares it —
+/// silent: the turn's final still owns the buzz).
+pub fn queued_ack(pos: usize) -> String {
+    format!("⏳ queued #{pos} — runs after the live turn, one reply each")
+}
+
+/// Single source for the full-queue refuse (fail-visible, never
+/// silent growth).
+pub const QUEUE_FULL: &str =
+    "⚠️ prompt queue is full — wait for the live turn to finish, then resend";
+
 /// Single source for the typed-answer ack (every typed-answer surface).
 pub fn typed_ack(pane: &str) -> String {
     format!("⌨️ typed into {pane} + ⏎")

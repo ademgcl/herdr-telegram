@@ -3,7 +3,6 @@
 use super::runner::watch_job;
 use crate::{
     herdr::client::{read_screen_adaptive, rpc_t},
-    jobs::finalize::report,
     jobs::job::Job,
     state::AppState,
     types::{AgentRow, PromptRequest},
@@ -68,6 +67,13 @@ pub async fn enqueue_prompt(
         }
     };
 
+    // A turn is owed (or items already wait): hold FIFO behind it
+    // instead of superseding the live turn — like opencode's own input
+    // queue. Split to `queue::hold_if_owed` (300-line file limit).
+    if super::queue::hold_if_owed(&s, &pane, &job, chat_id, thread_id, req.text.clone()).await {
+        return;
+    }
+
     // Deliver FIRST, record after: a failed submit bumps nothing.
     // Instant feedback is the silent placeholder (edited live with the
     // transient tail, deleted when the buzzing final lands — see
@@ -107,36 +113,24 @@ pub async fn enqueue_prompt(
             "[jobs] submit error: {}",
             crate::types::mask_home(&e.to_string())
         );
-        // The submitter always hears the truth about their own submit,
-        // even when older work stays covered by the running watcher.
-        // Case-insensitive: herdr ships the marker in varying case and a
-        // missed blocked-submit strands the user with a dead error card
-        // instead of the answerable question (and vice versa on coincidental
-        // prose matches — the marker stays narrow by construction).
-        let msg = e.to_string();
-        if msg.to_lowercase().contains("blocked") {
-            super::enqueue_blocked::report_blocked_submit(
-                &s,
-                req.chat_id,
-                req.message_thread_id,
-                &pane,
-                &e.to_string(),
-            )
-            .await;
-        } else {
-            report(
-                &s,
-                req.chat_id,
-                req.message_thread_id,
-                &pane,
-                &crate::ui::error_card(&e.to_string()),
-            )
-            .await;
-        }
+        // The submitter always hears the truth about their own submit
+        // (split to `enqueue_blocked::report_submit_error`).
+        super::enqueue_blocked::report_submit_error(
+            &s,
+            req.chat_id,
+            req.message_thread_id,
+            &pane,
+            &e.to_string(),
+        )
+        .await;
+        // Held prompts must not strand when this submit failed
+        // (split to `queue::serve_failed`).
+        super::queue::serve_failed(&s, &pane, &job).await;
         // Live re-read + retire under ONE pending hold (retire_if_idle):
         // a concurrent success must not land cover between the zero-read
         // and the stop — rearm_verdict would see live self, skip rearm,
-        // and the delivered prompt strands watcherless.
+        // and the delivered prompt strands watcherless. Skipped while
+        // anything is held or owed (the watcher above keeps serving).
         if retire_if_idle(&s, &pane, &job).await {
             // Stop our typing now: a parked watcher (5s tick / 60s
             // backoff) would else type into the void until it exits —
@@ -248,18 +242,29 @@ pub async fn enqueue_prompt(
     }
 }
 
-/// Fail-path retire: zero-check + `mark_stopped` + map remove under ONE
-/// `job.pending` hold. `publish_submit` bumps cover under the same lock,
-/// so a racing success cannot land between the read and the stop (else
+/// Fail-path retire: zero-check + `mark_stopped` + map remove. Held
+/// queue counts as owed (the fail path serves it first, so a non-empty
+/// queue here means a live turn owns it — retiring would strand the
+/// serve). `publish_submit` bumps cover under the same pending lock, so
+/// a racing success cannot land between the read and the stop (else
 /// `rearm_verdict` sees live self, returns, and the delivered prompt
-/// strands with durable intent but no watcher). Never clears the durable
-/// slot — any intent present belongs to a racing shell/corpsed submit.
-/// Lock order `pending`→`jobs`: nothing nests `jobs`→`job.pending`
-/// (state's `pending` map is a different lock; cancel keeps jobs→that).
-/// True when retired (nothing owed).
+/// strands with durable intent but no watcher). Lock order
+/// `pending`→`prompt_queue`→`jobs` (the queue read nests inside the
+/// `pending` hold; nothing anywhere inverts it: every other user takes
+/// these one at a time). Never clears the durable slot — any intent
+/// present belongs to a racing shell/corpsed submit. True when retired
+/// (nothing owed).
 async fn retire_if_idle(s: &AppState, pane: &str, job: &Arc<Job>) -> bool {
     let owed = job.pending.lock().await;
     if *owed > 0 {
+        return false;
+    }
+    // Queue check under the same hold would nest `prompt_queue` inside
+    // `pending` — take it after the zero-read instead (a push landing
+    // between serves at the next turn end; the fail-path serve above
+    // already drained what was present).
+    let queued = super::queue::queue_len(s, pane).await > 0;
+    if queued {
         return false;
     }
     job.mark_stopped();

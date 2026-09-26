@@ -234,6 +234,9 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             // dead entries never pass remove_mapping_if_thread, so they
             // retain live-only here like every other per-pane map.
             s.topics.prune_kinds(&live);
+            // Held prompts die with their pane (a dead pane serves
+            // nothing — same live-only bound as every per-pane map).
+            s.prompt_queue.lock().await.retain(|p, _| live.contains(p));
             // Shell generations are pane-scoped like the maps above.
             s.shell_gen.lock().await.retain(|p, _| live.contains(p));
             // Transient pointers die with their panes (a dead pane's
