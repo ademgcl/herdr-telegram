@@ -73,6 +73,20 @@ pub fn parse_branch_from_head(content: &str) -> Option<String> {
     None
 }
 
+/// `git branch --show-current`, ready to spawn: stdout piped so
+/// `wait_with_output` actually captures the branch (an inherited stdout
+/// reads back empty → the fallback never returns a name), stderr null so
+/// non-git panes never append `fatal: not a git repository` to bot.log
+/// (inherited stdio goes straight to the log, one line per card build).
+fn git_branch_cmd(path: &str) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["-C", path, "branch", "--show-current"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    cmd
+}
+
 /// Derive the git branch for an agent pane:
 /// 1. Direct field in herdr response (`branch` or `git_branch`).
 /// 2. Fast filesystem check on `.git/HEAD` or git worktree file.
@@ -124,11 +138,7 @@ pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
     // leaves the child running detached (`kill_on_drop(false)` default) —
     // a wedged git leaks one process per card build under exactly the
     // slowness that already hurts. `kill_on_drop(true)` reaps it.
-    let child = tokio::process::Command::new("git")
-        .args(["-C", path, "branch", "--show-current"])
-        .kill_on_drop(true)
-        .spawn()
-        .ok()?;
+    let child = git_branch_cmd(path).spawn().ok()?;
     let output = tokio::time::timeout(
         std::time::Duration::from_millis(500),
         child.wait_with_output(),
@@ -181,67 +191,5 @@ pub async fn send_agent_keys(socket: &str, pane: &str, keys: &[&str]) -> Res<()>
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_branch_from_head() {
-        assert_eq!(
-            parse_branch_from_head("ref: refs/heads/main\n"),
-            Some("main".to_string())
-        );
-        assert_eq!(
-            parse_branch_from_head("ref: refs/heads/feature/d7-branch"),
-            Some("feature/d7-branch".to_string())
-        );
-        assert_eq!(
-            parse_branch_from_head("3425da8982341234567890"),
-            Some("HEAD (3425da8)".to_string())
-        );
-        assert_eq!(parse_branch_from_head(""), None);
-        assert_eq!(parse_branch_from_head("invalid head"), None);
-    }
-
-    #[tokio::test]
-    async fn test_derive_branch_from_json() {
-        let a = json!({"branch": "feat-json"});
-        assert_eq!(derive_branch(&a, "").await, Some("feat-json".to_string()));
-        let a2 = json!({"git_branch": "feat-git-json"});
-        assert_eq!(
-            derive_branch(&a2, "").await,
-            Some("feat-git-json".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn test_derive_branch_from_filesystem() {
-        let a = json!({});
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let branch = derive_branch(&a, manifest_dir).await;
-        assert!(branch.is_some(), "should derive branch for this repo");
-    }
-
-    #[tokio::test]
-    async fn test_derive_branch_non_existent_dir() {
-        let a = json!({});
-        assert_eq!(derive_branch(&a, "/non/existent/path/xyz").await, None);
-    }
-
-    #[tokio::test]
-    async fn test_derive_branch_rejects_absolute_gitdir() {
-        // Pane-controlled `.git` file pointing at an absolute gitdir must
-        // not read outside the cwd (join would discard the cwd).
-        let dir = std::env::temp_dir().join(format!(
-            "ht-gitdir-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(".git"), "gitdir: /tmp/elsewhere\n").unwrap();
-        let a = json!({});
-        assert_eq!(derive_branch(&a, dir.to_str().unwrap()).await, None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+#[path = "agents_tests.rs"]
+mod tests;
