@@ -82,20 +82,13 @@ pub async fn ensure_instant(s: &AppState, pane: &str, job: &Arc<Job>) {
             if sl.text == THINKING {
                 return;
             }
-            if !edit_due("", THINKING, sl.at, now) {
-                // Throttled: still claim the generation now (a stale
-                // retire must stand down even though the reset text
-                // lands on the next tick).
-                s.live_put(
-                    pane,
-                    LiveSlot {
-                        turn: sl.turn + 1,
-                        ..sl
-                    },
-                )
-                .await;
-                return;
-            }
+            // The reset bypasses the edit cooldown: it fires at most
+            // once per turn (bounded, never churn), while a throttled
+            // reset leaves the previous turn's tail posing as the new
+            // turn's status — and a fast-settling turn ends before any
+            // tick retries, so the turn runs with zero instant feedback.
+            // A flood-wait still banks the attempt time below, and the
+            // tick retries it.
             match s.tg.try_edit_msg(sl.chat, sl.mid, THINKING, None).await {
                 Ok(()) => {
                     println!("[live] reset {pane} m{} to placeholder", sl.mid);
