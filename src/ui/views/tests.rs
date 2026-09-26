@@ -34,7 +34,6 @@ fn test_topic_help_text() {
     assert!(shell.contains("re-enter"));
 }
 
-
 #[test]
 fn test_ws_label() {
     let spaces = vec![
