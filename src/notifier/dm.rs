@@ -1,7 +1,7 @@
 //! Direct Message alert delivery (split from status.rs to respect the 300-line limit).
 use crate::{
     jobs::segment::final_block,
-    jobs::stream::{delta, join_trimmed},
+    jobs::stream::{delta, is_stale_body, join_trimmed},
     notifier::spontaneous::post_spontaneous_card,
     state::AppState,
 };
@@ -34,7 +34,15 @@ pub(crate) async fn push_dm_alert(
         delta(screen, &fresh_base).to_vec()
     };
     let fresh_body = join_trimmed(&final_block(&fresh_source, ""));
-    if !fresh_body.is_empty() {
+    // Stale re-extraction (forum settle_check parity): the whole body
+    // already sits in the anchored baseline — fall through to the quiet
+    // anchor below instead of re-buzzing a delivered final. Blocked
+    // exempt: questions re-buzz by design until answered.
+    let stale = new_status != "blocked" && is_stale_body(&fresh_body, &fresh_base);
+    if stale {
+        println!("[alert] suppressed duplicate final for {pane}");
+    }
+    if !fresh_body.is_empty() && !stale {
         // Some(observed_at): a final retiring during the screen RPC
         // stamps last_done after observed_at → inside-post suppresses
         // the stale duplicate. Next tick's observed_at is after the

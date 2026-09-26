@@ -1,3 +1,4 @@
+use super::arbitrate::STREAM_MIN_CHARS;
 use crate::types::Res;
 use serde_json::{Value, json};
 use tokio::{
@@ -157,6 +158,35 @@ pub fn delta<'a>(new: &'a [String], base: &[String]) -> &'a [String] {
     new
 }
 
+/// Stale re-extraction verdict (pure, tested): every content line of
+/// `body` already present in the anchored `base` means delta
+/// misalignment re-served delivered text — the status-bar token counts
+/// churn every tick, defeating exact overlap, so the fallback cut lands
+/// early and the just-delivered final buzzes twice. Never re-buzz it;
+/// callers consume + anchor past it instead. Genuine fresh output always
+/// carries a line the baseline never saw (a verbatim repeat is
+/// indistinguishable from no-change — accepted). Small bodies post
+/// freely (STREAM_MIN_CHARS parity: short replies like "ok"/"done" must
+/// never die on a coincidental scrollback match). Empty base never
+/// matches (first sight always posts).
+pub fn is_stale_body(body: &str, base: &[String]) -> bool {
+    if base.is_empty() || body.chars().count() < STREAM_MIN_CHARS {
+        return false;
+    }
+    let mut content = 0;
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        content += 1;
+        if !base.iter().any(|b| b.trim() == t) {
+            return false;
+        }
+    }
+    content > 0
+}
+
 pub fn join_trimmed(lines: &[String]) -> String {
     lines.join("\n").trim().to_string()
 }
@@ -233,5 +263,35 @@ mod tests {
     #[test]
     fn test_join_trimmed() {
         assert_eq!(join_trimmed(&v(&["", "hi there", ""])), "hi there");
+    }
+
+    #[test]
+    fn test_stale_body_dup_shape_suppresses() {
+        // Delivered reply re-extracted after footer churn: every content
+        // line sits in the anchored baseline (the observed duplicate).
+        let base = v(&[
+            "old scroll",
+            "The guard was missing — fixed.",
+            "Plus a second reply line for size.",
+        ]);
+        let body = "The guard was missing — fixed.\nPlus a second reply line for size.";
+        assert!(is_stale_body(body, &base));
+    }
+
+    #[test]
+    fn test_stale_body_fresh_line_posts() {
+        let base = v(&["old scroll", "prior reply"]);
+        assert!(!is_stale_body(
+            "prior reply plus a brand new output line here",
+            &base
+        ));
+    }
+
+    #[test]
+    fn test_stale_body_first_sight_shorts_and_blanks_post() {
+        assert!(!is_stale_body("anything at all here, please", &[]));
+        assert!(!is_stale_body("ok", &v(&["ok", "scrollback"])));
+        assert!(!is_stale_body("", &v(&["x"])));
+        assert!(!is_stale_body("  \n ", &v(&["x"])));
     }
 }

@@ -6,7 +6,7 @@ use super::spontaneous::post_spontaneous_card;
 use crate::{
     herdr::client::{get_agent, list_panes, list_workspaces},
     jobs::segment::final_block,
-    jobs::stream::{delta, join_trimmed},
+    jobs::stream::{delta, is_stale_body, join_trimmed},
     state::AppState,
     ui::ws_label,
 };
@@ -100,6 +100,18 @@ pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, arm
         delta(&screen, &base).to_vec()
     };
     let body = join_trimmed(&final_block(&source, ""));
+    // Stale re-extraction (duplicate final): the whole body already sits
+    // in the anchored baseline — footer churn defeats delta overlap, so
+    // the fallback cut re-serves delivered text. Consume the arm, anchor
+    // past it, stay silent (genuine fresh output always carries a line
+    // the baseline never saw). settled is done/idle only here (blocked
+    // goes through refresh_blocked_card) — no blocked exempt needed.
+    if is_stale_body(&body, &base) {
+        println!("[alert] suppressed duplicate final for {pane}");
+        consume_reset_arm(&mut *s.debounce.lock().await, &pane, armed_at);
+        s.seen.lock().await.insert(pane.clone(), screen);
+        return;
+    }
     // Baseline anchors on delivery; stray/empty also anchors (same-screen
     // strays must not re-RPC every settle). Drops leave the delta.
     // Reset mid-debounce: never sync/post into the migration. The arm

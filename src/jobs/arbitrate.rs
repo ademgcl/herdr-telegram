@@ -4,8 +4,10 @@ use crate::{jobs::segment::final_block, jobs::stream::join_trimmed};
 
 /// Minimum streamed body trusted outright. Below this the stream is
 /// assumed starved (alternate-screen TUIs serve chrome-only tails while
-/// working) and the settled screen arbitrates.
-const STREAM_MIN_CHARS: usize = 40;
+/// working) and the settled screen arbitrates. Also the stale-body
+/// floor (see stream::is_stale_body): short replies must never die on
+/// a coincidental scrollback match — single source, never re-literal.
+pub(crate) const STREAM_MIN_CHARS: usize = 40;
 
 /// Choose the final card body. The stream usually wins outright — its
 /// rolling baseline (anchored at prompt time) excludes earlier turns.
