@@ -23,13 +23,26 @@ fn test_empty_acc_renders_thinking_placeholder() {
 }
 
 #[test]
-fn test_streamed_tail_renders_under_working_header_with_transients_kept() {
-    // Transient TUI lines are the point of progress: raw tail, kept.
-    let body = render_progress(&acc(&["✱ Read src/main.rs", "Thinking…", "hello"]));
-    assert!(body.starts_with("💭 working…\n\n"), "got {body:?}");
-    assert!(body.contains("✱ Read src/main.rs"));
-    assert!(body.contains("Thinking…"));
-    assert!(body.contains("hello"));
+fn test_streamed_tail_renders_bare_model_text_chrome_stripped() {
+    // The transient shows the model's actual text: TUI furniture
+    // (tool echoes, progress verbs, status bars) strips, prose stays,
+    // and no "working" header poses as agent output.
+    let body = render_progress(&acc(&[
+        "✱ Read src/main.rs",
+        "Thinking…",
+        "hello",
+        " ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt   145.6K (14%)  ctrl+p commands    ~/projects/herdr-telegram:main",
+    ]));
+    assert_eq!(body, "hello");
+}
+
+#[test]
+fn test_chrome_only_tail_falls_back_to_thinking() {
+    // Tool echoes alone are not a reply: placeholder until prose streams.
+    assert_eq!(
+        render_progress(&acc(&["✱ Read src/main.rs", "⠸ Writing command…"])),
+        THINKING
+    );
 }
 
 #[test]
@@ -45,7 +58,6 @@ fn test_long_tail_stays_within_telegram_cap() {
         .map(|i| format!("line {i:04} with padding text to grow the body past the cap"))
         .collect();
     let body = render_progress(&lines);
-    assert!(body.starts_with("💭 working…"), "got {body:?}");
     assert!(body.encode_utf16().count() <= crate::types::MAX_MSG_UNITS);
 }
 

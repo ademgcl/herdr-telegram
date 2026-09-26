@@ -26,25 +26,30 @@ use super::progress_retire::{is_owner, post_fresh};
 
 /// First instant reply: covers easy turns with no transient output yet.
 pub const THINKING: &str = "💭 thinking…";
-/// Live header once streamed output exists (tail follows below it).
-const WORKING_HEAD: &str = "💭 working…";
 /// Min gap between progress edits (ticks run every ~2s).
 const EDIT_COOLDOWN_SECS: u64 = 4;
 /// Header reserve inside the Telegram size cap.
 const TAIL_RESERVE: usize = 64;
 
 /// Render the progress body: placeholder when nothing streamed yet,
-/// else the header plus the raw tail (unfiltered — transient lines are
-/// the point here; the final still arbitrates its clean reply).
+/// else the bare model tail — chrome-filtered (TUI footers, status
+/// bars, tool echoes, spinners are the agent's furniture, never its
+/// reply: sending them spams every tick as token counts churn), with
+/// no header (the "working" line is our guide, not agent output —
+/// nice for the start, removed once real text streams). Finals are
+/// untouched (arbitration cleans at display time); only the transient
+/// renders through the filter, so prose survives byte-for-byte by the
+/// filter/prose battery.
 pub fn render_progress(acc: &[String]) -> String {
     if acc.is_empty() {
         return THINKING.to_string();
     }
-    let tail = tail_fit(acc, MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE));
+    let clean = super::filter::chrome_filtered(acc);
+    let tail = tail_fit(&clean, MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE));
     if tail.is_empty() {
         return THINKING.to_string();
     }
-    format!("{WORKING_HEAD}\n\n{tail}")
+    tail
 }
 
 /// Pure edit gate (tested): new text only, throttled to the cooldown.

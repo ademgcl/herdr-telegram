@@ -51,6 +51,10 @@ pub(crate) const TRANSIENT: &[&str] = &[
     "… +4 lines (ctrl + t to view transcript)",
     "[watcher] start wG:p1",
     "   /home/user/projects/herdr-telegram        10.8K (1%)  ctrl+p commands",
+    // Opencode status bar (verbatim shape, live): context bar + esc
+    // hint + token stat + key hints + cwd — the token stat churns every
+    // tick, so an unfiltered transient re-sent it constantly.
+    " ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt                                                                                                                  145.6K (14%)  ctrl+p commands    ~/projects/herdr-telegram:main",
     // Agy shapes.
     "Antigravity CLI 1.2.2",
     "  ADC: firebase-adminsdk-fbsvc@test-proj-123",
