@@ -171,16 +171,19 @@ pub struct State {
 
 pub type AppState = Arc<State>;
 
-/// Typing-indicator cadence: Telegram clients expire `typing` after ~5s
-/// with no resend, and a returning client shows nothing until the next
-/// action lands — so every sustainer re-fires well inside the window
-/// (worst passive-return gap ≈ this). Single source for the typing task,
-/// the watcher piggyback, and the submit sustain loops.
-/// Typing-action cadence. A `sendChatAction` lasts ~5s, so 5s keeps
-/// the indicator unbroken with a THIRD of the writes: the 2s cadence
-/// (times three writers) burned ~90 API calls/min and earned real
-/// flood-waits (`retry after 38`), which delayed the instant message
-/// by tens of seconds — the "it arrived late" report.
+/// Watcher poll cadence — the timer that drives every status sample and
+/// screen read. herdr-only (a `get_agent` is ~1ms), so it stays tight:
+/// this is the floor on how fast a settle can be noticed, i.e. on reply
+/// latency. Deliberately NOT shared with the typing cadence below —
+/// slowing this to save Telegram writes would stretch every reply.
+pub(crate) const POLL_TICK_SECS: u64 = 2;
+
+/// Typing-action cadence (Telegram writes only). A `sendChatAction`
+/// lasts ~5s, so 5s keeps the indicator unbroken with a THIRD of the
+/// writes: the old 2s cadence times three writers burned ~90 API
+/// calls/min and earned real flood-waits (`retry after 38`), which
+/// delayed the instant message by tens of seconds — the "it arrived
+/// late" report.
 pub(crate) const TYPING_TICK_SECS: u64 = 5;
 
 impl State {

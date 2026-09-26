@@ -156,3 +156,96 @@ async fn e2e_flood_on_instant_backs_off_without_duplicate() {
     );
     assert!(texts.iter().any(|t| t.contains("hi")));
 }
+
+/// Reply-latency contract, and the safety half of it.
+///
+/// A final must NOT post while the agent is still streaming (that is a
+/// partial answer, then a second "final" — the double-post bug the old
+/// fixed 5s same-kind wait existed to prevent), and it must post soon
+/// after the pane goes quiet. The gate is output-quiet, not wall-clock:
+/// fresh bytes re-stamp the arm, so a still-streaming turn cannot
+/// commit no matter how long it runs, and a finished one commits in
+/// ~2s of quiet instead of waiting out 5s.
+#[tokio::test]
+async fn e2e_final_waits_for_quiet_then_lands_promptly() {
+    let h = Harness::start().await;
+    h.map_topic();
+    h.herdr.set_status("working");
+    h.herdr.set_screen(&["> hi", "Thinking…"]);
+    h.say("hi").await;
+    h.wait_for("submit", || h.herdr.submit_count() >= 1).await;
+    h.wait_for("instant", || {
+        h.sends()
+            .iter()
+            .any(|c| c.text().contains(crate::jobs::progress::THINKING))
+    })
+    .await;
+
+    // Settled status, but the pane KEEPS producing output: past the old
+    // gate's own window, no final may exist yet.
+    h.herdr.set_status("idle");
+    for i in 0..4 {
+        h.herdr.set_screen(&[
+            "> hi",
+            "Thinking…",
+            &format!("chunk {i}"),
+            " ⬝ esc interrupt   145.6K (14%)  ctrl+p commands",
+        ]);
+        h.tick(1).await;
+    }
+    assert!(
+        h.sends()
+            .iter()
+            .all(|c| c.text().contains(crate::jobs::progress::THINKING) || c.text().contains("📌")),
+        "a final posted while output was still flowing: {:#?}",
+        h.sent_texts()
+    );
+
+    // Output stops: the final must now land, and quickly.
+    let quiet_at = std::time::Instant::now();
+    h.herdr.set_screen(&[
+        "> hi",
+        "all done here",
+        " ⬝ esc interrupt   145.6K (14%)  ctrl+p commands",
+    ]);
+    h.wait_for("final after quiet", || {
+        h.sends().iter().any(|c| c.text().contains("all done here"))
+    })
+    .await;
+    assert!(
+        quiet_at.elapsed() < std::time::Duration::from_millis(5_000),
+        "final took {:?} after the pane went quiet",
+        quiet_at.elapsed()
+    );
+}
+
+/// Pickup contract: the silent working message must land on the user's
+/// Telegram *before* the (slow) submit RPC, not after it. The submit
+/// is the one 30s-budgeted call in the handler and it runs inline in the
+/// poll loop, so anything ordered after it is invisible latency — the
+/// "my message arrived late" report. A baseline screen read hoisted in
+/// front of the placeholder would break this.
+#[tokio::test]
+async fn e2e_instant_lands_before_the_submit_rpc() {
+    let h = Harness::start().await;
+    h.map_topic();
+    h.herdr.set_status("working");
+    h.herdr.set_screen(&["> hi", "Thinking…"]);
+    let sent_at = std::time::Instant::now();
+    h.say("hi").await;
+    h.wait_for("instant", || {
+        h.sends()
+            .iter()
+            .any(|c| c.text().contains(crate::jobs::progress::THINKING))
+    })
+    .await;
+    let instant_ms = sent_at.elapsed().as_millis();
+    assert!(
+        h.herdr.submit_count() >= 1,
+        "the turn never reached the agent"
+    );
+    assert!(
+        instant_ms < 1_500,
+        "instant message took {instant_ms}ms to land"
+    );
+}

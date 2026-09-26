@@ -58,22 +58,21 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     if !job.is_stopped() {
         s.start_typing(&pane).await;
     }
-    // Dedicated typing ticker (shared cadence, independent of herdr
-    // RPCs): thinking pauses with no output/events go dark in DM mode
-    // without it (no typing task there). Spawned, never awaited inline.
-    let mut typing_tick =
-        tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
+    // Poll ticker: the timer that drives every status sample and screen
+    // read. Independent of the typing cadence on purpose (see
+    // POLL_TICK_SECS) — the indicator's Telegram budget must never
+    // stretch how fast a settle is noticed.
+    let mut poll_tick = tokio::time::interval(Duration::from_secs(crate::state::POLL_TICK_SECS));
     // Skip, never Burst: after slow RPC rounds a Burst catch-up would
     // fire ticks back-to-back, spinning tight poll cycles against an
     // already-sick herdr. Skipped ticks simply resume the cadence.
-    typing_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    typing_tick.tick().await;
-    // NO second typing task here: the per-pane task in `start_typing`
-    // already re-sends every TYPING_TICK_SECS for the whole turn, so
-    // the old watcher-local sustain duplicated it (and the enqueue
-    // submit-sustain duplicated it again) — three writers against one
-    // indicator is what earned the flood-waits. Aborting the handle is
-    // kept in the epilogue below for the no-op case.
+    poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    poll_tick.tick().await;
+    // NO typing task here: the per-pane task in `start_typing` re-sends
+    // every TYPING_TICK_SECS for the whole turn, so the old watcher-local
+    // sustain duplicated it (and the enqueue submit-sustain duplicated it
+    // again) — three writers against one indicator is what earned the
+    // flood-waits.
     // Instant feedback is the typing indicator (sustained below on the
     // shared cadence, well inside the ≈5s expiry, so a returning client
     // sees it within ~2s) plus the silent progress message (placeholder
@@ -128,24 +127,22 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         }
 
         // Output activity → stream; status change → maybe finalize.
-        // The typing tick doubles as the poll driver (2s cadence): every
-        // wake-up runs a poll cycle below, so progress never depends on
-        // herdr events (they only wake earlier). No separate fallback
-        // sleep arm — a second timer would never fire ahead of the 2s
-        // tick (recreated each iteration = dead code); slow-RPC catch-up
-        // is Skip above, never Burst.
-        // The typing arm fires on the shared cadence and falls through
-        // to a poll cycle too (its own cost is one spawned `typing` RPC).
+        // The poll tick drives the loop (2s cadence): every wake-up runs a
+        // poll cycle below, so progress never depends on herdr events
+        // (they only wake earlier). No separate fallback sleep arm — a
+        // second timer would never fire ahead of the poll tick (recreated
+        // each iteration = dead code); slow-RPC catch-up is Skip above,
+        // never Burst.
         let _event = tokio::select! {
             _ = job.cancel.notified() => {
                 cancel_watch(&s, &pane, &job).await;
                 break;
             }
-            _ = typing_tick.tick() => {
-                // Poll driver only now (the sustain task above owns the
+            _ = poll_tick.tick() => {
+                // Poll driver only (the per-pane typing task owns the
                 // indicator): instant feedback is typing plus the silent
-                // progress message, sustained time-based.
-                // Falls through to a poll cycle below (no `continue`).
+                // progress message, sustained time-based. Falls through
+                // to a poll cycle below (no `continue`).
                 WatchEvent::Output
             }
             e = async {
