@@ -113,23 +113,29 @@ async fn main() -> Res<()> {
             }
             _ = watchdog_tick.tick() => {
                 crate::ops::rotate_log_if_huge();
-                // Tick bound: a sick-herdr/large-fleet scan must not stretch
-                // the ≤60s herdr→tg guarantee into minutes — partial tick +
-                // retry next cycle (reconcile is per-pane idempotent; Skip
-                // alone prevents overlap, never lateness). Shutdown-aware:
-                // TERM mid-scan saves the offset and exits instead of
-                // stalling exit (and the offset flush) up to 50s.
-                tokio::select! {
-                    _ = shutdown_signal() => {
-                        println!("[main] shutdown signal mid-watchdog — saving offset");
-                        s.save_offset().await;
-                        return Ok(());
-                    }
-                    _ = tokio::time::timeout(
+                // Spawned, NEVER awaited inline: this arm holds the
+                // select for its whole duration, so the poll future
+                // goes unpicked and every Telegram update waits behind
+                // the scan (up to the 50s bound — the reported "why is
+                // this so slow"). Overlap stays impossible without the
+                // await: `reconcile` is process-wide single-flight (the
+                // loser skips) and per-pane idempotent, so a skipped or
+                // overlapping tick costs nothing. Bounded inside so a
+                // sick scan still ends; TERM no longer waits on it —
+                // the loop exits, the task dies with the runtime.
+                let s2 = s.clone();
+                tokio::spawn(async move {
+                    let started = std::time::Instant::now();
+                    let _ = tokio::time::timeout(
                         Duration::from_secs(50),
-                        reconcile(&s, false, "watchdog"),
-                    ) => {}
-                }
+                        reconcile(&s2, false, "watchdog"),
+                    )
+                    .await;
+                    println!(
+                        "[main] watchdog scan done in {}ms",
+                        started.elapsed().as_millis()
+                    );
+                });
             }
             updates = async {
                 let off = *s.offset.lock().await;
