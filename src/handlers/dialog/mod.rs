@@ -195,6 +195,14 @@ pub(crate) fn is_blank_card(screen: &[String]) -> bool {
 /// (duplicate question cards). Dup'd literals re-drift.
 pub(crate) const DIALOG_READ_LINES: u32 = 60;
 
+/// Signature-match verdict (single source for every "already carded"
+/// gate — the seed path, the content-addressed refresh and the blocked
+/// settle): the stamp lands only on delivery, so an unstamped dialog
+/// stays repostable and a delivered one never buzzes twice.
+pub(crate) fn sig_matches(stamped: Option<&String>, sig: &str) -> bool {
+    stamped.is_some_and(|v| v == sig)
+}
+
 /// Post the interactive card: what the agent asks + one-tap answers
 /// mirroring the dialog's own options. Explicit "show me" contexts use
 /// this (always posts); status observations use [`refresh_blocked_card`].

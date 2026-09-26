@@ -10,12 +10,8 @@ use crate::{
 /// True when this exact dialog already posted (content-addressed).
 /// Single source for the pre-claim fast path + post-claim re-check.
 async fn is_known_sig(s: &AppState, pane: &str, sig: &str) -> bool {
-    s.blocked_sig
-        .lock()
-        .await
-        .get(pane)
-        .map(|v| v == sig)
-        .unwrap_or(false)
+    let stamped = s.blocked_sig.lock().await.get(pane).cloned();
+    super::sig_matches(stamped.as_ref(), sig)
 }
 
 /// Post-read verdict for the blocked-card gate (single source for the

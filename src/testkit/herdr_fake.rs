@@ -15,6 +15,9 @@ use tokio::{
 pub struct FakeHerdr {
     /// Prompts the bot actually delivered (`agent.prompt`).
     pub submits: Mutex<Vec<String>>,
+    /// Key batches the bot sent to the pane (`agent.send_keys`) — how
+    /// a tapped answer reaches the agent.
+    pub keys: Mutex<Vec<String>>,
     /// `agent.get` status field ("working" / "idle" / "blocked" / …).
     pub status: Mutex<String>,
     /// `agent.read` output, newest last per source.
@@ -23,6 +26,9 @@ pub struct FakeHerdr {
     pub panes: Mutex<Vec<String>>,
     /// Fail the next `agent.prompt` with this description.
     pub submit_fault: Mutex<Option<String>>,
+    /// Every method the bot called, in order (diagnostics: "which read
+    /// did it even make?").
+    pub calls: Mutex<Vec<String>>,
 }
 
 impl FakeHerdr {
@@ -31,6 +37,13 @@ impl FakeHerdr {
     }
     pub fn submit_count(&self) -> usize {
         self.submits.lock().unwrap().len()
+    }
+    pub fn keys_sent(&self) -> Vec<String> {
+        self.keys.lock().unwrap().clone()
+    }
+    /// Methods called so far, in order.
+    pub fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
     }
     pub fn set_status(&self, s: &str) {
         *self.status.lock().unwrap() = s.to_string();
@@ -46,6 +59,15 @@ impl FakeHerdr {
     }
     fn take_submit_fault(&self) -> Option<String> {
         self.submit_fault.lock().unwrap().take()
+    }
+    /// Register a pane as live (pane.list is the notifier's liveness
+    /// source — a pane it never heard of reads as dead and its cards
+    /// silently vanish).
+    fn remember_pane(&self, pane: &str) {
+        let mut panes = self.panes.lock().unwrap();
+        if !panes.iter().any(|p| p == pane) {
+            panes.push(pane.to_string());
+        }
     }
 }
 
@@ -97,6 +119,7 @@ async fn serve_conn(sock: UnixStream, fake: Arc<FakeHerdr>) -> std::io::Result<(
         let id = req["id"].as_str().unwrap_or("").to_string();
         let method = req["method"].as_str().unwrap_or("").to_string();
         let params = req["params"].clone();
+        fake.calls.lock().unwrap().push(method.clone());
         let resp = respond(&fake, &id, &method, &params);
         let out = resp.to_string();
         write.write_all(out.as_bytes()).await?;
@@ -121,6 +144,9 @@ fn respond(fake: &FakeHerdr, id: &str, method: &str, params: &Value) -> Value {
 fn dispatch(fake: &FakeHerdr, method: &str, params: &Value) -> (Value, Option<String>) {
     let pane = params["target"].as_str().unwrap_or("w1:p1").to_string();
     let status = fake.status.lock().unwrap().clone();
+    if !pane.is_empty() && method != "pane.list" {
+        fake.remember_pane(&pane);
+    }
     let out = match method {
         "agent.prompt" => {
             if let Some(e) = fake.take_submit_fault() {
@@ -134,6 +160,20 @@ fn dispatch(fake: &FakeHerdr, method: &str, params: &Value) -> (Value, Option<St
         // `{"agents": [rows]}`, `{"read": {"text": …}}`.
         "agent.get" => json!({"agent": agent_row(&pane, &status)}),
         "agent.list" => json!({"agents": [agent_row(&pane, &status)]}),
+        "agent.send_keys" => {
+            // `keys` is an array of key names (nav + confirm batches).
+            let keys = params["keys"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|k| k.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                        .join("+")
+                })
+                .unwrap_or_default();
+            fake.keys.lock().unwrap().push(keys);
+            json!({"ok": true})
+        }
         "agent.read" => {
             let lines = fake.screen.lock().unwrap().clone();
             json!({"read": {"text": lines.join("\n")}})
@@ -146,7 +186,11 @@ fn dispatch(fake: &FakeHerdr, method: &str, params: &Value) -> (Value, Option<St
                                  "label": "", "focused": true}))
                 .collect::<Vec<_>>()})
         }
-        "workspace.list" => json!([{"id": "w1", "number": 1, "label": "main"}]),
+        // Envelope matters: a bare array fails parse_workspaces, and the
+        // notifier then reads the space as unknown and stays silent.
+        "workspace.list" => json!({"workspaces": [
+            {"workspace_id": "w1", "number": 1, "label": "main"}
+        ]}),
         "events.subscribe" => json!({"ok": true}),
         // Unknown methods answer empty rather than erroring: the bot
         // treats unknown reads as outage, which would mask the case

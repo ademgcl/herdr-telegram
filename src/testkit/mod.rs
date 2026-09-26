@@ -13,12 +13,21 @@ pub mod tg_fake;
 pub use herdr_fake::FakeHerdr;
 pub use tg_fake::FakeTg;
 
+#[path = "asserts.rs"]
+mod asserts;
+#[cfg(test)]
+#[path = "e2e_blocked_tests.rs"]
+mod e2e_blocked;
+
 #[cfg(test)]
 #[path = "e2e_delivery_tests.rs"]
 mod e2e_delivery;
 #[cfg(test)]
 #[path = "e2e_handler_tests.rs"]
 mod e2e_handler;
+#[cfg(test)]
+#[path = "e2e_media_tests.rs"]
+mod e2e_media;
 #[cfg(test)]
 #[path = "e2e_state_tests.rs"]
 mod e2e_state;
@@ -70,26 +79,6 @@ impl Harness {
         }
     }
 
-    // ---- chat-scoped assertions (this case's traffic only) ----
-    pub fn calls(&self, method: &str) -> Vec<tg_fake::Call> {
-        self.tg.calls_of(self.chat, method)
-    }
-    pub fn sends(&self) -> Vec<tg_fake::Call> {
-        self.calls("sendMessage")
-    }
-    pub fn edits(&self) -> Vec<tg_fake::Call> {
-        self.calls("editMessageText")
-    }
-    pub fn sent_texts(&self) -> Vec<String> {
-        self.tg.sent_texts(self.chat)
-    }
-    pub fn sent_count(&self, method: &str) -> usize {
-        self.tg.sent_count(self.chat, method)
-    }
-    pub fn fault(&self, method: &str, description: &str) {
-        self.tg.fault_next(self.chat, method, description);
-    }
-
     /// Map this case's pane to its topic thread (real forum mapping) so
     /// topic routing and typing work exactly as in production.
     pub fn map_topic(&self) {
@@ -131,15 +120,17 @@ impl Harness {
         m
     }
 
-    /// Tap callback (answer buttons, keys, cards).
-    #[allow(dead_code)] // used by the blocked-card cases when added
-    pub async fn tap(&self, data: &str) {
-        self.update(json!({
+    /// Tap a callback on a specific message (the real card id matters:
+    /// the tap gate rejects buttons whose card is not the tracked one).
+    /// Built as a real callback update — `update()` wraps messages.
+    pub async fn tap_on(&self, msg_id: i64, data: &str) {
+        self.raw(json!({
+            "update_id": next_update_id(),
             "callback_query": {
                 "id": "cb1",
                 "from": {"id": OWNER},
                 "chat_instance": "x",
-                "message": {"message_id": 1,
+                "message": {"message_id": msg_id,
                             "chat": {"id": self.chat, "type": "supergroup"},
                             "message_thread_id": self.thread,
                             "date": now_unix()},
@@ -149,8 +140,24 @@ impl Harness {
         .await;
     }
 
+    /// Id of the newest delivered card whose text matches `needle`
+    /// (what a real tap would carry).
+    pub fn card_id(&self, needle: &str) -> i64 {
+        self.sends()
+            .iter()
+            .rev()
+            .find(|c| c.text().contains(needle))
+            .map(|c| c.sent_id())
+            .expect("matching card")
+    }
+
     pub async fn update(&self, message: Value) {
-        let update = json!({"update_id": next_update_id(), "message": message});
+        self.raw(json!({"update_id": next_update_id(), "message": message}))
+            .await;
+    }
+
+    /// Deliver a whole update verbatim (callbacks, membership changes).
+    pub async fn raw(&self, update: Value) {
         let s = self.s.clone();
         crate::telegram::router::handle_update(s, &update).await;
     }
@@ -161,21 +168,32 @@ impl Harness {
     }
 
     /// Async-cond variant (state behind a lock needs an await inside).
-    pub async fn wait_for_async<F, Fut>(&self, what: &str, mut cond: F)
+    pub async fn wait_for_async<F, Fut>(&self, what: &str, cond: F)
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
-        for _ in 0..120 {
+        self.wait_for_ticks(what, 120, cond).await;
+    }
+
+    /// Same with an explicit budget in 100ms ticks (the notifier's
+    /// settle debounce is 15s — longer than the default window).
+    pub async fn wait_for_ticks<F, Fut>(&self, what: &str, ticks: u32, mut cond: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        for _ in 0..ticks {
             if cond().await {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         panic!(
-            "timed out waiting for {what}\n--- telegram calls (chat {}) ---\n{:#?}",
+            "timed out waiting for {what}\n--- telegram calls (chat {}) ---\n{:#?}\n--- herdr calls ---\n{:?}",
             self.chat,
-            self.calls("sendMessage")
+            self.calls("sendMessage"),
+            self.herdr.calls()
         );
     }
 

@@ -15,10 +15,10 @@ impl TelegramClient {
         if file_path.is_empty() || file_path.starts_with('/') || file_path.contains("..") {
             return Err("refusing unsafe file path".into());
         }
-        let url = format!(
-            "https://api.telegram.org/file/bot{}/{}",
-            self.token, file_path
-        );
+        // Same base as the API calls (the real host in release, the
+        // local fake in the e2e harness) so photo downloads are covered
+        // end to end instead of escaping to the real endpoint.
+        let url = format!("{}/file/bot{}/{}", self.base, self.token, file_path);
         let bytes = self
             .http
             .get(&url)

@@ -15,6 +15,7 @@ pub mod retry_guard;
 pub mod spontaneous;
 pub mod spontaneous_gate;
 pub mod status;
+pub mod status_seed;
 
 /// Single source for the post-prompt quiet window (a final card makes a
 /// same-pane idle/done alert redundant). Dup'd literals re-drift.

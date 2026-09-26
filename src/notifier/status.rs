@@ -3,8 +3,8 @@
 //! buzzing (boot seed); event-driven ensures pause during reset (the
 //! reset lock gates topic writes; events skip entirely while it holds).
 use crate::{
-    handlers::dialog::{refresh_blocked_card, send_blocked_card},
-    herdr::client::{get_agent, list_workspaces, read_agent_output, read_screen_visible},
+    handlers::dialog::refresh_blocked_card,
+    herdr::client::{get_agent, list_workspaces, read_agent_output},
     jobs::segment::final_block,
     jobs::stream::{delta, join_trimmed},
     state::AppState,
@@ -142,38 +142,9 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // last_done (documented TOCTOU, not closed).
     let job_owned = s.job_live(pane).await;
 
+    // Boot seed (split to `status_seed`, 300-line file limit).
     if silent {
-        // Boot seed only — but an already-blocked pane genuinely needs
-        // input NOW (missed while the bot was down): post its answer card
-        // instead of staying mute until the next transition.
-        if old.is_none() && new_status == "blocked" {
-            println!("[alert] seed found {pane} blocked — posting answer card");
-            let screen = read_screen_visible(&s.cfg.socket, pane, 80).await;
-            // Baseline follows delivery: a dropped seed card must stay
-            // "new" so the next observation posts it.
-            let posted = if let Some(forum) = s.cfg.forum {
-                // One-topic-per-pane (refresh parity): a missing mapping
-                // never falls back to the forum root — stay silent until
-                // the next sync recreates the topic. Single read: bind
-                // once, no contains-then-get skew across lock releases.
-                let thread = s.topics.all_mappings().get(pane).copied();
-                if thread.is_none() {
-                    return;
-                }
-                send_blocked_card(s, forum, thread, pane).await
-            } else {
-                let mut posted = false;
-                for id in &s.cfg.owners {
-                    if send_blocked_card(s, *id, None, pane).await {
-                        posted = true;
-                    }
-                }
-                posted
-            };
-            if posted {
-                s.seen.lock().await.insert(pane.to_string(), screen);
-            }
-        }
+        super::status_seed::seed_blocked_card(s, pane, old.as_deref(), new_status).await;
         return;
     }
     if old.as_deref() == Some(new_status) {

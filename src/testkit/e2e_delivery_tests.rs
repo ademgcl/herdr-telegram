@@ -103,15 +103,24 @@ async fn e2e_not_modified_probe_converges_without_repost() {
     let h = Harness::start().await;
     h.map_topic();
     h.run_turn("first", &["one"]).await;
-    let before = h.sent_count("sendMessage");
+    // Count working messages, not all sends: the second turn's FINAL
+    // is a legitimate new message and must not be confused with a
+    // re-posted placeholder.
+    let placeholders = |h: &Harness| -> usize {
+        h.sends()
+            .iter()
+            .filter(|c| c.text().contains(crate::jobs::progress::THINKING))
+            .count()
+    };
+    let before = placeholders(&h);
     h.fault("editMessageText", "Bad Request: message is not modified");
     h.herdr.set_status("working");
     h.say("second").await;
-    h.herdr.submit_count(); // wait for delivery below
     h.wait_for("second submit", || h.herdr.submit_count() >= 2)
         .await;
+    h.wait_for_final_after(0).await;
     // No fresh instant post: the slot was alive after all.
-    assert_eq!(h.sent_count("sendMessage"), before);
+    assert_eq!(placeholders(&h), before, "converged probe re-posted");
 }
 
 /// A 429 on the instant post must back off, never duplicate, and still

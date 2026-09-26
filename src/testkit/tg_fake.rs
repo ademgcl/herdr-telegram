@@ -76,6 +76,21 @@ impl FakeTg {
     pub fn sent_count(&self, chat: i64, method: &str) -> usize {
         self.calls_of(chat, method).len()
     }
+    /// Unscoped count for calls that carry no chat id (getFile).
+    pub fn count_all(&self, method: &str) -> usize {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.method == method)
+            .count()
+    }
+    /// Queue a failure for the next `method` call in ANY chat (for
+    /// chat-less methods like getFile, where the per-chat key can never
+    /// match).
+    pub fn fault_global(&self, method: &str, description: &str) {
+        self.fault_next(0, method, description);
+    }
     /// Queue a failure for the next `method` call in `chat` (other
     /// chats are untouched — parallel tests stay independent).
     pub fn fault_next(&self, chat: i64, method: &str, description: &str) {
@@ -86,13 +101,17 @@ impl FakeTg {
             .or_default()
             .push(description.to_string());
     }
+    /// Per-chat fault first, then the global bucket (chat-less calls).
     fn take_fault(&self, chat: i64, method: &str) -> Option<String> {
         let mut m = self.faults.lock().unwrap();
-        let q = m.get_mut(&(chat, method.to_string()))?;
-        if q.is_empty() {
-            return None;
+        for key in [(chat, method.to_string()), (0, method.to_string())] {
+            if let Some(q) = m.get_mut(&key)
+                && !q.is_empty()
+            {
+                return Some(q.remove(0));
+            }
         }
-        Some(q.remove(0))
+        None
     }
     fn next_message_id(&self) -> i64 {
         let mut n = self.next_id.lock().unwrap();
@@ -183,6 +202,7 @@ async fn serve_one(sock: &mut tokio::net::TcpStream, fake: Arc<FakeTg>) -> std::
     let body: Value = serde_json::from_str(body.trim()).unwrap_or(json!({}));
     // Method is the last path segment: /bot<token>/<method>
     let first = head.lines().next().unwrap_or("");
+    let verb = first.split_whitespace().next().unwrap_or("").to_string();
     let method = first
         .split_whitespace()
         .nth(1)
@@ -191,11 +211,26 @@ async fn serve_one(sock: &mut tokio::net::TcpStream, fake: Arc<FakeTg>) -> std::
         .next()
         .unwrap_or("")
         .to_string();
+    // Raw file download (GET /file/bot<token>/<path>): serve image
+    // bytes, not a JSON envelope.
+    if verb == "GET" {
+        let bytes: &[u8] = &[
+            0xFF, 0xD8, 0xFF, 0xE0, b'J', b'F', b'I', b'F', 0x00, 0x01, 0xFF, 0xD9,
+        ];
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        );
+        sock.write_all(head.as_bytes()).await?;
+        sock.write_all(bytes).await?;
+        sock.flush().await?;
+        return Ok(());
+    }
     let chat = body["chat_id"].as_i64().unwrap_or(0);
     let assigned = fake.next_message_id();
     fake.calls.lock().unwrap().push(Call {
         method: method.clone(),
-        body,
+        body: body.clone(),
         assigned_id: None,
     });
 
@@ -215,6 +250,11 @@ async fn serve_one(sock: &mut tokio::net::TcpStream, fake: Arc<FakeTg>) -> std::
                 "first_name": "herdr"
             }}),
             "getUpdates" => json!({"ok": true, "result": []}),
+            "getFile" => json!({"ok": true, "result": {
+                "file_id": body["file_id"].as_str().unwrap_or(""),
+                "file_path": "photos/file_1.jpg",
+                "file_size": 12
+            }}),
             "createForumTopic" => json!({"ok": true, "result": {
                 "message_thread_id": 900, "name": "t"
             }}),
