@@ -12,6 +12,17 @@ fn sends(h: &Harness) -> Vec<Call> {
     h.sends()
 }
 
+/// Mid of the silent working message. Content-addressed, never
+/// `sends[0]`: the 📌 identity card is a legitimate earlier send, and an
+/// index-based pick silently starts asserting about the pin.
+fn instant_mid(h: &Harness) -> i64 {
+    sends(h)
+        .iter()
+        .find(|c| c.text().contains(crate::jobs::progress::THINKING))
+        .unwrap_or_else(|| panic!("no instant message in {:#?}", h.sent_texts()))
+        .sent_id()
+}
+
 /// Happy path: instant message first, final as a NEW message, and the
 /// working message deleted when auto-remove is on.
 #[tokio::test]
@@ -23,16 +34,20 @@ async fn e2e_turn_posts_instant_then_final_and_retires_transient() {
 
     let sent = sends(&h);
     // 1. the instant working message precedes the final
+    let instant = instant_mid(&h);
+    let instant_at = sent
+        .iter()
+        .position(|c| c.sent_id() == instant)
+        .unwrap_or_else(|| panic!("instant not among the sends"));
     assert!(
-        sent[0].text().contains("thinking"),
-        "instant first: {:?}",
-        sent[0].text()
+        instant_at + 1 < sent.len(),
+        "instant must precede the final"
     );
     // 2. the final is a NEW message carrying the answer
     let final_text = sent.last().unwrap().text();
     assert!(final_text.contains("hi there"), "got {final_text:?}");
     assert_ne!(
-        sent[0].sent_id(),
+        instant,
         sent.last().unwrap().sent_id(),
         "final must be its own message"
     );
@@ -52,7 +67,7 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
     assert!(!h.s.transient_remove());
     h.run_turn("first", &["one"]).await;
     assert_eq!(h.sent_count("deleteMessage"), 0, "kept, never deleted");
-    let instant_mid = sends(&h)[0].sent_id();
+    let first_instant = instant_mid(&h);
 
     h.run_turn("second", &["two"]).await;
     let second_final = sends(&h)
@@ -60,8 +75,8 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
         .find(|c| c.text().contains("two"))
         .expect("second final")
         .sent_id();
-    assert_ne!(second_final, instant_mid, "final is still a new message");
-    let reused = edits(&h).iter().any(|c| c.message_id() == instant_mid);
+    assert_ne!(second_final, first_instant, "final is still a new message");
+    let reused = edits(&h).iter().any(|c| c.message_id() == first_instant);
     assert!(reused, "second turn must reuse the kept transient");
     // Exactly two working messages existed (one per turn), never three.
     assert!(

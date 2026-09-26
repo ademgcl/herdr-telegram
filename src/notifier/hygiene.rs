@@ -184,6 +184,9 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
             }
             s.seen.lock().await.retain(|p, _| live.contains(p));
             s.last_done.lock().await.retain(|p, _| live.contains(p));
+            // Pinned-card text dies with its pane (live-only bound: a dead
+            // pane's card is gone, so its stamp must go with it).
+            s.pinned_card.lock().await.retain(|p, _| live.contains(p));
             // History is RAM-only + bounded per pane, but history-only
             // panes (no job/intent) never enter `known` above — retain
             // live-only or dead panes leak 20 rows each forever.

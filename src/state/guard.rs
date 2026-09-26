@@ -20,6 +20,16 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+/// How long a user-initiated pane action (tap, `/card`, `/esc`) waits
+/// for an internal holder before standing down. A user action that
+/// lands in the same instant the settle is still posting that very
+/// card raced the claim and was dropped or refused — the reported
+/// "I tapped and nothing happened" / "/card said in flight right after
+/// the card appeared". Sized to the holder's real work (a card post +
+/// stamp + a few RPCs), not to a human pause. Single-flight is
+/// preserved: the waiter takes the claim, never shares it.
+pub(crate) const USER_OP_WAIT: Duration = Duration::from_secs(3);
+
 /// Corpse threshold for tap claims (see module docs): far above the
 /// worst legit hold (stacked RPC timeouts ≈ 3min), far below
 /// "stuck until restart".
@@ -132,6 +142,30 @@ impl<'a> OpGuard<'a> {
             pane: pane.to_string(),
             at,
         })
+    }
+
+    /// Claim with a short bounded wait for the holder to finish. A tap
+    /// that lands in the same instant the question card is posted raced
+    /// the settle's own claim and was dropped SILENTLY ("I tapped and
+    /// nothing happened"): the holder is always a few RPCs, never long.
+    /// Still single-flight — the waiter takes the claim, it never shares
+    /// it — and it gives up after `wait` so a real double-tap stands
+    /// down as before.
+    pub async fn claim_wait(
+        set: &'a Mutex<HashMap<String, Instant>>,
+        pane: &str,
+        wait: Duration,
+    ) -> Option<Self> {
+        let deadline = Instant::now() + wait;
+        loop {
+            if let Some(g) = Self::claim(set, pane).await {
+                return Some(g);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Self-healing peek: true only while a FRESH claim holds the pane.

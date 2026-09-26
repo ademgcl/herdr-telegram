@@ -151,6 +151,10 @@ pub struct State {
     pub shell_gen: Mutex<HashMap<String, u64>>,
     /// Active background typing indicator tasks for working panes.
     pub typing_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// Text each pane's pinned identity card currently shows
+    /// (`notifier::pin_sync`): an unchanged status sample must cost
+    /// zero API writes.
+    pub pinned_card: Mutex<HashMap<String, String>>,
     /// Auto-remove the silent transient when the final lands
     /// (`/transient on`; off by default so the working trace stays
     /// readable). Plain bool flag, never a map — nothing to prune.
@@ -172,7 +176,12 @@ pub type AppState = Arc<State>;
 /// action lands — so every sustainer re-fires well inside the window
 /// (worst passive-return gap ≈ this). Single source for the typing task,
 /// the watcher piggyback, and the submit sustain loops.
-pub(crate) const TYPING_TICK_SECS: u64 = 2;
+/// Typing-action cadence. A `sendChatAction` lasts ~5s, so 5s keeps
+/// the indicator unbroken with a THIRD of the writes: the 2s cadence
+/// (times three writers) burned ~90 API calls/min and earned real
+/// flood-waits (`retry after 38`), which delayed the instant message
+/// by tens of seconds — the "it arrived late" report.
+pub(crate) const TYPING_TICK_SECS: u64 = 5;
 
 impl State {
     /// Persist the Telegram poll offset (atomic tmp+rename, like focus):
@@ -268,6 +277,7 @@ impl State {
             history: Mutex::new(HashMap::new()),
             shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
+            pinned_card: Mutex::new(HashMap::new()),
             // Fail-open default off (keep transients): a torn write must
             // never flip the user into auto-remove.
             transient_remove: AtomicBool::new(Self::load_transient_remove()),

@@ -14,13 +14,15 @@ fn test_confirm_arms_then_fires_on_persistence() {
         "done",
         t0 + Duration::from_millis(800)
     ));
+    // Quiet under the gate still holds (the arm is re-stamped while the
+    // agent keeps writing, so a mid-run blip cannot commit).
     assert!(!confirm_due(
         &mut since,
         "done",
-        t0 + Duration::from_secs(4)
+        t0 + Duration::from_millis(1_500)
     ));
-    // Same-kind persistence past the gate commits and disarms.
-    assert!(confirm_due(&mut since, "done", t0 + Duration::from_secs(5)));
+    // Same-kind quiet past the gate commits and disarms.
+    assert!(confirm_due(&mut since, "done", t0 + Duration::from_secs(2)));
     assert!(since.is_none());
 }
 
@@ -33,7 +35,7 @@ fn test_confirm_rearms_on_kind_flip() {
     assert!(!confirm_due(
         &mut since,
         "blocked",
-        t0 + Duration::from_secs(4)
+        t0 + Duration::from_secs(2)
     ));
     assert_eq!(since.as_ref().map(|(_, k)| k.as_str()), Some("blocked"));
     assert!(!confirm_due(
@@ -42,11 +44,11 @@ fn test_confirm_rearms_on_kind_flip() {
         t0 + Duration::from_secs(8)
     ));
     assert_eq!(since.as_ref().map(|(_, k)| k.as_str()), Some("idle"));
-    // Only 5s of the SAME kind commits.
+    // Only the quiet window of the SAME kind commits.
     assert!(!confirm_due(
         &mut since,
         "idle",
-        t0 + Duration::from_secs(12)
+        t0 + Duration::from_secs(9)
     ));
     assert!(confirm_due(
         &mut since,
@@ -86,7 +88,7 @@ fn test_confirm_is_event_rate_independent() {
 #[test]
 fn test_settle_commit_blocked_bypasses_gate() {
     // Blocked commits at once without arming the timer; other kinds
-    // still prove 5s same-kind persistence; flips re-arm.
+    // still prove the same-kind quiet window; flips re-arm.
     let t0 = Instant::now();
     let mut since: SettledArm = None;
     assert!(settle_commit("blocked", &mut since, t0, false));
@@ -99,19 +101,19 @@ fn test_settle_commit_blocked_bypasses_gate() {
     assert!(!settle_commit(
         "idle",
         &mut since,
-        t0 + Duration::from_secs(4),
+        t0 + Duration::from_millis(1_500),
         false
     ));
     assert!(settle_commit(
         "idle",
         &mut since,
-        t0 + Duration::from_secs(5),
+        t0 + Duration::from_secs(2),
         false
     ));
     assert!(!settle_commit(
         "done",
         &mut since,
-        t0 + Duration::from_secs(6),
+        t0 + Duration::from_secs(3),
         false
     ));
 }

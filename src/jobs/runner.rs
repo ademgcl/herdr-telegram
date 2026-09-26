@@ -58,37 +58,22 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     if !job.is_stopped() {
         s.start_typing(&pane).await;
     }
-    // Dedicated typing ticker (shared cadence, well inside the ≈5s
-    // expiry, independent of herdr RPCs): thinking pauses with no
-    // output/events go dark in DM mode without it (no typing task
-    // there), and a slow get_agent would otherwise stretch the
-    // piggyback period past expiry. Spawned, never awaited inline.
+    // Dedicated typing ticker (shared cadence, independent of herdr
+    // RPCs): thinking pauses with no output/events go dark in DM mode
+    // without it (no typing task there). Spawned, never awaited inline.
     let mut typing_tick =
         tokio::time::interval(Duration::from_secs(crate::state::TYPING_TICK_SECS));
     // Skip, never Burst: after slow RPC rounds a Burst catch-up would
     // fire ticks back-to-back, spinning tight poll cycles against an
-    // already-sick herdr. Skipped ticks simply resume the 2s cadence.
+    // already-sick herdr. Skipped ticks simply resume the cadence.
     typing_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     typing_tick.tick().await;
-    // Time-based sustain task: the ticker arm above falls through to
-    // blocking work (30s agent reads, 45s stall scans), so sick-herdr
-    // rounds would stretch the sustain gap past the ≈5s expiry — in DM
-    // nothing else backstops it. Reads the current dest every round (a
-    // remap retargets mid-watch); aborted once in the exit epilogue.
-    let sustain = {
-        let tg = s.tg.clone();
-        let job = job.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(crate::state::TYPING_TICK_SECS)).await;
-                if job.is_stopped() {
-                    break;
-                }
-                let (c, t) = *job.dest.lock().await;
-                tg.typing(c, t).await;
-            }
-        })
-    };
+    // NO second typing task here: the per-pane task in `start_typing`
+    // already re-sends every TYPING_TICK_SECS for the whole turn, so
+    // the old watcher-local sustain duplicated it (and the enqueue
+    // submit-sustain duplicated it again) — three writers against one
+    // indicator is what earned the flood-waits. Aborting the handle is
+    // kept in the epilogue below for the no-op case.
     // Instant feedback is the typing indicator (sustained below on the
     // shared cadence, well inside the ≈5s expiry, so a returning client
     // sees it within ~2s) plus the silent progress message (placeholder
@@ -258,13 +243,17 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // for the baseline/delta details), then reflect the raw tail
         // onto the silent instant message (transients included — the
         // final still arbitrates its clean reply as a NEW buzzing card).
-        super::live::stream_live(&job, screen, &mut acc).await;
+        if super::live::stream_live(&job, screen, &mut acc).await
+            && let Some((_, kind)) = settled_since.clone()
+        {
+            // Fresh bytes re-stamp the settle arm: the report waits for
+            // the agent to go QUIET (see SETTLED_QUIET_SECS) instead of
+            // a fixed wait that made every reply ~5s late.
+            settled_since = Some((Instant::now(), kind));
+        }
         super::progress::refresh_live(&s, &pane, &job, &acc).await;
     }
 
-    // Every `break` above converges here: single abort site for the
-    // sustain task (it also self-exits on stop as backstop).
-    sustain.abort();
     // Ownerless exits (quiet pane-death retires post no card) must not
     // strand the silent placeholder beside nothing — a successor turn
     // (same-Arc epoch bump or another Arc in the map) keeps it.

@@ -152,6 +152,10 @@ async fn main() -> Res<()> {
                         let batch_len = list.len();
                         let mut handled = 0u32;
                         for u in list {
+                            // Pickup budget: the pump is sequential, so a
+                            // handler's ms is the NEXT message's wait.
+                            // Logged per update (was a hunch, now a number).
+                            let picked_at = std::time::Instant::now();
                             let id = u["update_id"].as_u64().unwrap_or(0);
                             // Poison id 0 (no update_id) would re-submit
                             // every poll forever — drop before handling.
@@ -169,6 +173,10 @@ async fn main() -> Res<()> {
                                 }
                                 _ = handle_update(s.clone(), &u) => {}
                             }
+                            println!(
+                                "[tg] update handled in {}ms",
+                                picked_at.elapsed().as_millis()
+                            );
                             // Ack AFTER handling (single source:
                             // [`crate::shutdown::ack_update`]).
                             crate::shutdown::ack_update(&s, id).await;

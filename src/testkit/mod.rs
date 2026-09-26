@@ -190,7 +190,7 @@ impl Harness {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         panic!(
-            "timed out waiting for {what}\n--- telegram calls (chat {}) ---\n{:#?}\n--- herdr calls ---\n{:?}",
+            "timed out waiting for {what}\n--- telegram sends (chat {}) ---\n{:#?}\n--- herdr calls ---\n{:?}",
             self.chat,
             self.calls("sendMessage"),
             self.herdr.calls()

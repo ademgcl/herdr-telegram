@@ -7,8 +7,16 @@ use std::time::Duration;
 
 /// Sync the pane's identity pin card (converging rule shared with
 /// `jobs::report`): only a definitely-gone card earns a fresh post —
-/// a transient failure keeps the pin and retries next tick.
+/// a transient failure keeps the pin and retries next tick. Skips
+/// unchanged text: status observations arrive every couple of seconds
+/// and an unconditional edit per sample is pure write volume (it
+/// counted against the same flood budget that delayed the instant
+/// message).
 pub async fn sync_identity_pin(s: &AppState, pane: &str, forum: i64, card: &str) {
+    // Content-addressed: the pin already shows this exact card.
+    if s.pinned_card.lock().await.get(pane).map(String::as_str) == Some(card) {
+        return;
+    }
     // Snapshot (thread, mid) together: a reset migrating the mapping
     // mid-window must not edit the corpse topic successfully and then
     // skip the mint in the new one.
@@ -50,11 +58,29 @@ pub async fn sync_identity_pin(s: &AppState, pane: &str, forum: i64, card: &str)
         .await
         .ok()
         .flatten()
-        && !s.topics.set_pin_if_thread(pane, thread, new_mid)
     {
-        // Reminted during send: our just-posted card is the duplicate —
-        // delete it so only one pin survives (overwrite-only).
-        s.tg.delete_msg(forum, new_mid).await;
-        println!("[alert] pin reminted during send for {pane} — dropped duplicate {new_mid}");
+        if !s.topics.set_pin_if_thread(pane, thread, new_mid) {
+            // Reminted during send: our just-posted card is the duplicate
+            // — delete it so only one pin survives (overwrite-only).
+            s.tg.delete_msg(forum, new_mid).await;
+            println!("[alert] pin reminted during send for {pane} — dropped duplicate {new_mid}");
+            return;
+        }
+        stamp_pinned(s, pane, card).await;
+        return;
     }
+    // Edit landed (or the mint was skipped): remember the text so the
+    // next unchanged sample costs nothing. Stamped last: a failed sync
+    // stays unstamped and the next tick retries it.
+    if mid_opt.is_some() {
+        stamp_pinned(s, pane, card).await;
+    }
+}
+
+/// Remember what the pin currently shows (content-addressed gate above).
+async fn stamp_pinned(s: &AppState, pane: &str, card: &str) {
+    s.pinned_card
+        .lock()
+        .await
+        .insert(pane.to_string(), card.to_string());
 }

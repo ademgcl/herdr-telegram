@@ -72,27 +72,23 @@ pub async fn enqueue_prompt(
     // transient tail, deleted when the buzzing final lands — see
     // `progress`): posted before the slow submit so it is truly instant.
     super::progress::ensure_instant(&s, &pane, &job).await;
-    // Reservation-window cover: light + sustain the indicator while the
-    // 30s submit RPC is in flight (spawned, never awaited).
+    // Reservation-window cover: the per-pane typing task (started above
+    // by the watcher / here for a fresh job) re-sends every
+    // TYPING_TICK_SECS for the whole turn — one immediate action here
+    // covers the gap before its first tick. The old per-submit sustain
+    // loop was a THIRD writer for the same indicator; three writers at
+    // 2s is what tripped Telegram's flood limit and delayed the
+    // instant message by tens of seconds.
     s.start_typing(&pane).await;
-    {
+    if s.typing_tasks.lock().await.get(&pane).is_none() {
+        // No task yet (no watcher owns the pane): send one action so the
+        // indicator shows during the submit RPC.
         let tg = s.tg.clone();
         let (c, t) = (req.chat_id, req.message_thread_id);
         tokio::spawn(async move {
             tg.typing(c, t).await;
         });
     }
-    let tg = s.tg.clone();
-    let (c, t) = (req.chat_id, req.message_thread_id);
-    let sustain = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(
-                crate::state::TYPING_TICK_SECS,
-            ))
-            .await;
-            tg.typing(c, t).await;
-        }
-    });
     // Submit latency is the user-visible "instant" budget (the handler
     // runs inline in the poll loop: every ms here delays the NEXT
     // message's pickup). Logged so lag has a number, not a hunch.
@@ -104,7 +100,6 @@ pub async fn enqueue_prompt(
         30,
     )
     .await;
-    sustain.abort();
     println!(
         "[jobs] submit {} in {}ms",
         pane,

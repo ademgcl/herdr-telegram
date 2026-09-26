@@ -15,7 +15,10 @@ const ACC_CAP: usize = 400;
 /// Track whatever is new into the accumulator (silent; feeds the
 /// final-card arbitration — finals are byte-identical to before, the
 /// transient tail renders onto the silent instant message in `progress`).
-pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<String>) {
+/// Returns true when fresh bytes landed: the runner re-stamps the settle
+/// arm on it, so a report commits shortly after the agent actually
+/// stopped writing rather than after a fixed wait.
+pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<String>) -> bool {
     // Outage/empty AND cleared-pane (non-empty all-blank) reads are
     // unknown, never fresh: `watch_stall` returns the blank screen for
     // `note_empty`, and writing it here would poison a good baseline —
@@ -23,16 +26,16 @@ pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<Stri
     // scrollback as fresh (dupe/flooded finals). Single source:
     // `anchorable_screen` (Job::new / anchor_baseline parity).
     if !anchorable_screen(&screen) {
-        return;
+        return false;
     }
     if !job.baseline_ok() {
         job.anchor_baseline(screen).await;
-        return;
+        return false;
     }
     let base = job.baseline.lock().await.clone();
     let fresh = delta(&screen, &base);
     if fresh.is_empty() {
-        return;
+        return false;
     }
     // Raw accumulation: boundaries (tool echoes, headers, prompt echo)
     // are resolved at display time so only the fresh reply is shown.
@@ -42,6 +45,7 @@ pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<Stri
         acc.drain(..drop);
     }
     *job.baseline.lock().await = screen;
+    true
 }
 
 #[cfg(test)]

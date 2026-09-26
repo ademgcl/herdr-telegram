@@ -11,12 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::time::{Duration, Instant};
 
-/// Minimum seconds a settled status must persist before the report
-/// commits. Event-driven wakes can land sub-second apart, so counting
-/// samples alone still retires on one short transient gap — the first
-/// settled sample only arms the timer, persistence commits it. Genuine
-/// settles arrive this much later; transients never do.
-const SETTLED_CONFIRM_SECS: u64 = 5;
+/// How long pane output must stay QUIET (no fresh bytes) before a
+/// settled sample commits the report. Replaces a fixed 5s wait: output
+/// quiescence is the actual signal that a turn ended, so a finished
+/// turn reports in ~1.5s instead of ~5s, while a mid-run idle blip
+/// keeps streaming and still cannot commit. The 750ms same-kind
+/// recheck upstream filters sub-second status flaps.
+const SETTLED_QUIET_SECS: u64 = 2;
 
 /// Watcher verdict after one settle check.
 pub enum SettleStep {
@@ -40,12 +41,12 @@ pub type SettledArm = Option<(Instant, String)>;
 
 /// Pure report-commit decision for the settle timer: the first settled
 /// sample arms it (recording its kind); only same-kind persistence past
-/// [`SETTLED_CONFIRM_SECS`] commits. A settled-kind flip re-arms on the
+/// [`SETTLED_QUIET_SECS`] commits. A settled-kind flip re-arms on the
 /// new kind. Unit-tested — the async wrapper only feeds it samples.
 fn confirm_due(armed: &mut SettledArm, status: &str, now: Instant) -> bool {
     match armed {
         Some((t, kind)) if kind == status => {
-            if now.duration_since(*t) >= Duration::from_secs(SETTLED_CONFIRM_SECS) {
+            if now.duration_since(*t) >= Duration::from_secs(SETTLED_QUIET_SECS) {
                 *armed = None;
                 true
             } else {

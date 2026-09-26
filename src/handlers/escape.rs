@@ -11,16 +11,31 @@ use crate::{
     handlers::dialog::send_blocked_card,
     handlers::tap_classify::{TapResult, classify_tap},
     herdr::client::{get_agent, read_screen_visible, send_agent_keys, send_pane_keys},
-    state::{AppState, OpGuard},
+    state::{AppState, OpGuard, guard::USER_OP_WAIT},
     types::AgentRow,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Bounded wait for the pane's single-flight holder to clear. A `/card`
+/// or `/esc` landing while the settle is still posting that very card
+/// used to refuse outright ("in flight" shown right after the question
+/// appeared). A real competing action still stands down at the wait.
+async fn block_free(s: &AppState, pane: &str) -> bool {
+    let deadline = Instant::now() + USER_OP_WAIT;
+    while s.block_held(pane).await {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
+}
 
 /// Re-post the pane's live dialog card. Read-only: never sends keys,
 /// never clears waiters, refuses while a tap owns the pane.
 /// Self-healing peek: a stale corpse evicts so /card stays a way out.
 async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    if s.block_held(pane).await {
+    if !block_free(s, pane).await {
         s.tg.send_msg(chat, thread, crate::ui::CARD_IN_FLIGHT, None)
             .await;
         return;
@@ -45,7 +60,7 @@ async fn post_card(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
 /// on screen like a tap (resume / new dialog / still blocked).
 /// Self-healing peek: a stale corpse evicts instead of refusing /esc.
 async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
-    if s.block_held(pane).await {
+    if !block_free(s, pane).await {
         s.tg.send_msg(chat, thread, crate::ui::ESC_IN_FLIGHT, None)
             .await;
         return;
@@ -61,7 +76,7 @@ async fn esc_pane(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
             return;
         }
     }
-    let Some(_op) = OpGuard::claim(&s.blockop, pane).await else {
+    let Some(_op) = OpGuard::claim_wait(&s.blockop, pane, USER_OP_WAIT).await else {
         s.tg.send_msg(chat, thread, crate::ui::ESC_IN_FLIGHT, None)
             .await;
         return;

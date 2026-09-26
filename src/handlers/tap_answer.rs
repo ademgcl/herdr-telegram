@@ -1,6 +1,7 @@
 use super::tap_classify::{TapResult, classify_tap};
 use super::tap_keys::{TapCall, tap_keys};
 use super::tap_refresh::delayed_refresh;
+use crate::state::guard::USER_OP_WAIT;
 use crate::{
     handlers::dialog::{blocked_card_text, blocked_kb, dialog_sig, live_card},
     state::AppState,
@@ -27,13 +28,16 @@ pub async fn answer_tap(
     // Single-flight per pane: a double-tap (or two owners) must not
     // interleave key sequences into the same dialog, and observations
     // must not post over the card this tap owns. RAII: cancellation
-    // mid-tap must not wedge the pane. Contention drops PURELY silent:
-    // the spinner already stopped and the winner owns this pane — even
+    // mid-tap must not wedge the pane. A tap that arrives WHILE the
+    // settle is still posting that very card waits briefly (the holder
+    // is always a few RPCs) instead of vanishing: the dropped-tap
+    // report was exactly this race. A real double-tap still finds the
+    // pane held past the wait and stands down purely silent — even
     // stripping our own card is unsafe here, a retried strip landing
     // after the winner's final edit would wipe its fresh buttons with
     // no heal repairing them. A stranded orphan self-heals: the next
     // tap re-validates through the blocked-gate + Unknown arm.
-    let Some(_op) = crate::state::OpGuard::claim(&s.blockop, pane).await else {
+    let Some(_op) = crate::state::OpGuard::claim_wait(&s.blockop, pane, USER_OP_WAIT).await else {
         return;
     };
     // A button tap supersedes an armed typed answer for THIS pane: drop
