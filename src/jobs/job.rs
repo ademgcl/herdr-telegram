@@ -26,6 +26,18 @@ pub struct Job {
     /// Submit epoch: bumped on every enqueue; finalize retires only if
     /// unchanged (a new prompt mid-finalize keeps the watcher alive).
     pub epoch: AtomicU64,
+    /// Instant progress message (silent placeholder + live transient
+    /// edits, deleted when the final lands — see `progress`): the
+    /// (chat, thread, msg) it was posted to, if any.
+    pub live_msg: Mutex<Option<(i64, Option<i64>, i64)>>,
+    /// Last progress text sent (change gate so edits fire on new output
+    /// only, never every tick).
+    pub live_text: Mutex<String>,
+    /// Last progress send/edit attempt (throttle so ticks never flood).
+    pub live_at: Mutex<Option<std::time::Instant>>,
+    /// Progress post in flight (single-flight across tasks: enqueue's
+    /// instant post vs watcher ticks on a reused Arc must never double).
+    pub live_sending: AtomicBool,
 }
 
 impl Job {
@@ -43,6 +55,10 @@ impl Job {
             dest: Mutex::new((chat_id, thread_id)),
             prompt: Mutex::new(String::new()),
             epoch: AtomicU64::new(0),
+            live_msg: Mutex::new(None),
+            live_text: Mutex::new(String::new()),
+            live_at: Mutex::new(None),
+            live_sending: AtomicBool::new(false),
         })
     }
 

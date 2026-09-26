@@ -1,8 +1,8 @@
 //! Shared cancel retire for prompt watchers. Split from `runner`
 //! (300-line file limit): mark, clear the intent only when the map
 //! still points here (a superseding enqueue owns it otherwise), then
-//! post the cancel card fresh (no live card exists to edit — see
-//! live.rs). Single source for the select arm, the backoff arm, and
+//! retire the silent transient and post the cancel card fresh as a NEW
+//! message. Single source for the select arm, the backoff arm, and
 //! the reconnect race.
 use crate::{
     jobs::stream::EvStream,
@@ -27,6 +27,9 @@ pub(crate) async fn cancel_watch_parts(s: &AppState, pane: &str, job: &Arc<Job>)
     // Atomic owner-checked clear (no detached check-then-clear across
     // awaits): a superseding enqueue landing mid-retire owns the slot.
     s.clear_pending_if_owner(pane, job, epoch_at_entry).await;
+    // Genuine cancel owns the pane (a supersede never notifies): the
+    // silent transient retires before the buzzing cancelled card lands.
+    super::progress::clear_live(s, job).await;
     let (chat, th) = *job.dest.lock().await;
     super::report::report(s, chat, th, pane, CANCELLED).await;
 }

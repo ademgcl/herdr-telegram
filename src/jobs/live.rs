@@ -1,9 +1,8 @@
 //! Fresh-output accumulation for final-card arbitration (see
-//! `report`/`finalize`). No live card is ever posted: the only message
-//! the user gets is the buzzing final — activity shows via the typing
-//! indicator, never a working box. (A live-slot address/throttle once
-//! lived here; nothing ever posted through it, so it was removed —
-//! zero dead code.)
+//! `report`/`finalize`). The only buzzing message the user gets is the
+//! final — activity shows via the typing indicator plus the silent
+//! instant message (`progress`: placeholder on submit, transient tail
+//! edited in place, deleted when the final lands as NEW).
 use crate::{
     jobs::{job::Job, stream::delta},
     types::anchorable_screen,
@@ -14,8 +13,8 @@ use std::sync::Arc;
 const ACC_CAP: usize = 400;
 
 /// Track whatever is new into the accumulator (silent; feeds the
-/// final-card arbitration — finals are byte-identical to before, only
-/// the working box is gone).
+/// final-card arbitration — finals are byte-identical to before, the
+/// transient tail renders onto the silent instant message in `progress`).
 pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<String>) {
     // Outage/empty AND cleared-pane (non-empty all-blank) reads are
     // unknown, never fresh: `watch_stall` returns the blank screen for

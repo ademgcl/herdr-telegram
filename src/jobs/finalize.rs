@@ -84,11 +84,13 @@ pub async fn finalize(
                 acc.clear();
                 return false;
             }
-            // Gone with no output: nothing was ever posted (no live card
-            // exists to fold — see live.rs), just retire the books.
+            // Gone with no output: no final to post — the silent
+            // transient retires with the books (nothing buzzes, so no
+            // status is missed: the pane itself is gone).
             // Empty never anchors (anchor parity with
             // Job::anchor_baseline): a blank read would wipe a good
             // baseline and repost scrollback as fresh on reuse.
+            super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
             settle_books(s, pane, job, entry_epoch, entry_pending).await;
             return false;
         }
@@ -125,8 +127,8 @@ pub async fn finalize(
         return r;
     }
     // Empty non-blocked settle: post nothing, but anchor the screen so
-    // the span never resurfaces as a stale "fresh" delta (no live card
-    // exists to retire — see live.rs).
+    // the span never resurfaces as a stale "fresh" delta (the silent
+    // transient retires inside — see try_finalize_empty).
     // Split to `finalize_blocked::try_finalize_empty` (300-line file limit).
     if body.is_empty()
         && let Some(r) = super::finalize_blocked::try_finalize_empty(
@@ -198,11 +200,11 @@ pub async fn finalize(
         parts.len(),
         body.len()
     );
-    // Finals buzz; progress stayed silent in place (no working card was
-    // ever posted — see live.rs). A total failure keeps the slot for
-    // retry, a mid-post supersede leaves delivered heads for the
-    // best-effort cleanup below instead of stranding a done stamp with
-    // no reply.
+    // Finals buzz as NEW messages; the silent transient retires after
+    // they land (see clear_live_if_epoch below). A total failure keeps
+    // the slot for retry, a mid-post supersede leaves delivered heads
+    // for the best-effort cleanup below instead of stranding a done
+    // stamp with no reply.
     let mut delivered = false;
     let mut landed: Vec<i64> = Vec::new();
     for part in parts.iter() {
@@ -238,6 +240,10 @@ pub async fn finalize(
         println!("[prompt] finalize {pane}: delivery failed, keeping intent for retry");
         return true;
     }
+    // The buzzing final landed as NEW message(s): the silent transient
+    // retires (epoch-gated — a successor turn owns the slot now, and
+    // its next tick re-posts when a racing delete took it).
+    super::progress::clear_live_if_epoch(s, job, entry_epoch).await;
     // Stamp the prompt completion so the notifier can suppress the
     // redundant post-prompt idle/done echo (the card already answered),
     // and anchor the spontaneous baseline so this card is never reposted.

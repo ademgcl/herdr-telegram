@@ -22,6 +22,13 @@ impl State {
         if should_record_msg(self.cfg.forum, chat) {
             self.topics.record_msg(pane, msg_id);
         }
+        self.remember_reply(chat, msg_id, pane).await;
+    }
+
+    /// Reply-route memory for transient progress (targets only): the
+    /// reset-copy `last_msgs` serves topic resets — a stale "thinking…"
+    /// evicting real finals there resurrects corpses on remint.
+    pub async fn remember_reply(&self, chat: i64, msg_id: i64, pane: &str) {
         // Lock order (never inverted anywhere): torder → targets.
         // LRU refresh on hit: hot cards survive the 512-cap, cold corpses evict first.
         let mut ord = self.torder.lock().await;

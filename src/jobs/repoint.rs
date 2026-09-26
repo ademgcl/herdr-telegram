@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 /// Repoint dest at the live thread, or delivery retries into the corpse
-/// forever. No card moves (no live card exists — see live.rs); the
+/// forever. The silent transient follows via `progress`' dest-mismatch
+/// arm (old thread dropped, fresh placeholder in the new one); the
 /// reply below simply lands in the new topic. Write-back keeps runner
 /// ticks, settle_books and durable intent on the same address.
 /// Forum-topic jobs only (DM dests must never gain a thread); epoch +

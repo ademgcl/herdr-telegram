@@ -1,9 +1,9 @@
 //! Delivery helpers for live prompts and reports. Split from finalize.rs.
 use crate::state::AppState;
 
-/// User-cancel text: cancel branches post it fresh (no live card exists
-/// to edit — see live.rs). Single source so every cancel path buzzes
-/// the same card.
+/// User-cancel text: cancel branches retire the silent transient, then
+/// post this fresh (see `progress`). Single source so every cancel path
+/// buzzes the same card.
 pub const CANCELLED: &str = "✋ cancelled";
 
 /// Cancel ownership verdict (pure, tested): a superseding enqueue owns

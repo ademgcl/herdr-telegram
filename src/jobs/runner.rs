@@ -91,8 +91,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     };
     // Instant feedback is the typing indicator (sustained below on the
     // shared cadence, well inside the ≈5s expiry, so a returning client
-    // sees it within ~2s): no "working" card is ever posted — output
-    // accumulates silently until the final.
+    // sees it within ~2s) plus the silent progress message (placeholder
+    // on submit, transient tail edited in place — only the final buzzes).
     // First settled sample arms the report timer (see settle.rs): agy
     // idles briefly between phases mid-run, and retiring on that
     // transient leaves the agent working unwatched. Cleared on working
@@ -103,8 +103,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
 
     loop {
         if job.is_stopped() {
-            // Quiet retire: no cancel card by design (nothing was ever
-            // posted to fold — see live.rs), buzz nothing.
+            // Quiet retire: no cancel card by design (the silent
+            // transient retires in the exit footer), buzz nothing.
             break;
         }
         // New prompt on a reused watcher restarts all episode timers
@@ -120,6 +120,12 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // Herdr-error streak belongs to the old prompt: 11 failures
             // there + 1 here must not back the new prompt off for 60s.
             fails = 0;
+            // Re-validate the transient slot: a stale finalize racing the
+            // submit may have deleted this shared message — resetting the
+            // text gate forces one edit attempt, which reposts when gone
+            // (a live message just takes the same-text edit, throttled).
+            *job.live_text.lock().await = String::new();
+            *job.live_at.lock().await = None;
             // Baseline persists: it already covers everything streamed,
             // so the next delta is exactly the new turn's output
             // (resetting drops the first burst — fresh and reused).
@@ -159,8 +165,8 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             }
             _ = typing_tick.tick() => {
                 // Poll driver only now (the sustain task above owns the
-                // indicator): empty working cards are gone by design, and
-                // instant feedback is typing, sustained time-based.
+                // indicator): instant feedback is typing plus the silent
+                // progress message, sustained time-based.
                 // Falls through to a poll cycle below (no `continue`).
                 WatchEvent::Output
             }
@@ -256,13 +262,20 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         };
 
         // Stream whatever is new into the accumulator (see live.rs
-        // for the baseline/delta details).
+        // for the baseline/delta details), then reflect the raw tail
+        // onto the silent instant message (transients included — the
+        // final still arbitrates its clean reply as a NEW buzzing card).
         super::live::stream_live(&job, screen, &mut acc).await;
+        super::progress::refresh_live(&s, &pane, &job, &acc).await;
     }
 
     // Every `break` above converges here: single abort site for the
     // sustain task (it also self-exits on stop as backstop).
     sustain.abort();
+    // Ownerless exits (quiet pane-death retires post no card) must not
+    // strand the silent placeholder beside nothing — a successor turn
+    // (same-Arc epoch bump or another Arc in the map) keeps it.
+    super::progress::clear_live_if_ownerless(&s, &pane, &job, last_epoch).await;
     // Retire only if the map still points at THIS watcher (no newer job took over)
     {
         let mut map = s.jobs.lock().await;

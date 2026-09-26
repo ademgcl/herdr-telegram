@@ -95,6 +95,9 @@ pub async fn follow_answer(s: &AppState, pane: &str, chat: i64, thread: Option<i
         }
     }
     println!("[jobs] follow-answer watcher for {pane}");
+    // The resumed turn gets the same instant placeholder as prompts
+    // (silent, edited live, deleted when the final lands).
+    super::progress::ensure_instant(s, pane, &job).await;
     tokio::spawn(super::runner::watch_job(s.clone(), pane.to_string(), job));
 }
 

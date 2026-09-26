@@ -69,6 +69,10 @@ pub async fn enqueue_prompt(
     };
 
     // Deliver FIRST, record after: a failed submit bumps nothing.
+    // Instant feedback is the silent placeholder (edited live with the
+    // transient tail, deleted when the buzzing final lands — see
+    // `progress`): posted before the slow submit so it is truly instant.
+    super::progress::ensure_instant(&s, &pane, &job).await;
     // Reservation-window cover: light + sustain the indicator while the
     // 30s submit RPC is in flight (spawned, never awaited).
     s.start_typing(&pane).await;
@@ -139,6 +143,10 @@ pub async fn enqueue_prompt(
             // shell-aware (a racing shell submit's pending keeps its
             // task; an agent successor re-mints via jobs).
             s.stop_shell_typing(&pane).await;
+            // No successor owns the turn: the instant placeholder must
+            // not linger beside the error card — the card below is the
+            // final word on this submit.
+            super::progress::clear_live(&s, &job).await;
         }
         return;
     }
@@ -186,6 +194,9 @@ pub async fn enqueue_prompt(
             &req.text,
         )
         .await;
+        // The placeholder posted above moves to the live owner (no
+        // flicker, no duplicate) — the detached books retire with us.
+        super::progress::adopt_live(&s, &job, &j).await;
         return;
     }
     let rearm = match s.jobs.lock().await.get(&pane).cloned() {
@@ -222,6 +233,7 @@ pub async fn enqueue_prompt(
                 &req.text,
             )
             .await;
+            super::progress::adopt_live(&s, &job, &j).await;
         }
         return;
     }
@@ -229,6 +241,7 @@ pub async fn enqueue_prompt(
         super::enqueue_rearm::rearm_watcher(
             &s,
             &pane,
+            &job,
             req.chat_id,
             req.message_thread_id,
             &req.text,

@@ -15,6 +15,7 @@ pub mod job;
 pub mod live;
 pub mod notices;
 pub mod persist;
+pub mod progress;
 pub mod recover;
 pub mod recover_gate;
 pub mod repoint;
