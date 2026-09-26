@@ -25,7 +25,9 @@ pub const BOT_BLOCKED: &str = "bot was blocked";
 /// and stay quiet instead of retry-spamming every tick.
 pub fn topic_not_modified(err: &str) -> bool {
     let low = err.to_lowercase();
-    low.contains("topic_not_modified") || low.contains("message is not modified")
+    low.contains("topic_not_modified")
+        || low.contains("message_not_modified")
+        || low.contains("message is not modified")
 }
 
 /// Topic (or forum access) definitely gone: the human-deleted shapes in
@@ -95,6 +97,10 @@ pub fn edit_gone(msg: &str) -> bool {
     topic_gone(msg)
         || low.contains("message to edit not found")
         || low.contains("message_to_edit_not_found")
+        // Newer Bot API wording for an edit against a deleted message.
+        // Missing it left a dead slot looking alive: the retry loop
+        // never re-posted, so the turn ran with no instant message.
+        || low.contains("message_id_invalid")
         || low.contains("message can't be edited")
         || low.contains(BOT_BLOCKED)
 }
@@ -119,6 +125,23 @@ mod tests {
         assert!(!topic_missing("connection reset"));
         assert!(topic_not_modified("Bad Request: TOPIC_NOT_MODIFIED"));
         assert!(!topic_not_modified("Bad Request: TOPIC_ID_INVALID"));
+    }
+
+    #[test]
+    fn test_edit_gone_covers_dead_message_wordings() {
+        // Every dead-message shape must free the slot; a miss retries a
+        // corpse edit forever and the turn loses its instant message.
+        assert!(edit_gone("Bad Request: message to edit not found"));
+        assert!(edit_gone("Bad Request: MESSAGE_ID_INVALID"));
+        assert!(edit_gone("Bad Request: MESSAGE_TO_EDIT_NOT_FOUND"));
+        assert!(edit_gone("Bad Request: message can't be edited"));
+        assert!(edit_gone(
+            "Forbidden: bot was blocked from the supergroup chat"
+        ));
+        // Alive-message failures keep the slot (retry, never duplicate).
+        assert!(!edit_gone("Bad Request: message is not modified"));
+        assert!(!edit_gone("Too Many Requests: retry after 7"));
+        assert!(!edit_gone("connection reset by peer"));
     }
 
     #[test]

@@ -62,6 +62,32 @@ fn test_long_tail_stays_within_telegram_cap() {
 }
 
 #[test]
+fn test_not_modified_reads_as_converged() {
+    // Telegram rejects a no-op edit; treating it as a failure logged a
+    // bogus error on every turn.
+    assert!(not_modified("Bad Request: message is not modified"));
+    assert!(not_modified("Bad Request: MESSAGE_NOT_MODIFIED"));
+    assert!(!not_modified("Bad Request: message to edit not found"));
+    assert!(!not_modified("Too Many Requests: retry after 5"));
+}
+
+#[test]
+fn test_retry_at_banks_flood_window_then_falls_back() {
+    let now = Instant::now();
+    // Flood: bank the full window plus retry_after's own +1s safety
+    // margin (retrying inside `retry after N` only extends the ban).
+    assert_eq!(
+        retry_at(&now, "Too Many Requests: retry after 7") - now,
+        Duration::from_secs(8)
+    );
+    // Anything else: bounded backoff, never one retry per tick.
+    assert_eq!(
+        retry_at(&now, "connection reset by peer") - now,
+        Duration::from_secs(EDIT_RETRY_BACKOFF_SECS)
+    );
+}
+
+#[test]
 fn test_edit_due_same_text_never() {
     let now = Instant::now();
     assert!(!edit_due("a", "a", None, now));

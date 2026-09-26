@@ -93,6 +93,10 @@ pub async fn enqueue_prompt(
             tg.typing(c, t).await;
         }
     });
+    // Submit latency is the user-visible "instant" budget (the handler
+    // runs inline in the poll loop: every ms here delays the NEXT
+    // message's pickup). Logged so lag has a number, not a hunch.
+    let submit_started = std::time::Instant::now();
     let submit_res = rpc_t(
         &s.cfg.socket,
         "agent.prompt",
@@ -101,6 +105,11 @@ pub async fn enqueue_prompt(
     )
     .await;
     sustain.abort();
+    println!(
+        "[jobs] submit {} in {}ms",
+        pane,
+        submit_started.elapsed().as_millis()
+    );
     if let Err(e) = submit_res {
         println!(
             "[jobs] submit error: {}",

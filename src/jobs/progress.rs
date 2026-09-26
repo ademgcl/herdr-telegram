@@ -52,6 +52,27 @@ pub fn render_progress(acc: &[String]) -> String {
     tail
 }
 
+/// No-op edit verdict (pure, tested): Telegram rejects an edit that
+/// changes nothing, so "already showing this" must read as converged —
+/// treating it as a failure made every turn log a bogus error.
+pub(crate) fn not_modified(err: &str) -> bool {
+    crate::telegram::errors::topic_not_modified(err)
+}
+
+/// Next attempt time after a failed live RPC (pure, tested): a
+/// flood-wait banks its full window (retrying inside `retry after N`
+/// only extends the ban), anything else backs off to
+/// `EDIT_RETRY_BACKOFF_SECS` so a persistently failing slot retries at
+/// a bounded rate instead of once per tick.
+pub(crate) fn retry_at(now: &Instant, err: &str) -> Instant {
+    let wait = crate::telegram::TelegramClient::retry_after(err)
+        .unwrap_or(Duration::from_secs(EDIT_RETRY_BACKOFF_SECS));
+    *now + wait
+}
+
+/// Min gap between progress edits (ticks run every ~2s).
+const EDIT_RETRY_BACKOFF_SECS: u64 = 15;
+
 /// Pure edit gate (tested): new text only, throttled to the cooldown.
 /// A first edit (no prior attempt) always goes through. Saturating:
 /// a flood-wait banks a FUTURE attempt time, which must read as
@@ -78,47 +99,65 @@ pub async fn ensure_instant(s: &AppState, pane: &str, job: &Arc<Job>) {
     match s.live_get(pane).await {
         Some(sl) if (sl.chat, sl.thread) == dest && sl.mid >= 0 => {
             // Same message, new turn: reset + claim the generation.
-            // Skip when already showing it (fresh post above).
-            if sl.text == THINKING {
-                return;
-            }
-            // The reset bypasses the edit cooldown: it fires at most
-            // once per turn (bounded, never churn), while a throttled
-            // reset leaves the previous turn's tail posing as the new
-            // turn's status — and a fast-settling turn ends before any
-            // tick retries, so the turn runs with zero instant feedback.
-            // A flood-wait still banks the attempt time below, and the
-            // tick retries it.
-            match s.tg.try_edit_msg(sl.chat, sl.mid, THINKING, None).await {
-                Ok(()) => {
+            // The reset ALWAYS runs — it is the liveness probe for the
+            // slot: a message the user deleted (or one that aged out)
+            // must be detected and re-posted, never trusted because it
+            // still looks like the placeholder (the old early-return
+            // left a dead slot looking alive, so the turn ran with no
+            // instant feedback at all).
+            //
+            // Bypasses the edit cooldown: at most one attempt per turn
+            // (bounded, never churn), while a throttled reset leaves the
+            // previous turn's tail posing as the new turn's status — and
+            // a fast-settling turn ends before any tick retries.
+            let res = s.tg.try_edit_msg(sl.chat, sl.mid, THINKING, None).await;
+            let emsg = res
+                .as_ref()
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            if res.is_ok() || not_modified(&emsg) {
+                // Converged (edited, or already the placeholder —
+                // Telegram reports the no-op edit; logging it would
+                // spam every turn).
+                if sl.text != THINKING {
                     println!("[live] reset {pane} m{} to placeholder", sl.mid);
-                    s.live_put(
-                        pane,
-                        LiveSlot {
-                            text: THINKING.to_string(),
-                            at: Some(now),
-                            turn: sl.turn + 1,
-                            ..sl
-                        },
-                    )
-                    .await;
                 }
-                Err(e) if edit_gone(&e.to_string()) => {
-                    println!("[live] reset {pane} m{} gone, slot freed", sl.mid);
-                    s.live_take_if(pane, sl.mid, sl.turn).await;
-                    s.forget_target(sl.chat, sl.mid).await;
-                }
-                Err(_) => {
-                    s.live_put(
-                        pane,
-                        LiveSlot {
-                            at: Some(now),
-                            turn: sl.turn + 1,
-                            ..sl
-                        },
-                    )
-                    .await;
-                }
+                s.live_put(
+                    pane,
+                    LiveSlot {
+                        text: THINKING.to_string(),
+                        at: Some(now),
+                        turn: sl.turn + 1,
+                        ..sl
+                    },
+                )
+                .await;
+            } else if edit_gone(&emsg) {
+                // Dead message (deleted by the user, or aged out):
+                // free the slot and post fresh so the turn is never
+                // silently instant-less.
+                println!("[live] reset {pane} m{} gone, repost fresh", sl.mid);
+                s.live_take_if(pane, sl.mid, sl.turn).await;
+                s.forget_target(sl.chat, sl.mid).await;
+                post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await;
+            } else {
+                // Fail-visible + flood-aware: a silent retry here left
+                // the user staring at a typing indicator with no message.
+                println!(
+                    "[live] reset {pane} m{} failed: {}",
+                    sl.mid,
+                    crate::types::mask_home(&emsg)
+                );
+                s.live_put(
+                    pane,
+                    LiveSlot {
+                        at: Some(retry_at(&now, &emsg)),
+                        turn: sl.turn + 1,
+                        ..sl
+                    },
+                )
+                .await;
             }
         }
         Some(sl) if sl.mid >= 0 => {
@@ -189,33 +228,46 @@ pub async fn refresh_live(s: &AppState, pane: &str, job: &Arc<Job>, acc: &[Strin
             if !edit_due(&sl.text, &next, sl.at, now) {
                 return;
             }
-            match s.tg.try_edit_msg(sl.chat, sl.mid, &next, None).await {
-                Ok(()) => {
-                    s.live_put(
-                        pane,
-                        LiveSlot {
-                            text: next,
-                            at: Some(now),
-                            ..sl
-                        },
-                    )
-                    .await;
-                }
-                Err(e) if edit_gone(&e.to_string()) => {
-                    println!("[live] edit {pane} m{} gone, slot freed", sl.mid);
-                    s.live_take_if(pane, sl.mid, sl.turn).await;
-                    s.forget_target(sl.chat, sl.mid).await;
-                }
-                Err(_) => {
-                    s.live_put(
-                        pane,
-                        LiveSlot {
-                            at: Some(now),
-                            ..sl
-                        },
-                    )
-                    .await;
-                }
+            let res = s.tg.try_edit_msg(sl.chat, sl.mid, &next, None).await;
+            let emsg = res
+                .as_ref()
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            if res.is_ok() || not_modified(&emsg) {
+                s.live_put(
+                    pane,
+                    LiveSlot {
+                        text: next,
+                        at: Some(now),
+                        ..sl
+                    },
+                )
+                .await;
+            } else if edit_gone(&emsg) {
+                // Dead message: free the slot, repost on the next tick
+                // (post_fresh needs the take, and a re-post here would
+                // race the next tick's own post).
+                println!("[live] edit {pane} m{} gone, slot freed", sl.mid);
+                s.live_take_if(pane, sl.mid, sl.turn).await;
+                s.forget_target(sl.chat, sl.mid).await;
+            } else {
+                // Fail-visible + bounded backoff (never silent): a blind
+                // retry every tick both hid the failure and re-hit
+                // flood-waits inside their own window.
+                println!(
+                    "[live] edit {pane} m{} failed: {}",
+                    sl.mid,
+                    crate::types::mask_home(&emsg)
+                );
+                s.live_put(
+                    pane,
+                    LiveSlot {
+                        at: Some(retry_at(&now, &emsg)),
+                        ..sl
+                    },
+                )
+                .await;
             }
         }
     }
