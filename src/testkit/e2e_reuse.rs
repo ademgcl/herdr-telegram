@@ -95,3 +95,31 @@ async fn e2e_closed_topic_is_deleted_not_left_behind() {
         "a closed topic must be deleted, not left in the forum"
     );
 }
+
+/// A topic the USER closes in Telegram must be pruned, not just the ones
+/// the bot closes itself.
+///
+/// The Bot API has no "get topic" call, so a closed topic is
+/// indistinguishable from an open one until something is sent to it. That
+/// send fails `TOPIC_CLOSED`, and that is the only signal there is — so
+/// the final-card path treats it as "delete me" instead of retrying a
+/// delivery that can never land and leaving a greyed-out topic in the
+/// forum list forever.
+#[tokio::test]
+async fn e2e_user_closed_topic_is_pruned_on_the_next_send() {
+    let h = Harness::start().await;
+    h.map_topic();
+    // The user closes the topic in Telegram; the card cannot land, and
+    // keeps failing on every retry (a closed topic is closed — that is
+    // the whole signal, since the Bot API cannot list topics).
+    for _ in 0..4 {
+        h.fault("sendMessage", "Bad Request: TOPIC_CLOSED");
+    }
+    h.run_turn("hello", &["hi there"]).await;
+
+    assert_eq!(
+        h.sent_count("deleteForumTopic"),
+        1,
+        "a user-closed topic must be deleted, not retried forever"
+    );
+}

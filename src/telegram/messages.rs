@@ -25,6 +25,26 @@ impl TelegramClient {
             .await
     }
 
+    /// Send that SURFACES the failure, unlike `send_msg` which folds it
+    /// into `None`. A send into a topic the user closed fails with
+    /// `TOPIC_CLOSED`, and that is the only signal the bot gets — the Bot
+    /// API cannot list topics, so a closed one is otherwise
+    /// indistinguishable from an open one and lingers greyed out forever.
+    /// Callers that need the reason use this; the rest keep `send_msg`.
+    pub async fn try_send_msg(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        text: &str,
+        keyboard: Option<Value>,
+    ) -> Res<Option<i64>> {
+        let params = build_send_msg_params(chat_id, thread_id, text, keyboard, None, false);
+        let v = self
+            .call_retrying("sendMessage", params, Duration::from_secs(30))
+            .await?;
+        Ok(v["message_id"].as_i64())
+    }
+
     /// Silent send (no buzz): progress the user watches, not hears.
     /// Single attempt with a short deadline (a missed stream send is
     /// harmless — output adopts the slot, folds retire it); None on any

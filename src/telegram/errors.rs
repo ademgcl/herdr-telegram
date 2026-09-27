@@ -47,6 +47,19 @@ pub fn topic_gone(err: &str) -> bool {
         || low.contains("chat_not_found")
 }
 
+/// Closed-topic verdict (pure, tested): a send into a topic the user
+/// closed in Telegram fails with `TOPIC_CLOSED`. That is the only
+/// reliable signal — the Bot API has no "get topic" call, and a closed
+/// topic is otherwise indistinguishable from an open one.
+///
+/// Distinct from [`is_close_converged`], which reads the CLOSE call's
+/// own errors. Here the topic is closed and the delivery cannot land, so
+/// the caller prunes it instead of retrying forever.
+pub fn is_topic_closed(err: &str) -> bool {
+    let low = err.to_lowercase();
+    low.contains("topic_closed") || low.contains("topic is closed")
+}
+
 /// Close-converged verdict (pure, tested): `closeForumTopic` on an
 /// already-closed topic converges like reopen's already-open — without
 /// this every 60s watchdog tick errors + retries a closed topic
@@ -142,6 +155,17 @@ mod tests {
         assert!(!edit_gone("Bad Request: message is not modified"));
         assert!(!edit_gone("Too Many Requests: retry after 7"));
         assert!(!edit_gone("connection reset by peer"));
+    }
+
+    #[test]
+    fn test_is_topic_closed_detects_the_user_closed_shape() {
+        assert!(is_topic_closed("Bad Request: TOPIC_CLOSED"));
+        assert!(is_topic_closed("Bad Request: topic is closed"));
+        // An open topic, and unrelated failures, must not match — pruning
+        // a live topic would delete a working conversation.
+        assert!(!is_topic_closed("Bad Request: chat not found"));
+        assert!(!is_topic_closed("Too Many Requests: retry after 30"));
+        assert!(!is_topic_closed("Bad Request: message is not modified"));
     }
 
     #[test]

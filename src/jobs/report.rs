@@ -69,15 +69,31 @@ async fn send_remembered(
     pane: &str,
     msg: &str,
 ) -> Option<i64> {
-    let mid = tokio::time::timeout(
+    let sent = tokio::time::timeout(
         std::time::Duration::from_secs(FINAL_SEND_TIMEOUT_SECS),
-        s.tg.send_msg(chat_id, thread_id, msg, None),
+        s.tg.try_send_msg(chat_id, thread_id, msg, None),
     )
-    .await
-    .ok()
-    .flatten();
+    .await;
+    // Outer is the timeout, inner is `try_send_msg`'s `Res<Option<i64>>`:
+    // flatten the ok-path, keep the reason for the closed-topic check.
+    let mid = match sent {
+        Ok(Ok(m)) => m,
+        _ => None,
+    };
     if mid.is_none() {
         eprintln!("[prompt] delivery failed {pane} (thread {thread_id:?})");
+        // A topic the user closed in Telegram can never take a card, and
+        // the Bot API cannot list topics — so this send failure is the
+        // only notice we get. Retry it forever and the topic sits greyed
+        // out forever; prune it instead.
+        let closed = match &sent {
+            Ok(Err(e)) => crate::telegram::errors::is_topic_closed(&e.to_string()),
+            _ => false,
+        };
+        if let (true, Some(t)) = (closed, thread_id) {
+            println!("[prompt] topic #{t} ({pane}) closed — deleting");
+            s.topics.delete_topic_for_thread(pane, t).await;
+        }
         return None;
     }
     s.remember(chat_id, mid, pane).await;
