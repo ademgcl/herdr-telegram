@@ -12,5 +12,3 @@ ctl.token
 bot.log
 herdr-telegram.log
 .DS_Store
-# bench/ is its own repo (llmbench), not a submodule of this one
-/bench/
