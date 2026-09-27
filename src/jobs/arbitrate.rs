@@ -18,6 +18,14 @@ pub(crate) const STREAM_MIN_CHARS: usize = 40;
 /// differently). An unrelated longer screen — e.g. a coalesced
 /// follow-up turn — never displaces the stream.
 pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> String {
+    // A marked reply is authoritative — the agent stated which lines are
+    // its answer, so no arbitration applies. Stream first (it holds the
+    // turn's own output), then the settled screen.
+    for src in [acc, screen] {
+        if let Some(b) = crate::jobs::reply_block::marked_reply(src) {
+            return b;
+        }
+    }
     let acc_body = join_trimmed(&final_block(acc, prompt));
     let turn = final_block(screen, prompt);
     let screen_body = join_trimmed(&turn);

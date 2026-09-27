@@ -238,3 +238,42 @@ fn test_prior_turn_error_never_flags_current_turn() {
     );
     assert!(!body.contains("old rate limit"));
 }
+
+/// The whole point: a turn whose stream is dominated by the agent's own
+/// tool output still yields the marked answer, and nothing else.
+#[test]
+fn test_marked_reply_beats_a_tool_dominated_stream() {
+    use crate::jobs::reply_block::{REPLY_CLOSE, REPLY_OPEN};
+    let acc: Vec<String> = [
+        "   ┃  $ herdr pane read wZ:p1 > /tmp/kilo_screen.txt",
+        "   ┃  44114:[prompt] finalize wZ:p1: 1 part(s), body 2045 chars",
+        "        lines=open('/tmp/kilo_screen.txt',errors='replace').read()",
+        "        for g in gaps[:6]: print('  gaplen=%3d' % g)",
+        REPLY_OPEN,
+        "Fixed it — the final card is now the marked reply only.",
+        "Tool output can no longer reach Telegram as an answer.",
+        REPLY_CLOSE,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let screen = acc.clone();
+    let body = crate::jobs::arbitrate::select_final_body(&acc, &screen, "fix the parser");
+
+    assert!(
+        body.contains("the final card is now the marked reply only"),
+        "picked the wrong body: {body:?}"
+    );
+    for junk in [
+        "gaplen",
+        "splitlines",
+        "2045 chars",
+        "herdr pane read",
+        "[[",
+    ] {
+        assert!(
+            !body.contains(junk),
+            "tool output leaked: {junk:?} in {body:?}"
+        );
+    }
+}

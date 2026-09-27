@@ -20,6 +20,7 @@ pub mod progress_instant;
 pub mod progress_retire;
 pub mod recover;
 pub mod recover_gate;
+pub mod reply_block;
 pub mod repoint;
 pub mod report;
 pub mod runner;
