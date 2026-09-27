@@ -41,7 +41,17 @@ pub async fn finalize(
     // trivial fragment must not shadow the real answer. The same screen
     // doubles as the spontaneous baseline below (no second RPC).
     let mut screen = read_screen_adaptive(&s.cfg.socket, pane).await;
+    // The last DELIVERED screen for this pane: a body made entirely of
+    // lines it already contains is the previous turn's answer re-served,
+    // not this turn's (see `delivered_replay`).
+    let delivered = s.seen.lock().await.get(pane).cloned().unwrap_or_default();
     let mut body = select_final_body(acc, &screen, &prompt);
+    if super::finalize_replay::delivered_replay(&body, &delivered) {
+        // Never post it: drop to empty so the grace wait below re-reads
+        // for the answer that has actually rendered this turn.
+        println!("[prompt] finalize {pane}: body is a replay of the delivered turn, dropping");
+        body.clear();
+    }
     // TUI-lag race: status flips settled a beat before the frame
     // renders. Two delayed re-reads (~4s) rescue fast-task replies.
     if body.is_empty() {
@@ -63,6 +73,10 @@ pub async fn finalize(
             }
             screen = read_screen_adaptive(&s.cfg.socket, pane).await;
             body = select_final_body(acc, &screen, &prompt);
+            if super::finalize_replay::delivered_replay(&body, &delivered) {
+                println!("[prompt] finalize {pane}: re-read still a delivered replay, dropping");
+                body.clear();
+            }
             if !body.is_empty() {
                 break;
             }

@@ -10,6 +10,7 @@ pub mod episode;
 pub mod filter;
 pub mod finalize;
 pub mod finalize_blocked;
+pub mod finalize_replay;
 pub mod follow;
 pub mod job;
 pub mod live;
