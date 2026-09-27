@@ -35,3 +35,35 @@ fn test_empty_object_falls_back_to_prev_and_tag_reassigns_on_flip() {
     assert_eq!(st2.get_tag("w1:p1").as_deref(), Some(t2.as_str()));
     let _ = std::fs::remove_file(&st2.file_path);
 }
+
+/// A tag stored before the pane number became the identity must MIGRATE,
+/// or that pane keeps a legacy `o4` in its title forever while its
+/// neighbours show the real number — which is exactly the mixed state a
+/// live forum ends up in.
+#[test]
+fn test_legacy_code_tag_migrates_to_the_pane_number() {
+    let st = TopicStorage::at(
+        std::env::temp_dir().join(format!("herdr-tg-test-migrate-{}.json", super::test_tag())),
+    );
+    // Seed the old shape directly: code-prefixed tags from before.
+    let file = st.file_path.clone();
+    let raw = std::fs::read_to_string(&file).unwrap_or_default();
+    let mut v: serde_json::Value =
+        serde_json::from_str(if raw.is_empty() { "{}" } else { &raw }).unwrap();
+    v["tags"]["wT:p2"] = serde_json::json!("o2");
+    v["tags"]["wT:p1"] = serde_json::json!("pi1");
+    v["tags"]["wV:p6"] = serde_json::json!("sh3");
+    std::fs::write(&file, v.to_string()).expect("seed");
+    let st = TopicStorage::at(file.clone());
+
+    assert_eq!(st.assign_tag("wT:p2", "opencode"), "2");
+    assert_eq!(st.assign_tag("wT:p1", "pi"), "1");
+    assert_eq!(
+        st.assign_tag("wV:p6", "shell"),
+        "6",
+        "shell loses its sh prefix too"
+    );
+    // Idempotent: a second call changes nothing.
+    assert_eq!(st.assign_tag("wT:p2", "opencode"), "2");
+    let _ = std::fs::remove_file(&file);
+}

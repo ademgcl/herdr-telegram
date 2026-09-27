@@ -12,26 +12,28 @@ impl TopicStorage {
     /// the stale tag as shell (ghost quit + eaten intent).
     pub fn assign_tag(&self, pane: &str, kind: &str) -> String {
         let mut s = self.lock();
+        // The tag is herdr's pane number, so it must MIGRATE, not just be
+        // minted once: a stored `o4` is a legacy code tag from before the
+        // number became the identity, and keeping it would leave that
+        // pane titled `1 o4 [space]` forever while its neighbours show
+        // `1 4 [space]`. Migrating is idempotent — once the tag IS the
+        // number, the check below is a no-op.
+        let want = names::pane_number(pane).map(|n| n.to_string());
         if let Some(t) = s.tags.get(pane).cloned() {
             let was_sh = t.starts_with("sh")
                 && !t[2..].is_empty()
                 && t[2..].chars().all(|c| c.is_ascii_digit());
             let want_sh = kind.trim().eq_ignore_ascii_case("shell");
-            if was_sh == want_sh {
+            if t == want.clone().unwrap_or_else(|| t.clone()) && was_sh == want_sh {
                 return t;
             }
-            let taken: Vec<String> = s
-                .tags
-                .iter()
-                .filter(|(p, _)| *p != pane)
-                .map(|(_, v)| v.clone())
-                .collect();
-            let tag = names::assign(&taken, kind, Some(pane));
-            s.tags.insert(pane.to_string(), tag.clone());
-            self.save(&s);
-            return tag;
         }
-        let taken: Vec<String> = s.tags.values().cloned().collect();
+        let taken: Vec<String> = s
+            .tags
+            .iter()
+            .filter(|(p, _)| *p != pane)
+            .map(|(_, v)| v.clone())
+            .collect();
         let tag = names::assign(&taken, kind, Some(pane));
         s.tags.insert(pane.to_string(), tag.clone());
         self.save(&s);
