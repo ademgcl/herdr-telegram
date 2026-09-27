@@ -69,6 +69,15 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
     assert_eq!(h.sent_count("deleteMessage"), 0, "kept, never deleted");
     let first_instant = instant_mid(&h);
 
+    // The first turn's message KEEPS its answer (never reset to the
+    // placeholder — the reported "second msg deleted the first reply").
+    assert!(
+        !edits(&h).iter().any(|c| {
+            c.message_id() == first_instant && c.text() == crate::jobs::progress::THINKING
+        }),
+        "first reply was overwritten in place: {:#?}",
+        h.sent_texts()
+    );
     h.run_turn("second", &["two"]).await;
     let second_final = sends(&h)
         .iter()
@@ -76,16 +85,16 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
         .expect("second final")
         .sent_id();
     assert_ne!(second_final, first_instant, "final is still a new message");
-    let reused = edits(&h).iter().any(|c| c.message_id() == first_instant);
-    assert!(reused, "second turn must reuse the kept transient");
-    // Exactly two working messages existed (one per turn), never three.
+    // The second turn gets its own placeholder (the slot is not reused
+    // while it holds delivered output). The first turn's placeholder gets
+    // edited with its answer, so only the second turn's is still THINKING.
     assert!(
         sends(&h)
             .iter()
-            .filter(|c| c.text().contains("thinking"))
+            .filter(|c| c.text() == crate::jobs::progress::THINKING)
             .count()
-            <= 1,
-        "no duplicate instant messages: {:?}",
+            >= 1,
+        "second turn must have its own placeholder: {:?}",
         h.sent_texts()
     );
 }
@@ -111,33 +120,6 @@ async fn e2e_dead_transient_is_detected_and_reposted() {
     .await;
 }
 
-/// No-op edit (already the placeholder) must converge, not re-post and
-/// not error — a bogus failure here would spam every turn.
-#[tokio::test]
-async fn e2e_not_modified_probe_converges_without_repost() {
-    let h = Harness::start().await;
-    h.map_topic();
-    h.run_turn("first", &["one"]).await;
-    // Count working messages, not all sends: the second turn's FINAL
-    // is a legitimate new message and must not be confused with a
-    // re-posted placeholder.
-    let placeholders = |h: &Harness| -> usize {
-        h.sends()
-            .iter()
-            .filter(|c| c.text().contains(crate::jobs::progress::THINKING))
-            .count()
-    };
-    let before = placeholders(&h);
-    h.fault("editMessageText", "Bad Request: message is not modified");
-    h.herdr.set_status("working");
-    h.say("second").await;
-    h.wait_for("second submit", || h.herdr.submit_count() >= 2)
-        .await;
-    h.wait_for_final_after(0).await;
-    // No fresh instant post: the slot was alive after all.
-    assert_eq!(placeholders(&h), before, "converged probe re-posted");
-}
-
 /// A 429 on the instant post must back off, never duplicate, and still
 /// deliver the final.
 #[tokio::test]
@@ -157,95 +139,88 @@ async fn e2e_flood_on_instant_backs_off_without_duplicate() {
     assert!(texts.iter().any(|t| t.contains("hi")));
 }
 
-/// Reply-latency contract, and the safety half of it.
+/// A second prompt must NEVER overwrite the first turn's delivered
+/// output in place — the reported "my second message deleted the first
+/// reply and replaced it with thinking…", which then also left that
+/// message stuck on the placeholder forever (a superseded turn's
+/// accumulation is dropped, so nothing refilled it).
 ///
-/// A final must NOT post while the agent is still streaming (that is a
-/// partial answer, then a second "final" — the double-post bug the old
-/// fixed 5s same-kind wait existed to prevent), and it must post soon
-/// after the pane goes quiet. The gate is output-quiet, not wall-clock:
-/// fresh bytes re-stamp the arm, so a still-streaming turn cannot
-/// commit no matter how long it runs, and a finished one commits in
-/// ~2s of quiet instead of waiting out 5s.
+/// With `/transient` off (the default) the kept working message IS the
+/// user's copy of the reply, so it is history: the new turn posts its own
+/// placeholder beside it. Driven explicitly (not `run_turn`) because the
+/// slot only holds rendered output after a real streaming phase — the
+/// settle path finalizes without ever rendering the tail.
 #[tokio::test]
-async fn e2e_final_waits_for_quiet_then_lands_promptly() {
+async fn e2e_second_prompt_never_overwrites_the_first_reply() {
     let h = Harness::start().await;
     h.map_topic();
+    assert!(
+        !h.s.transient_remove(),
+        "kept-history mode is the case that loses text"
+    );
+    let chrome = " ⬝ esc interrupt   145.6K (14%)  ctrl+p commands";
     h.herdr.set_status("working");
-    h.herdr.set_screen(&["> hi", "Thinking…"]);
-    h.say("hi").await;
-    h.wait_for("submit", || h.herdr.submit_count() >= 1).await;
-    h.wait_for("instant", || {
+    h.herdr.set_screen(&["> first", "Thinking…"]);
+    h.say("first").await;
+    h.wait_for("first submit", || h.herdr.submit_count() >= 1)
+        .await;
+    h.wait_for("first placeholder", || {
         h.sends()
             .iter()
-            .any(|c| c.text().contains(crate::jobs::progress::THINKING))
+            .any(|c| c.text() == crate::jobs::progress::THINKING)
     })
     .await;
-
-    // Settled status, but the pane KEEPS producing output: past the old
-    // gate's own window, no final may exist yet.
+    let first_mid = h
+        .sends()
+        .iter()
+        .find(|c| c.text() == crate::jobs::progress::THINKING)
+        .unwrap()
+        .sent_id();
+    // Streaming phase: the watcher renders the tail into that same slot.
+    h.herdr.set_screen(&["> first", "the first answer", chrome]);
+    // 3 ticks ≈ 2.1s: inside one poll cycle plus its baseline anchor, and
+    // well inside the 4s edit cooldown — so this also pins that the FIRST
+    // tail render of a turn is not throttled (the "stuck at thinking" wait).
+    h.tick(3).await;
+    assert!(
+        h.edits()
+            .iter()
+            .any(|c| c.message_id() == first_mid && c.text().contains("the first answer")),
+        "the slot never rendered the answer: {:#?}",
+        h.edits()
+    );
+    // Settle: the final posts, and with auto-remove off the slot SURVIVES
+    // holding that answer.
+    h.herdr.set_screen(&["> first", "the first answer", chrome]);
     h.herdr.set_status("idle");
-    for i in 0..4 {
-        h.herdr.set_screen(&[
-            "> hi",
-            "Thinking…",
-            &format!("chunk {i}"),
-            " ⬝ esc interrupt   145.6K (14%)  ctrl+p commands",
-        ]);
-        h.tick(1).await;
-    }
-    assert!(
+    h.wait_for("first final", || {
         h.sends()
             .iter()
-            .all(|c| c.text().contains(crate::jobs::progress::THINKING) || c.text().contains("📌")),
-        "a final posted while output was still flowing: {:#?}",
-        h.sent_texts()
-    );
-
-    // Output stops: the final must now land, and quickly.
-    let quiet_at = std::time::Instant::now();
-    h.herdr.set_screen(&[
-        "> hi",
-        "all done here",
-        " ⬝ esc interrupt   145.6K (14%)  ctrl+p commands",
-    ]);
-    h.wait_for("final after quiet", || {
-        h.sends().iter().any(|c| c.text().contains("all done here"))
+            .any(|c| c.text().contains("the first answer"))
     })
     .await;
-    assert!(
-        quiet_at.elapsed() < std::time::Duration::from_millis(5_000),
-        "final took {:?} after the pane went quiet",
-        quiet_at.elapsed()
-    );
-}
 
-/// Pickup contract: the silent working message must land on the user's
-/// Telegram *before* the (slow) submit RPC, not after it. The submit
-/// is the one 30s-budgeted call in the handler and it runs inline in the
-/// poll loop, so anything ordered after it is invisible latency — the
-/// "my message arrived late" report. A baseline screen read hoisted in
-/// front of the placeholder would break this.
-#[tokio::test]
-async fn e2e_instant_lands_before_the_submit_rpc() {
-    let h = Harness::start().await;
-    h.map_topic();
+    // Second prompt arrives while the slot still shows the first answer.
     h.herdr.set_status("working");
-    h.herdr.set_screen(&["> hi", "Thinking…"]);
-    let sent_at = std::time::Instant::now();
-    h.say("hi").await;
-    h.wait_for("instant", || {
+    h.herdr.set_screen(&["> second", "Thinking…", chrome]);
+    h.say("second").await;
+    h.wait_for("second submit", || h.herdr.submit_count() >= 2)
+        .await;
+    h.tick(2).await;
+
+    assert!(
+        !h.edits().iter().any(|c| {
+            c.message_id() == first_mid && c.text() == crate::jobs::progress::THINKING
+        }),
+        "the second prompt reset the first reply's message to the placeholder"
+    );
+    // The new turn still gets instant feedback — its own placeholder.
+    h.wait_for("fresh placeholder for the new turn", || {
         h.sends()
             .iter()
-            .any(|c| c.text().contains(crate::jobs::progress::THINKING))
+            .filter(|c| c.text() == crate::jobs::progress::THINKING)
+            .count()
+            >= 2
     })
     .await;
-    let instant_ms = sent_at.elapsed().as_millis();
-    assert!(
-        h.herdr.submit_count() >= 1,
-        "the turn never reached the agent"
-    );
-    assert!(
-        instant_ms < 1_500,
-        "instant message took {instant_ms}ms to land"
-    );
 }

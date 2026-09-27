@@ -7,10 +7,9 @@
 //! finals buzz, so the notification shade holds finals alone.
 //!
 //! Fail-closed: every send/edit/delete is best-effort (a miss retries
-//! next tick, a gone message frees the slot). No lock is ever held
-//! across an RPC — snapshot, drop, then call. Retire paths live in
-//! `progress_retire` (300-line file limit), re-exported below so call
-//! sites keep `progress::…`.
+//! next tick, a gone message frees the slot). No lock is held across an
+//! RPC — snapshot, drop, then call. Retire paths live in
+//! `progress_retire` (300-line file limit), re-exported below.
 use crate::{
     jobs::job::Job,
     state::{AppState, live::LiveSlot},
@@ -21,6 +20,7 @@ use crate::{
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub use super::progress_instant::ensure_instant;
 pub use super::progress_retire::{clear_live, clear_live_if_epoch, clear_live_if_ownerless};
 use super::progress_retire::{is_owner, post_fresh};
 
@@ -81,104 +81,18 @@ pub(crate) fn edit_due(last: &str, next: &str, last_at: Option<Instant>, now: In
     if last == next {
         return false;
     }
+    // First content render of a turn bypasses the cooldown (reset
+    // parity): the placeholder was posted moments ago and its `at` starts
+    // the clock, so a throttled first tail left the user staring at a bare
+    // "thinking…" for a whole cooldown — the reported "stuck at thinking".
+    // Bounded to one per turn: after it, `last` is no longer the
+    // placeholder, so the gate below is back in force.
+    if last == THINKING {
+        return true;
+    }
     match last_at {
         None => true,
         Some(t) => now.saturating_duration_since(t) >= Duration::from_secs(EDIT_COOLDOWN_SECS),
-    }
-}
-
-/// New-turn claim on the shared slot: same dest edits back to the
-/// placeholder (the old tail never poses as the new turn) and bumps
-/// the generation (a stale retire gated on the old one stands down);
-/// a changed dest drops the stale thread's message and posts fresh.
-/// Silent (no buzz) — the final owns the notification. Best-effort: a
-/// miss retries on the next stream tick.
-pub async fn ensure_instant(s: &AppState, pane: &str, job: &Arc<Job>) {
-    let dest = *job.dest.lock().await;
-    let now = Instant::now();
-    match s.live_get(pane).await {
-        Some(sl) if (sl.chat, sl.thread) == dest && sl.mid >= 0 => {
-            // Same message, new turn: reset + claim the generation.
-            // The reset ALWAYS runs — it is the liveness probe for the
-            // slot: a message the user deleted (or one that aged out)
-            // must be detected and re-posted, never trusted because it
-            // still looks like the placeholder (the old early-return
-            // left a dead slot looking alive, so the turn ran with no
-            // instant feedback at all).
-            //
-            // Bypasses the edit cooldown: at most one attempt per turn
-            // (bounded, never churn), while a throttled reset leaves the
-            // previous turn's tail posing as the new turn's status — and
-            // a fast-settling turn ends before any tick retries.
-            let res = s.tg.try_edit_msg(sl.chat, sl.mid, THINKING, None).await;
-            let emsg = res
-                .as_ref()
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            if res.is_ok() || not_modified(&emsg) {
-                // Converged (edited, or already the placeholder —
-                // Telegram reports the no-op edit; logging it would
-                // spam every turn).
-                if sl.text != THINKING {
-                    println!("[live] reset {pane} m{} to placeholder", sl.mid);
-                }
-                s.live_put(
-                    pane,
-                    LiveSlot {
-                        text: THINKING.to_string(),
-                        at: Some(now),
-                        turn: sl.turn + 1,
-                        ..sl
-                    },
-                )
-                .await;
-            } else if edit_gone(&emsg) {
-                // Dead message (deleted by the user, or aged out):
-                // free the slot and post fresh so the turn is never
-                // silently instant-less.
-                println!("[live] reset {pane} m{} gone, repost fresh", sl.mid);
-                s.live_take_if(pane, sl.mid, sl.turn).await;
-                s.forget_target(sl.chat, sl.mid).await;
-                post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await;
-            } else {
-                // Fail-visible + flood-aware: a silent retry here left
-                // the user staring at a typing indicator with no message.
-                println!(
-                    "[live] reset {pane} m{} failed: {}",
-                    sl.mid,
-                    crate::types::mask_home(&emsg)
-                );
-                s.live_put(
-                    pane,
-                    LiveSlot {
-                        at: Some(retry_at(&now, &emsg)),
-                        turn: sl.turn + 1,
-                        ..sl
-                    },
-                )
-                .await;
-            }
-        }
-        Some(sl) if sl.mid >= 0 => {
-            // Retargeted (remap): the old thread is stale — drop it
-            // best-effort, then post fresh below (lineage continues so
-            // any in-flight retire gated on it stands down). Only the
-            // take winner posts: a successor owning the slot now keeps
-            // it, never a duplicate beside it.
-            println!("[live] retarget {pane} m{}: dropping stale", sl.mid);
-            s.tg.delete_msg(sl.chat, sl.mid).await;
-            s.forget_target(sl.chat, sl.mid).await;
-            if s.live_take_if(pane, sl.mid, sl.turn).await.is_none() {
-                return;
-            }
-            post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await;
-        }
-        // Banked miss (any remaining `Some` here is the mid<0
-        // sentinel — real slots matched above): retry the post now
-        // (submit-time, single attempt per turn), continuing lineage.
-        Some(sl) => post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await,
-        None => post_fresh(s, pane, job, dest, THINKING, 0).await,
     }
 }
 
@@ -193,6 +107,17 @@ pub async fn refresh_live(s: &AppState, pane: &str, job: &Arc<Job>, acc: &[Strin
         return;
     }
     let next = render_progress(acc);
+    // A bare placeholder NEVER bypasses the edit cooldown: render_progress
+    // returns exactly THINKING for an empty acc, so the bypass would make
+    // it fire on every no-output tick and the turn's first tail edit would
+    // keep landing (never the reported "stuck at thinking" — and never
+    // even reaching the user through a suppressed slot). The gate applies
+    // to REAL placeholder bodies only.
+    let next = if next == THINKING {
+        String::new()
+    } else {
+        next
+    };
     let dest = *job.dest.lock().await;
     let now = Instant::now();
     match s.live_get(pane).await {

@@ -48,9 +48,38 @@ pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<Stri
     true
 }
 
+/// Pure: is this epoch bump the publish that CREATED this watcher's job,
+/// or a supersede that must drop the previous turn's stream state?
+///
+/// `enqueue` spawns the watcher BEFORE the submit that creates the job
+/// publishes, so the first bump a fresh watcher sees is its own turn.
+/// Treating it as a supersede cleared the new turn's first output burst
+/// mid-stream, and since the baseline had already advanced nothing refilled
+/// it — the transient sat on the placeholder and the final lost its acc
+/// body. A job that already carried an epoch when the watcher started
+/// (slot reuse, or recovery after a restart) has no such first publish, so
+/// every bump it observes is a genuine supersede.
+pub(crate) fn is_creating_publish(started_at: u64, bumps_seen: u32) -> bool {
+    bumps_seen == 0 && started_at == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_only_a_fresh_job_s_first_bump_is_its_own_publish() {
+        // Fresh job (epoch 0 at spawn): the first bump created this turn —
+        // the acc must survive.
+        assert!(is_creating_publish(0, 0));
+        // Any later bump is a real supersede.
+        assert!(!is_creating_publish(0, 1));
+        assert!(!is_creating_publish(0, 7));
+        // A reused or recovered job already carried an epoch when the
+        // watcher started, so it has no creating publish to absorb.
+        assert!(!is_creating_publish(1, 0));
+        assert!(!is_creating_publish(4, 0));
+    }
 
     #[tokio::test]
     async fn test_stream_live_ignores_blank_screen_never_poisons_baseline() {

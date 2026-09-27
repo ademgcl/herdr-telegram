@@ -43,6 +43,11 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
     // recover into the final reply, terminal errors surface at settle.
     let mut episode = BuzzEpisode::new();
     let mut last_epoch = job.epoch.load(Ordering::Relaxed);
+    // Epoch the watcher started on + how many bumps it has seen: the
+    // first bump on a job that started at 0 is the publish that created
+    // this turn, not a supersede of a previous one (see the epoch arm).
+    let started_at = last_epoch;
+    let mut bumps_seen: u32 = 0;
     let mut fails: u32 = 0;
     // Delivery-retry backoff: a dead Telegram must not spin herdr reads
     // at full tick rate forever — back off, keep the intent until
@@ -91,15 +96,26 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // transient retires in the exit footer), buzz nothing.
             break;
         }
-        // New prompt on a reused watcher restarts all episode timers
-        // and drops the old prompt's stream state: stale accumulation
-        // and baseline belong to the previous turn.
+        // New prompt on a reused watcher restarts the episode timers and
+        // drops the old prompt's stream state: stale accumulation belongs
+        // to the previous turn.
         let epoch = job.epoch.load(Ordering::Relaxed);
         if epoch != last_epoch {
+            // The publish that created this job bumps the epoch too, and
+            // the watcher is spawned before that publish lands — so the
+            // first bump a fresh watcher sees is its OWN turn, not a
+            // supersede. Clearing acc there dropped the new turn's first
+            // output burst: the transient sat on the placeholder forever
+            // and the final lost its acc body. See
+            // `live::is_creating_publish` (unit-tested).
+            let creating = super::live::is_creating_publish(started_at, bumps_seen);
+            bumps_seen += 1;
             last_epoch = epoch;
             episode.reset();
             settled_since = None;
-            acc.clear();
+            if !creating {
+                acc.clear();
+            }
             retry_wait = RETRY_BACKOFF_SECS;
             // Herdr-error streak belongs to the old prompt: 11 failures
             // there + 1 here must not back the new prompt off for 60s.

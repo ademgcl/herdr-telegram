@@ -22,3 +22,22 @@ fn test_consume_reset_arm_takes_only_the_exact_arm() {
     consume_reset_arm(&mut db, "w:p9", now);
     assert_eq!(db.len(), 1);
 }
+
+#[test]
+fn test_output_quiet_needs_two_real_identical_reads() {
+    // Identical output: the agent stopped writing — commit.
+    assert!(crate::notifier::cards_retry::output_quiet(
+        "line a\nline b",
+        "line a\nline b"
+    ));
+    // Fresh bytes: still streaming, keep waiting (this is what a mid-task
+    // idle blip looks like — a premature post here is a partial "final").
+    assert!(!crate::notifier::cards_retry::output_quiet(
+        "line a",
+        "line a\nmore"
+    ));
+    // Outage on either side is unknown, never quiet (fail-closed).
+    assert!(!crate::notifier::cards_retry::output_quiet("", "line a"));
+    assert!(!crate::notifier::cards_retry::output_quiet("line a", ""));
+    assert!(!crate::notifier::cards_retry::output_quiet("", ""));
+}

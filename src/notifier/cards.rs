@@ -1,7 +1,7 @@
 //! Debounced spontaneous pushes: a settle must hold before its answer
 //! buzzes (micro-settle flicker stays silent; blocked posts immediately).
 
-use super::cards_retry::{SETTLE_DEBOUNCE_SECS, consume_reset_arm};
+use super::cards_retry::consume_reset_arm;
 use super::spontaneous::post_spontaneous_card;
 use crate::{
     herdr::client::{get_agent, list_panes, list_workspaces},
@@ -13,10 +13,12 @@ use crate::{
 use std::time::{Duration, Instant};
 
 /// Debounced spontaneous push: posts the fresh reply only if this settle
-/// is still current after the grace period. Baselines anchor on delivery
-/// AND on stray/empty (else the same stray re-RPCs every settle forever).
+/// is still current once the pane has stopped writing (see
+/// [`super::cards_retry::wait_output_quiet`] — ~2s for a finished turn,
+/// capped at the old fixed grace). Baselines anchor on delivery AND on
+/// stray/empty (else the same stray re-RPCs every settle forever).
 pub(crate) async fn settle_check(s: AppState, pane: String, settled: String, armed_at: Instant) {
-    tokio::time::sleep(Duration::from_secs(SETTLE_DEBOUNCE_SECS)).await;
+    super::cards_retry::wait_output_quiet(&s, &pane, armed_at).await;
     // No spontaneous cards during reset (threads dying; 429 budget).
     // Baseline unconsumed (next tick re-sees the delta); the arm IS
     // consumed (see consume_reset_arm): stale would abort the retry.

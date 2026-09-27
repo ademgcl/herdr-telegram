@@ -18,7 +18,64 @@ use std::{
 /// A settle must hold this long before a spontaneous answer pushes —
 /// micro-settle flicker mid-task stays silent instead of buzzing.
 /// Blocked (needs input) always pushes immediately.
+///
+/// Now a CEILING, not the wait: [`wait_output_quiet`] returns as soon as
+/// the pane provably stopped producing output (~2s), and falls back to
+/// this full wait when it can't prove quiet.
 pub(crate) const SETTLE_DEBOUNCE_SECS: u64 = 15;
+
+/// Quiet window between output checks — the same signal (and the same
+/// 2s) the watcher's job-owned settle uses, so both paths report a
+/// finished turn on the same clock.
+const QUIET_STEP_SECS: u64 = 2;
+
+/// Lines compared for change: the same `read_agent_output` window
+/// [`read_screen_spontaneous`] reads, so "did the pane move" is measured
+/// with one deterministic read, not two different ones.
+const QUIET_READ_LINES: u32 = 80;
+
+/// Wait until the pane stops producing output, bounded by
+/// [`SETTLE_DEBOUNCE_SECS`].
+///
+/// The old fixed 15s wait made every PC-started turn's answer 15s late
+/// even when the agent had finished writing — the reported "reply arrived
+/// late". The positive signal is the one the watcher already uses for
+/// job-owned turns: fresh bytes re-stamp the gate, silence commits it. So
+/// a finished turn waits ~2s and a still-streaming one keeps waiting.
+///
+/// Fail-closed: an empty anchor is an unknown read, never "quiet" — that
+/// case falls back to the full grace period. A screen that never settles
+/// (live clock, spinner) also reaches the ceiling and posts exactly as
+/// before, so this can only ever post *sooner*, never differently.
+pub(crate) async fn wait_output_quiet(s: &AppState, pane: &str, armed_at: Instant) {
+    let anchor: String = read_agent_output(&s.cfg.socket, pane, QUIET_READ_LINES)
+        .await
+        .unwrap_or_default();
+    let deadline = armed_at + Duration::from_secs(SETTLE_DEBOUNCE_SECS);
+    if anchor.is_empty() {
+        tokio::time::sleep_until(deadline.into()).await;
+        return;
+    }
+    loop {
+        tokio::time::sleep(Duration::from_secs(QUIET_STEP_SECS)).await;
+        let now = read_agent_output(&s.cfg.socket, pane, QUIET_READ_LINES)
+            .await
+            .unwrap_or_default();
+        if output_quiet(&anchor, &now) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+    }
+}
+
+/// Pure quiet rule: the pane has stopped writing. Unknown on either side
+/// (an outage read empty) is never quiet — fail-closed, same as the rest
+/// of this module. Unit-tested; the async wrapper only feeds it reads.
+pub(crate) fn output_quiet(anchor: &str, now: &str) -> bool {
+    !anchor.is_empty() && !now.is_empty() && anchor == now
+}
 
 /// Pure reset-arm consume (testable without the 15s debounce sleep): a
 /// stale arm left armed would abort the post-reset retry — consume only

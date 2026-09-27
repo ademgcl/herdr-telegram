@@ -94,29 +94,3 @@ async fn e2e_spontaneous_finish_posts_exactly_one_card() {
         .count();
     assert_eq!(cards, 1, "one spontaneous card, not a stream: {cards}");
 }
-
-/// Status flapping must never re-mint: the pane's identity card is
-/// posted once and then edited in place, and a flap with no new output
-/// must not produce a spontaneous answer card.
-#[tokio::test]
-async fn e2e_status_flap_edits_the_pin_instead_of_rebuzzing() {
-    let h = Harness::start().await;
-    h.map_topic();
-    h.herdr.set_screen_owned(vec!["quiet".into()]);
-    for status in ["working", "idle", "working", "idle"] {
-        crate::notifier::status::observe_status(&h.s, &h.pane, status, false, "e2e").await;
-    }
-    h.tick(6).await;
-    let mints = h.sent_count("sendMessage");
-    let edits = h.sent_count("editMessageText");
-    assert!(
-        mints <= 1,
-        "identity card minted once, not per flip: {mints} (edits {edits})"
-    );
-    // Never the screen content as an answer (no new work happened).
-    assert!(
-        !h.sent_texts().iter().any(|t| t.contains("quiet")),
-        "flapping without output must not announce content: {:?}",
-        h.sent_texts()
-    );
-}

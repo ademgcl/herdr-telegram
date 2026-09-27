@@ -16,6 +16,7 @@ pub mod live;
 pub mod notices;
 pub mod persist;
 pub mod progress;
+pub mod progress_instant;
 pub mod progress_retire;
 pub mod recover;
 pub mod recover_gate;
