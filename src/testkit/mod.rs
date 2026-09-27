@@ -28,6 +28,7 @@ mod e2e_handler;
 #[cfg(test)]
 #[path = "e2e_media_tests.rs"]
 mod e2e_media;
+mod e2e_reuse;
 #[cfg(test)]
 #[path = "e2e_state_tests.rs"]
 mod e2e_state;
@@ -49,11 +50,10 @@ pub struct Harness {
 }
 
 impl Harness {
-    /// Fakes first, then ONE state mint pointed at the fake socket.
-    /// The fake base is published BEFORE the mint: `TelegramClient::new`
-    /// reads it there (test builds only). It is write-once per binary
-    /// (the URL never changes), so parallel cases cannot steal it and
-    /// no env mutation is needed.
+    /// Fakes first, then ONE state mint pointed at the fake socket. The
+    /// fake base is published BEFORE the mint (`TelegramClient::new` reads
+    /// it there) and is write-once per binary, so parallel cases cannot
+    /// steal it and no env mutation is needed.
     pub async fn start() -> Harness {
         let (tg, url) = tg_fake::start();
         let n = case_seq();
@@ -222,6 +222,10 @@ impl Harness {
         }
     }
 
+    /// Agent output on the pane, no status change.
+    pub fn set_reply_text(&self, text: &str) {
+        self.herdr.set_screen(&["> prompt", text]);
+    }
     /// Full happy-path drive: prompt in, agent works, agent answers.
     /// `reply` lines land on the pane as the agent's output (with
     /// realistic chrome around them — a bare "thinking" word is

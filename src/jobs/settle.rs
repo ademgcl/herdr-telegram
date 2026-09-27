@@ -246,6 +246,13 @@ pub async fn settle_step(
         *settled_since = None;
         return SettleStep::Continue;
     }
+    // The reply is delivered, so the accumulator is SPENT. Clear it here:
+    // it held this turn's entire output, and the epoch check that normally
+    // drops it only runs on the NEXT tick. Leaving it live let a following
+    // turn's working message render an already-delivered reply under its
+    // `💭 thinking…` header — the reported "first msg correct, second
+    // transient shows the first". Nothing may re-render spent output.
+    acc.clear();
     SettleStep::Break
 }
 
