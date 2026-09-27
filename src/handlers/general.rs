@@ -197,6 +197,10 @@ pub(crate) async fn handle_general_forum_message(
         return;
     }
 
+    if cmd == "/new" {
+        super::newcmd::handle_new(&s, chat, thread_id, crate::ui::Scope::General).await;
+        return;
+    }
     if cmd == "/shell" {
         super::shell::open_shell(
             &s,

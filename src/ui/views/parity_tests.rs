@@ -6,6 +6,7 @@ fn test_dm_help_lists_every_dm_command() {
     // (/start + /help are escape hatches, listed nowhere by design.)
     let help = help_text();
     for cmd in [
+        "/new",
         "/agents",
         "/spawn",
         "/space",
@@ -78,6 +79,7 @@ fn test_topic_help_matches_topic_router() {
         &help,
         &[
             "/start",
+            "/new",
             "/agents",
             "/spawn",
             "/space",
@@ -110,6 +112,7 @@ fn test_shell_help_matches_shell_router() {
         &help,
         &[
             "/start",
+            "/new",
             "/agents",
             "/spawn",
             "/space",
@@ -141,6 +144,7 @@ fn test_general_help_matches_general_router() {
     assert_parity(
         &general_help_text(),
         &[
+            "/new",
             "/agents",
             "/spawn",
             "/space",
@@ -171,6 +175,7 @@ fn test_dm_help_matches_dm_router() {
     assert_parity(
         help_text(),
         &[
+            "/new",
             "/agents",
             "/spawn",
             "/space",
@@ -193,4 +198,34 @@ fn test_dm_help_matches_dm_router() {
         ],
         "dm",
     );
+}
+
+/// `/new` must list only what works where it ran, and every command it
+/// names must be one the router actually handles on that surface. A
+/// command listed for a surface it does not work on is worse than not
+/// listing it — that is the confusion `/new` exists to remove.
+#[test]
+fn test_new_index_only_names_commands_that_work_there() {
+    let topic = new_index(Scope::Topic);
+    for cmd in [
+        "/read", "/status", "/card", "/esc", "/model", "/quit", "/keys", "/cancel", "/split",
+        "/shell", "/kill", "/reset",
+    ] {
+        assert!(topic.contains(cmd), "topic index missing {cmd}");
+    }
+    // General cannot take the agent-scoped ones — they need a binding.
+    let general = new_index(Scope::General);
+    for cmd in ["/spawn", "/shell", "/pane", "/space", "/agents"] {
+        assert!(general.contains(cmd), "general index missing {cmd}");
+    }
+    // The help text for the DM surface lists these, so they must exist.
+    for cmd in [
+        "/read", "/status", "/card", "/esc", "/model", "/quit", "/keys", "/cancel", "/spawn",
+    ] {
+        assert!(new_index(Scope::Dm).contains(cmd), "dm index missing {cmd}");
+    }
+    // `/new` points at `/new` for a re-list, so it names itself.
+    for s in [Scope::Topic, Scope::General, Scope::Dm] {
+        assert!(new_index(s).contains("/new"));
+    }
 }

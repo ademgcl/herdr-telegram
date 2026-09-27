@@ -72,6 +72,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     // Everything below follows the waiter (see forum_topic): an
     // armed run waiter owns the next message.
+    if cmd == "/new" {
+        super::newcmd::handle_new(&s, chat, Some(thread_id), crate::ui::Scope::Topic).await;
+        return;
+    }
     if cmd == "/shell" {
         s.tg.send_msg(chat, Some(thread_id), crate::ui::ALREADY_SHELL_TOPIC, None)
             .await;

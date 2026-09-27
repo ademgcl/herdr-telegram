@@ -3,7 +3,8 @@
 use super::super::GENERAL_HINT;
 
 pub fn help_text() -> &'static str {
-    "`/agents`   control panel: spaces, agents, ➕ spawn\n\
+    "`/new`     what works here: the commands for this surface\n\
+     `/agents`   control panel: spaces, agents, ➕ spawn\n\
      `/spawn <kind> [space]`   spawn a new agent\n\
      `/space [name]`   new space + shell topic\n\
      `/model`    current model + free-Zen picker (opencode)\n\
@@ -32,7 +33,7 @@ pub fn help_text() -> &'static str {
 pub fn general_help_text() -> String {
     format!(
         "🤖 **Herdr Telegram Bot**\n\n\
-     • `/agents` — open spaces & agents control panel\n\
+     • `/new` — what works from General (and in a topic)\n     • `/agents` — open spaces & agents control panel\n\
      • `/spawn <kind> [space]` — spawn a new agent & topic\n\
       • `/shell [space]` — open a fresh shell pane & topic\n\
       • `/pane [space]` — shell pane in this space, stays here\n\
@@ -53,7 +54,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
         "🤖 **{kind}** topic [{pane}]\n\n\
          • Plain text sends a prompt to this agent\n\
          • `/start` — show this help\n\
-         • `/agents` — spaces & agents panel (here)\n\
+         • `/new` — what works in this topic\n         • `/agents` — spaces & agents panel (here)\n\
           • `/spawn <kind> [space]` — spawn a new agent & topic\n\
          • `/read [n]` or `/output [n]` — fetch recent terminal output\n\
          • `/history [n]` — recent prompts you sent here\n\
@@ -84,7 +85,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • Plain text runs as a shell command\n\
          • `opencode`, `claude`, … — run one to re-enter as agent\n\
          • `/start` — show this help\n\
-         • `/agents` — spaces & agents panel (here)\n\
+         • `/new` — what works in this topic\n         • `/agents` — spaces & agents panel (here)\n\
           • `/spawn <kind> [space]` — spawn a new agent & topic\n\
          • `/read [n]` — recent shell output (`/output [n]` too)\n\
          • `/history [n]` — recent shell commands\n\
@@ -104,4 +105,57 @@ pub fn shell_help_text(pane: &str) -> String {
          • `/shell` — already in a shell topic (`/pane` for a second)\n\
          • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
+}
+
+/// Which surface `/new` was run from. The index only lists what works
+/// there, so nobody reads 26 lines to find the two that apply.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scope {
+    /// Inside a bound topic — the space/tab/split are already known.
+    Topic,
+    /// General: no binding, so only the creating commands apply.
+    General,
+    /// DM: one agent, so the agent-scoped commands apply.
+    Dm,
+}
+
+/// `/new` — a command index, deliberately not a creator.
+///
+/// It exists because the surface is the thing people get wrong: the same
+/// command works in a topic and 404s in General, and the binding (which
+/// space, which tab, which pane) is invisible in a chat. So each line
+/// says where it runs and what it is for, and nothing else.
+pub fn new_index(scope: Scope) -> String {
+    let head = match scope {
+        Scope::Topic => "🧭 **this topic** — space, tab and pane are already bound\n",
+        Scope::General => {
+            "🧭 **General** — no space or pane yet, so these are the ones that work here\n"
+        }
+        Scope::Dm => "🧭 **this chat** — one agent, so its commands apply\n",
+    };
+    let body = match scope {
+        Scope::Topic => concat!(
+            "`/read [n]`  recent output      `/status`   refresh status\n",
+            "`/card`  re-post the buttons   `/esc`      dismiss if blocked\n",
+            "`/model`  model picker         `/quit`     back to a shell\n",
+            "`/keys y enter`  send keys      `/cancel`   abort this pane\n",
+            "`/split`  sibling shell pane    `/shell`    new shell pane\n",
+            "`/kill`  close this pane       `/reset`    re-sync this topic\n",
+            "\nrename this topic = renames in herdr too.",
+        ),
+        Scope::General => concat!(
+            "`/spawn <kind> [space]`  new agent + topic   `/shell [space]`  new shell + topic\n",
+            "`/pane [space]`  shell pane in a space        `/space [name]`  new space + topic\n",
+            "`/agents`  spaces & agents panel\n",
+            "`/read` `/status` `/model` `/history`  need a topic or DM — open one first.",
+        ),
+        Scope::Dm => concat!(
+            "`/read [n]`  recent output      `/status`   refresh status\n",
+            "`/card`  re-post the buttons   `/esc`      dismiss if blocked\n",
+            "`/model`  model picker         `/quit`     back to a shell\n",
+            "`/keys y enter`  send keys      `/cancel`   abort this job\n",
+            "`/spawn <kind> [space]`  another agent + topic",
+        ),
+    };
+    format!("{head}\n{body}\n\n`/new` again anywhere for this list.")
 }

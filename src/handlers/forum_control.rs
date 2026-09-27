@@ -58,6 +58,10 @@ pub(crate) async fn handle_control_plane(
         super::shell::open_pane_here(s, chat, Some(thread_id), pane, arg).await;
         return true;
     }
+    if cmd == "/new" {
+        super::newcmd::handle_new(s, chat, Some(thread_id), crate::ui::Scope::Topic).await;
+        return true;
+    }
     if cmd == "/shell" {
         // No arg: shell next to this agent (same workspace).
         let ws = if arg.is_empty() { agent_ws } else { arg };

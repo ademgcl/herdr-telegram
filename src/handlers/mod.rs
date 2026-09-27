@@ -29,6 +29,7 @@ pub mod kill;
 pub mod model;
 pub mod model_parse;
 pub mod model_scan;
+mod newcmd;
 pub mod photo;
 pub mod reset;
 pub mod reset_single;

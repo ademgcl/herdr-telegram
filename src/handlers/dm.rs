@@ -157,6 +157,10 @@ pub async fn handle_dm_message(s: AppState, chat: i64, msg: &Value) {
         return;
     }
 
+    if cmd == "/new" {
+        super::newcmd::handle_new(&s, chat, None, crate::ui::Scope::Dm).await;
+        return;
+    }
     if cmd == "/shell" {
         super::dm_lifecycle::handle_shell(&s, chat, &rows, arg).await;
         return;
