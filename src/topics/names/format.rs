@@ -1,4 +1,4 @@
-//! Titles `body[space]` (e.g. `1[tg]`, `shell[shop]`). Kind lives in
+//! Titles `body [space]` (e.g. `1 [tg]`, `shell [shop]`). Kind lives in
 //! the topic icon only — never in the title. The space is a bracketed
 //! qualifier on the RIGHT: the label leads (what this topic is), the
 //! space qualifies it (where it runs), and it stays as short as the
@@ -36,9 +36,9 @@ pub(crate) fn strip_leading_word<'a>(body: &'a str, word: &str) -> Option<&'a st
     }
 }
 
-/// Topic title: `{label_or_tag}[{space}]` — bare.
-/// e.g. `shell[shop]` (when labeled),
-/// or `2[tg]` (when unlabeled, using the assigned number).
+/// Topic title: `{label_or_tag} [{space}]` — bare.
+/// e.g. `shell [shop]` (when labeled),
+/// or `2 [tg]` (when unlabeled, using the assigned number).
 ///
 /// Kind lives in the topic ICON only (per-agent glyph, user customs
 /// kept): the title carries no suffix, so same-label panes across kinds
@@ -46,7 +46,7 @@ pub(crate) fn strip_leading_word<'a>(body: &'a str, word: &str) -> Option<&'a st
 /// truncate at Telegram's 128-char cap.
 ///
 /// Minimal-dedup: a body echoing the space head word collapses (`ip
-/// shell` in space `ip` → `shell[ip]`).
+/// shell` in space `ip` → `shell [ip]`).
 /// Near-identical labels can still converge (`foo` vs `[tg] foo` →
 /// one title — identical labels always could).
 /// Pasted chrome sheds tolerantly: any `·•⋅` code (any 1–2 alnum, stale
@@ -124,7 +124,7 @@ pub fn format_title(space: &str, label_or_tag: &str, kind: &str) -> String {
         return trimmed.chars().take(128).collect();
     }
 
-    let formatted = format!("{}[{}]", core.trim(), short_space);
+    let formatted = format!("{} [{}]", core.trim(), short_space);
     formatted.chars().take(128).collect()
 }
 
