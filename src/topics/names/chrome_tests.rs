@@ -44,3 +44,30 @@ fn test_space_rename_parts_detects_new_space() {
     assert_eq!(space_rename_parts("[] api", "tg"), None);
     assert_eq!(space_rename_parts("[tg] api", "?"), None);
 }
+
+/// The new title shape puts the space in a TRAILING bracket:
+/// `api [other]`. The rename path must read "space → other, pane → api".
+/// Before this, `split_bracket` found the trailing bracket and returned
+/// an EMPTY remainder, so renaming a topic into another space blanked the
+/// pane/tab label.
+#[test]
+fn test_space_rename_parts_reads_the_trailing_bracket() {
+    use super::space_rename_parts;
+    // New shape: label first, space last.
+    assert_eq!(
+        space_rename_parts("api [other]", "tg"),
+        Some(("other".to_string(), "api".to_string()))
+    );
+    // Split panes keep their marker with the label.
+    assert_eq!(
+        space_rename_parts("api 2 [other]", "tg"),
+        Some(("other".to_string(), "api 2".to_string()))
+    );
+    // Legacy leading shape still works.
+    assert_eq!(
+        space_rename_parts("[other] api", "tg"),
+        Some(("other".to_string(), "api".to_string()))
+    );
+    // The same space is not a rename.
+    assert_eq!(space_rename_parts("api [tg]", "tg"), None);
+}

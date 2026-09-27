@@ -186,3 +186,22 @@ fn test_custom_label_ending_in_a_dot_is_kept() {
         "notes . elsewhere [tg]"
     );
 }
+
+/// The pane/tab rename path extracts the label with `topic_core`, so the
+/// rendered shape must round-trip: `api [tg]` → `api`, and a split keeps
+/// its marker. A rename that recovered `[tg]` or the space name would
+/// write that back into herdr as the tab name.
+#[test]
+fn test_topic_core_recovers_the_label_from_the_rendered_shape() {
+    use super::super::core::topic_core;
+    for (space, title, want) in [
+        ("tg", "api [tg]", "api"),
+        ("acc", "api 2 [acc]", "api 2"),
+        ("mymodels", "1 3 [mymodels]", "1 3"),
+        // Legacy shapes a user may still paste.
+        ("tg", "[tg] api", "api"),
+        ("tg", "api . tg", "api"),
+    ] {
+        assert_eq!(topic_core(title, space, "claude"), want, "title: {title:?}");
+    }
+}

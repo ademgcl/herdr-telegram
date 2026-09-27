@@ -48,15 +48,32 @@ pub(crate) fn space_rename_parts(new_name: &str, space: &str) -> Option<(String,
     if sp.is_empty() || sp == "?" {
         return None;
     }
-    let (inner, rest) = split_bracket(new_name)?;
-    if inner.is_empty() {
-        return None;
-    }
     let short = short_space_for(sp);
-    if norm_title(inner) == norm_title(sp) || norm_title(inner) == norm_title(&short) {
+    let names_other = |inner: &str| {
+        !inner.trim().is_empty()
+            && norm_title(inner) != norm_title(sp)
+            && norm_title(inner) != norm_title(&short)
+    };
+    // Trailing bracket first: this build renders `label [space]`, so the
+    // bracket is the SPACE and everything before it is the pane/tab
+    // label. Reading it as a leading bracket returned an empty remainder,
+    // which blanked the label and made the rename look like no rename at
+    // all — you could not move a topic to another space.
+    if let Some(inner) = new_name.trim_end().strip_suffix(']')
+        && let Some(open) = inner.rfind('[')
+    {
+        let (label, named) = inner.split_at(open);
+        let named = &named[1..];
+        if names_other(named) {
+            return Some((named.trim().to_string(), label.trim().to_string()));
+        }
+    }
+    // Legacy leading bracket `[new] label`.
+    let (inner, rest) = split_bracket(new_name)?;
+    if !names_other(inner) {
         return None;
     }
-    Some((inner.to_string(), rest.trim().to_string()))
+    Some((inner.trim().to_string(), rest.trim().to_string()))
 }
 
 /// Tolerant `[space]` prefix strip: case-blind, whitespace-collapsed,
