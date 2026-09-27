@@ -96,7 +96,17 @@ fn test_edit_due_same_text_never() {
 
 #[test]
 fn test_edit_due_first_edit_always() {
-    assert!(edit_due("", THINKING, None, Instant::now()));
+    // First edit of real content always goes through (no prior attempt).
+    assert!(edit_due("", "real content", None, Instant::now()));
+    // But editing TO the placeholder is never allowed (would overwrite
+    // delivered output with "thinking…").
+    assert!(!edit_due(
+        "delivered answer",
+        THINKING,
+        None,
+        Instant::now()
+    ));
+    assert!(!edit_due(THINKING, THINKING, None, Instant::now()));
 }
 
 #[test]

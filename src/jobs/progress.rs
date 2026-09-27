@@ -81,10 +81,14 @@ pub(crate) fn edit_due(last: &str, next: &str, last_at: Option<Instant>, now: In
     if last == next {
         return false;
     }
-    // First content render of a turn bypasses the cooldown (reset
-    // parity): the placeholder was posted moments ago and its `at` starts
-    // the clock, so a throttled first tail left the user staring at a bare
-    // "thinking…" for a whole cooldown — the reported "stuck at thinking".
+    // Never edit TO the placeholder: an empty acc renders as THINKING, and
+    // overwriting delivered output with it is the reported data loss.
+    if next == THINKING {
+        return false;
+    }
+    // First content render after a placeholder bypasses the cooldown (reset
+    // parity): the placeholder's `at` starts the clock, so a throttled
+    // first tail left the user on a bare "thinking…" for a whole cooldown.
     // Bounded to one per turn: after it, `last` is no longer the
     // placeholder, so the gate below is back in force.
     if last == THINKING {
@@ -107,17 +111,6 @@ pub async fn refresh_live(s: &AppState, pane: &str, job: &Arc<Job>, acc: &[Strin
         return;
     }
     let next = render_progress(acc);
-    // A bare placeholder NEVER bypasses the edit cooldown: render_progress
-    // returns exactly THINKING for an empty acc, so the bypass would make
-    // it fire on every no-output tick and the turn's first tail edit would
-    // keep landing (never the reported "stuck at thinking" — and never
-    // even reaching the user through a suppressed slot). The gate applies
-    // to REAL placeholder bodies only.
-    let next = if next == THINKING {
-        String::new()
-    } else {
-        next
-    };
     let dest = *job.dest.lock().await;
     let now = Instant::now();
     match s.live_get(pane).await {
