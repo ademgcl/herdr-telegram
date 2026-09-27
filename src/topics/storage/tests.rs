@@ -45,15 +45,21 @@ fn test_tags_stable_and_reassigned() {
     let st = TopicStorage::at(
         std::env::temp_dir().join(format!("herdr-tg-test-tags-{}.json", super::test_tag())),
     );
+    // The tag IS herdr's pane number, so the topic title and herdr's UI
+    // show the same digit — and gaps stay gaps (herdr never reuses one).
     assert_eq!(st.assign_tag("w1:p1", "opencode"), "1");
-    assert_eq!(st.assign_tag("w1:p1", "opencode"), "1");
+    assert_eq!(st.assign_tag("w1:p1", "opencode"), "1", "stable");
     assert_eq!(st.assign_tag("w1:p2", "opencode"), "2");
-    assert_eq!(st.assign_tag("w2:p1", "claude"), "3");
-    // Persisted across reopen; freed tags are refilled.
+    assert_eq!(
+        st.assign_tag("w1:p4", "opencode"),
+        "4",
+        "p3 is gone, not reused"
+    );
+    // Persisted across reopen; a kind flip keeps the number.
     let re = TopicStorage::at(st.file_path.clone());
     assert_eq!(re.assign_tag("w1:p2", "opencode"), "2");
     re.remove("w1:p1");
-    assert_eq!(re.assign_tag("w3:p9", "opencode"), "1");
+    assert_eq!(re.assign_tag("w1:p1", "shell"), "1");
     let _ = std::fs::remove_file(&st.file_path);
 }
 

@@ -26,13 +26,13 @@ impl TopicStorage {
                 .filter(|(p, _)| *p != pane)
                 .map(|(_, v)| v.clone())
                 .collect();
-            let tag = names::assign(&taken, kind);
+            let tag = names::assign(&taken, kind, Some(pane));
             s.tags.insert(pane.to_string(), tag.clone());
             self.save(&s);
             return tag;
         }
         let taken: Vec<String> = s.tags.values().cloned().collect();
-        let tag = names::assign(&taken, kind);
+        let tag = names::assign(&taken, kind, Some(pane));
         s.tags.insert(pane.to_string(), tag.clone());
         self.save(&s);
         tag

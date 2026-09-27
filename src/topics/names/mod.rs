@@ -66,17 +66,27 @@ pub fn code(kind: &str) -> String {
     short
 }
 
-/// The number inside a tag: `2` from `2`, or from a legacy `o2`.
+/// Herdr's own pane number: `wZ:p7` → `7`.
 ///
-/// Legacy tags carried the agent's short code so two kinds in one space
-/// never collided on `1`. The kind now lives in the topic ICON, so the
-/// visible title dropped the code — and a code prefix in the identity
-/// would then render as a stray `o` in the title. So tags are bare
-/// numbers, unique per space, and a legacy `o2` still occupies `2` (so
-/// upgrading never hands a second pane a number already on screen).
-pub fn tag_number(tag: &str) -> Option<u32> {
-    let t = tag.trim();
-    let digits: String = t
+/// Herdr numbers panes per WORKSPACE, monotonically and never reusing a
+/// freed number, and the counter is shared across a space's tabs — a new
+/// tab's first pane continues the sequence rather than restarting. So the
+/// number is unique within the space, stable for the pane's life, and
+/// identical to what herdr's UI shows. Splits need no special case: they
+/// take the next number in the space.
+///
+/// `None` for a pane id with no numeric tail, so callers fall back
+/// rather than invent a number herdr never had.
+pub fn pane_number(pane: &str) -> Option<u32> {
+    // `wZ:p7` → `p7` → `7`. The `p` is herdr's pane marker, not part of
+    // the number; a bare `7` is accepted too.
+    let tail = pane.rsplit_once(':')?.1.trim();
+    digits_of(tail.strip_prefix('p').unwrap_or(tail))
+}
+
+/// Trailing digits of a tag, as a number: `2` from `2`, `o2`, or `p2`.
+fn digits_of(tag: &str) -> Option<u32> {
+    let digits: String = tag
         .chars()
         .rev()
         .take_while(char::is_ascii_digit)
@@ -84,12 +94,7 @@ pub fn tag_number(tag: &str) -> Option<u32> {
         .into_iter()
         .rev()
         .collect();
-    // A bare number, or a short code glued to one (`o2`, `sh1`).
-    let head_ok = digits.len() < t.len();
-    if digits.is_empty() || (!head_ok && digits.len() != t.len()) {
-        return None;
-    }
-    if !head_ok && !t.chars().all(|c| c.is_ascii_digit()) {
+    if digits.is_empty() {
         return None;
     }
     digits.parse().ok()
@@ -99,9 +104,18 @@ pub fn tag_number(tag: &str) -> Option<u32> {
 /// tag set; gaps from closed agents are refilled. `kind` is no longer part
 /// of the id — the icon carries it — but kept in the signature so callers
 /// (and their call sites) do not churn.
-pub fn assign(existing: &[String], _kind: &str) -> String {
+/// The pane's herdr number when it has one, so the topic title and
+/// herdr's UI show the same digit. Uniqueness is free: herdr never
+/// reuses a number inside a workspace, and a space is a workspace.
+///
+/// Falls back to the smallest unused `n` for a pane id with no numeric
+/// tail (never seen from herdr; keeps storage total).
+pub fn assign(existing: &[String], _kind: &str, pane: Option<&str>) -> String {
+    if let Some(n) = pane.and_then(pane_number) {
+        return n.to_string();
+    }
     let used: std::collections::HashSet<u32> =
-        existing.iter().filter_map(|t| tag_number(t)).collect();
+        existing.iter().filter_map(|t| digits_of(t)).collect();
     let mut n = 1u32;
     while used.contains(&n) {
         n += 1;
@@ -216,66 +230,5 @@ pub fn workspace_icon_color(space: &str) -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_code_mapping() {
-        assert_eq!(code("opencode"), "o");
-        assert_eq!(code("claude"), "c");
-        assert_eq!(code("codex"), "x");
-        assert_eq!(code("agy"), "a");
-        assert_eq!(code("pi"), "pi");
-        assert_eq!(code("cursor"), "cu");
-        // Unknown kinds: first two alphanumerics, lowercased.
-        assert_eq!(code("my-agent_2"), "my");
-        assert_eq!(code("Z"), "z");
-        assert_eq!(code("???"), "?");
-    }
-
-    #[test]
-    fn test_codes_unique() {
-        let kinds = [
-            "pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline", "opencode",
-            "copilot", "kimi", "kiro", "droid", "amp", "grok", "hermes", "kilo", "qodercli",
-            "qwen", "maki",
-        ];
-        let mut seen = std::collections::HashSet::new();
-        for k in kinds {
-            assert!(seen.insert(code(k)), "collision on {k}");
-        }
-    }
-
-    #[test]
-    fn test_assign_sequence_and_gap_fill() {
-        // Numbers are per SPACE, not per kind — the icon carries the kind.
-        assert_eq!(assign(&[], "opencode"), "1");
-        let taken = ["1".to_string(), "2".to_string(), "3".to_string()];
-        assert_eq!(assign(&taken, "opencode"), "4");
-        assert_eq!(assign(&taken, "claude"), "4", "kinds share one sequence");
-        // Gaps refill.
-        let gapped = ["1".to_string(), "3".to_string()];
-        assert_eq!(assign(&gapped, "opencode"), "2");
-        // Legacy code tags still occupy their number, so upgrading never
-        // hands a live pane a number already on screen.
-        let legacy = ["o1".to_string(), "o3".to_string(), "c1".to_string()];
-        assert_eq!(assign(&legacy, "kilo"), "2");
-        assert_eq!(tag_number("o2"), Some(2));
-        assert_eq!(tag_number("12"), Some(12));
-        assert_eq!(tag_number("shell"), None);
-    }
-
-    #[test]
-    fn test_workspace_icon_color_mapping() {
-        // Deterministic: bracketed and unbracketed return identical color
-        assert_eq!(workspace_icon_color("shop"), workspace_icon_color("[shop]"));
-        // Color is always in allowed set
-        assert!(TOPIC_ICON_COLORS.contains(&workspace_icon_color("shop")));
-        assert!(TOPIC_ICON_COLORS.contains(&workspace_icon_color("")));
-        // Numeric suffixes map deterministically to color indices
-        assert_eq!(workspace_icon_color("ws0"), TOPIC_ICON_COLORS[0]);
-        assert_eq!(workspace_icon_color("ws1"), TOPIC_ICON_COLORS[1]);
-        assert_eq!(workspace_icon_color("ws2"), TOPIC_ICON_COLORS[2]);
-        assert_eq!(workspace_icon_color("#3"), TOPIC_ICON_COLORS[3]);
-    }
-}
+#[path = "mod_tests.rs"]
+mod tests;

@@ -123,3 +123,23 @@ async fn e2e_user_closed_topic_is_pruned_on_the_next_send() {
         "a user-closed topic must be deleted, not retried forever"
     );
 }
+
+/// The title must show herdr's own pane number, inside the tab name.
+///
+/// Herdr numbers panes per workspace, monotonically, never reusing a
+/// freed number, shared across a space's tabs. So the digit in a topic
+/// title is the same one herdr's UI shows — which is the whole point:
+/// "2 in herdr, 2 in mine". Splits need no special case; the tab name
+/// groups them and the number tells them apart.
+#[test]
+fn test_split_topics_carry_the_tab_name_and_the_real_pane_number() {
+    use crate::topics::names::format_title;
+    // Single pane, named tab: the tab name alone.
+    assert_eq!(format_title("acc", "api", "claude"), "api [acc]");
+    // Split: tab name + pane number, one per pane of the same tab.
+    assert_eq!(format_title("acc", "api 2", "claude"), "api 2 [acc]");
+    assert_eq!(format_title("acc", "api 4", "claude"), "api 4 [acc]");
+    // A gap is truthful — herdr freed p3 and never reuses it.
+    assert_eq!(crate::topics::names::pane_number("wG:p4"), Some(4));
+    assert_eq!(crate::topics::names::pane_number("wZ:p1"), Some(1));
+}
