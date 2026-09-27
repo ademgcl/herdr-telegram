@@ -26,8 +26,15 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
             return b;
         }
     }
-    let acc_body = join_trimmed(&final_block(acc, prompt));
-    let turn = final_block(screen, prompt);
+    // Cut any tool block BEFORE choosing: when the agent ran a tool
+    // after writing, the last block on screen is the command and its
+    // output, so the card was shipping `$ herdr pane read …` instead of
+    // the answer. Structural (indent + `$ `), so a short reply can never
+    // be mistaken for a command.
+    let acc: Vec<String> = super::tool_tail::cut_tool_tail(acc);
+    let screen: Vec<String> = super::tool_tail::cut_tool_tail(screen);
+    let acc_body = join_trimmed(&final_block(&acc, prompt));
+    let turn = final_block(&screen, prompt);
     let screen_body = join_trimmed(&turn);
     // Fatal provider errors settle fast (often before the stream sees
     // them) while `acc` still holds the prior turn. A settled error must

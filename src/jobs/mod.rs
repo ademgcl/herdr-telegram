@@ -30,6 +30,7 @@ pub mod segment_dialog;
 pub mod settle;
 pub mod stall;
 pub mod stream;
+pub mod tool_tail;
 #[cfg(test)]
 pub(crate) mod transient;
 
