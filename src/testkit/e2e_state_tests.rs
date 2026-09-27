@@ -59,7 +59,10 @@ async fn e2e_typing_no_leak_after_cancel() {
 }
 
 /// A final that already landed must not be re-buzzed by the settle
-/// notifier (the "everything posts twice" report).
+/// notifier (the "everything posts twice" report). Counts SENDS only:
+/// the transient tail legitimately renders the answer into the working
+/// message (an edit, silent) before the final lands — that is the
+/// feature, not a repost.
 #[tokio::test]
 async fn e2e_final_is_not_reposted_as_spontaneous() {
     let h = Harness::start().await;
@@ -67,8 +70,9 @@ async fn e2e_final_is_not_reposted_as_spontaneous() {
     h.run_turn("hello", &["the one answer"]).await;
     h.tick(6).await;
     let answers: Vec<String> = h
-        .sent_texts()
+        .sends()
         .into_iter()
+        .map(|c| c.text())
         .filter(|t| t.contains("the one answer"))
         .collect();
     assert_eq!(

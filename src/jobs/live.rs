@@ -59,8 +59,16 @@ pub async fn stream_live(job: &Arc<Job>, screen: Vec<String>, acc: &mut Vec<Stri
 /// body. A job that already carried an epoch when the watcher started
 /// (slot reuse, or recovery after a restart) has no such first publish, so
 /// every bump it observes is a genuine supersede.
-pub(crate) fn is_creating_publish(started_at: u64, bumps_seen: u32) -> bool {
-    bumps_seen == 0 && started_at == 0
+///
+/// The `epoch == started_at + 1` clause is load-bearing: two publishes
+/// coalescing before the watcher's first iteration (fast succession —
+/// exactly the reported leak) observe a single 0→2 bump. Without it that
+/// reads as "the creating publish" and skips BOTH the acc clear and the
+/// baseline reset, so the next poll re-delivers the previous turn's text
+/// as fresh — into the transient AND (when long enough to win
+/// arbitration) the final.
+pub(crate) fn is_creating_publish(started_at: u64, bumps_seen: u32, epoch: u64) -> bool {
+    bumps_seen == 0 && started_at == 0 && epoch == started_at + 1
 }
 
 #[cfg(test)]
@@ -71,14 +79,20 @@ mod tests {
     fn test_only_a_fresh_job_s_first_bump_is_its_own_publish() {
         // Fresh job (epoch 0 at spawn): the first bump created this turn —
         // the acc must survive.
-        assert!(is_creating_publish(0, 0));
+        assert!(is_creating_publish(0, 0, 1));
         // Any later bump is a real supersede.
-        assert!(!is_creating_publish(0, 1));
-        assert!(!is_creating_publish(0, 7));
+        assert!(!is_creating_publish(0, 1, 2));
+        assert!(!is_creating_publish(0, 7, 8));
         // A reused or recovered job already carried an epoch when the
         // watcher started, so it has no creating publish to absorb.
-        assert!(!is_creating_publish(1, 0));
-        assert!(!is_creating_publish(4, 0));
+        assert!(!is_creating_publish(1, 0, 2));
+        assert!(!is_creating_publish(4, 0, 5));
+        // Two publishes coalescing before the first iteration (fast
+        // succession) observe one 0→2 bump: NOT the creating publish —
+        // skipping the clear + baseline reset here is the reported
+        // cross-turn content leak.
+        assert!(!is_creating_publish(0, 0, 2));
+        assert!(!is_creating_publish(0, 0, 3));
     }
 
     #[tokio::test]

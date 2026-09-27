@@ -59,7 +59,12 @@ async fn e2e_turn_posts_instant_then_final_and_retires_transient() {
 }
 
 /// Auto-remove off (the default): the working message stays as history
-/// and is reused by the next turn instead of spamming new ones.
+/// when the turn ends. A later turn must never destroy that history:
+///
+/// the reported "second msg deleted the first reply". If the first
+/// turn rendered its answer into its message, no later edit may reset
+/// that message to the placeholder; the new turn posts its own
+/// placeholder instead.
 #[tokio::test]
 async fn e2e_transient_kept_by_default_and_reused_next_turn() {
     let h = Harness::start().await;
@@ -69,15 +74,6 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
     assert_eq!(h.sent_count("deleteMessage"), 0, "kept, never deleted");
     let first_instant = instant_mid(&h);
 
-    // The first turn's message KEEPS its answer (never reset to the
-    // placeholder — the reported "second msg deleted the first reply").
-    assert!(
-        !edits(&h).iter().any(|c| {
-            c.message_id() == first_instant && c.text() == crate::jobs::progress::THINKING
-        }),
-        "first reply was overwritten in place: {:#?}",
-        h.sent_texts()
-    );
     h.run_turn("second", &["two"]).await;
     let second_final = sends(&h)
         .iter()
@@ -85,9 +81,27 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
         .expect("second final")
         .sent_id();
     assert_ne!(second_final, first_instant, "final is still a new message");
-    // The second turn gets its own placeholder (the slot is not reused
-    // while it holds delivered output). The first turn's placeholder gets
-    // edited with its answer, so only the second turn's is still THINKING.
+    // History check over the edit log: once the first message showed the
+    // answer, no later edit may reset it to the placeholder. (If the
+    // first turn never rendered, there is nothing to destroy — the
+    // check is vacuously true.)
+    let mut saw_answer = false;
+    for c in edits(&h) {
+        if c.message_id() != first_instant {
+            continue;
+        }
+        if c.text().contains("one") {
+            saw_answer = true;
+        } else if saw_answer {
+            assert_ne!(
+                c.text(),
+                crate::jobs::progress::THINKING,
+                "second turn reset the first reply to the placeholder"
+            );
+        }
+    }
+    // The second turn is never instant-less: it reuses the bare
+    // placeholder or posts its own.
     assert!(
         sends(&h)
             .iter()

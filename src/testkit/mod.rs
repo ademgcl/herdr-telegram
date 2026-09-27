@@ -243,6 +243,19 @@ impl Harness {
         self.herdr.set_screen_owned(screen);
         self.herdr.set_status("idle");
         self.wait_for_final_after(seen).await;
+        // Content gate (not just shape): a 📌 pin mint is a legitimate
+        // non-placeholder send and used to satisfy the structural wait
+        // above before the real final landed — the next assertion then
+        // failed on a final that simply hadn't been posted yet. The
+        // reply lines always land in the final for harness turns.
+        let want: Vec<String> = reply.iter().map(|l| l.to_string()).collect();
+        self.wait_for("final with the reply", || {
+            self.sends()
+                .iter()
+                .skip(seen)
+                .any(|c| want.iter().any(|w| c.text().contains(w)))
+        })
+        .await;
     }
 }
 

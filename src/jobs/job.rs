@@ -50,6 +50,16 @@ impl Job {
         self.baseline_ok.load(Ordering::Relaxed)
     }
 
+    /// Drop the baseline so the next stream re-anchors to the CURRENT
+    /// screen. Required on a supersede: clearing `acc` while the baseline
+    /// persists makes the next delta re-deliver the previous turn's output
+    /// as fresh (the reported content leak — the transient and the final
+    /// both showed an earlier turn's text).
+    pub async fn reset_baseline(&self) {
+        *self.baseline.lock().await = Vec::new();
+        self.baseline_ok.store(false, Ordering::Relaxed);
+    }
+
     /// First successful sight of the pane anchors the delta stream.
     /// Never anchors an empty or all-blank screen: an outage/blank read
     /// would wipe a good baseline and repost scrollback as fresh on the

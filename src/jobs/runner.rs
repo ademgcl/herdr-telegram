@@ -108,13 +108,17 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // output burst: the transient sat on the placeholder forever
             // and the final lost its acc body. See
             // `live::is_creating_publish` (unit-tested).
-            let creating = super::live::is_creating_publish(started_at, bumps_seen);
+            let creating = super::live::is_creating_publish(started_at, bumps_seen, epoch);
             bumps_seen += 1;
             last_epoch = epoch;
             episode.reset();
             settled_since = None;
             if !creating {
                 acc.clear();
+                // The baseline must go with it: a persisted baseline makes
+                // the next delta re-deliver the previous turn's output as
+                // fresh (content leak across turns).
+                job.reset_baseline().await;
             }
             retry_wait = RETRY_BACKOFF_SECS;
             // Herdr-error streak belongs to the old prompt: 11 failures
