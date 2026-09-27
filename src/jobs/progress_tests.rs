@@ -24,16 +24,18 @@ fn test_empty_acc_renders_thinking_placeholder() {
 
 #[test]
 fn test_streamed_tail_renders_bare_model_text_chrome_stripped() {
-    // The transient shows the model's actual text: TUI furniture
-    // (tool echoes, progress verbs, status bars) strips, prose stays,
-    // and no "working" header poses as agent output.
+    // The transient shows the model's actual text UNDER the standing
+    // `💭 thinking…` header: TUI furniture (tool echoes, progress verbs,
+    // status bars) strips, prose survives byte-for-byte. The header is
+    // what tells a working message apart from a final at a glance, so it
+    // is never agent output.
     let body = render_progress(&acc(&[
         "✱ Read src/main.rs",
         "Thinking…",
         "hello",
         " ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt   145.6K (14%)  ctrl+p commands    ~/projects/herdr-telegram:main",
     ]));
-    assert_eq!(body, "hello");
+    assert_eq!(body, format!("{}\nhello", THINKING));
 }
 
 #[test]
@@ -43,6 +45,9 @@ fn test_chrome_only_tail_falls_back_to_thinking() {
         render_progress(&acc(&["✱ Read src/main.rs", "⠸ Writing command…"])),
         THINKING
     );
+    // Chrome-only AND all-blank both leave the bare header, so "no output
+    // yet" always looks the same.
+    assert_eq!(render_progress(&acc(&["", "   "])), THINKING);
 }
 
 #[test]

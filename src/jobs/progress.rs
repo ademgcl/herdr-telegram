@@ -45,11 +45,25 @@ const TAIL_RESERVE: usize = 64;
 /// Transient body for this turn: a marked reply if the agent has written
 /// one, else the streamed tail. Scoped to the turn so a previous turn's
 /// markers cannot pose as this one's status.
+///
+/// The `💭 thinking…` header is ALWAYS the first line, so a working
+/// message is never mistakable for a final at a glance — the two sit in
+/// the same topic and differ only by this line. Bare header means "no
+/// output yet"; header plus body means "here is what it is saying".
 pub fn render_progress_for(acc: &[String], prompt: &str) -> String {
     if let Some(b) = super::reply_block::marked_reply_for_turn(acc, prompt) {
-        return tail_fit(&[b], MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE));
+        return with_header(tail_fit(&[b], MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE)));
     }
     render_progress(acc)
+}
+
+/// Header + body, or the bare header when there is nothing yet.
+fn with_header(body: String) -> String {
+    if body.is_empty() {
+        THINKING.to_string()
+    } else {
+        format!("{THINKING}\n{body}")
+    }
 }
 
 pub fn render_progress(acc: &[String]) -> String {
@@ -57,11 +71,7 @@ pub fn render_progress(acc: &[String]) -> String {
         return THINKING.to_string();
     }
     let clean = super::filter::chrome_filtered(acc);
-    let tail = tail_fit(&clean, MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE));
-    if tail.is_empty() {
-        return THINKING.to_string();
-    }
-    tail
+    with_header(tail_fit(&clean, MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE)))
 }
 
 /// No-op edit verdict (pure, tested): Telegram rejects an edit that

@@ -153,15 +153,25 @@ async fn e2e_flood_on_instant_backs_off_without_duplicate() {
     h.map_topic();
     h.fault("sendMessage", "Too Many Requests: retry after 1");
     h.run_turn("hello", &["hi"]).await;
-    // Exactly one instant + one final: the flooded attempt banked and
-    // the retry produced no twin.
-    let texts = h.sent_texts();
+    // Exactly ONE instant message: the flooded attempt banked and the
+    // retry produced no twin. Counted by message id, not by text — the
+    // working message is posted once as the bare header and then EDITED
+    // under it, so text matching counts a single message twice and made
+    // this look like a ~50% duplicate-post flake.
+    let mut all = sends(&h);
+    all.extend(edits(&h));
+    let instant_ids: std::collections::HashSet<i64> = all
+        .iter()
+        .filter(|c| c.text().starts_with(crate::jobs::progress::THINKING))
+        .map(|c| c.message_id())
+        .collect();
     assert_eq!(
-        texts.iter().filter(|t| t.contains("thinking")).count(),
+        instant_ids.len(),
         1,
-        "no duplicate instant: {texts:?}"
+        "no duplicate instant: {:?}",
+        h.sent_texts()
     );
-    assert!(texts.iter().any(|t| t.contains("hi")));
+    assert!(h.sent_texts().iter().any(|t| t.contains("hi")));
 }
 
 /// A second prompt must NEVER overwrite the first turn's delivered
