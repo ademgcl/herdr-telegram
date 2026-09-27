@@ -1,7 +1,8 @@
-//! Titles `body. space` (e.g. `o2. tg`, `shell. tg`). Kind lives in the
-//! topic icon only — never in the title. The space moved to the RIGHT of
-//! a dot: the label leads, so the eye lands on the agent's own name
-//! first, and the trailing word still says which space it belongs to.
+//! Titles `body[space]` (e.g. `1[tg]`, `shell[shop]`). Kind lives in
+//! the topic icon only — never in the title. The space is a bracketed
+//! qualifier on the RIGHT: the label leads (what this topic is), the
+//! space qualifies it (where it runs), and it stays as short as the
+//! shortest unambiguous form.
 use super::chrome::{
     shed_once, short_space_for, strip_space_prefix, strip_space_suffix, trim_stray,
 };
@@ -35,9 +36,9 @@ pub(crate) fn strip_leading_word<'a>(body: &'a str, word: &str) -> Option<&'a st
     }
 }
 
-/// Topic title: `{label_or_tag}. {space}` — bare.
-/// e.g. `shell. shop` (when labeled),
-/// or `o2. tg` (when unlabeled, using assigned tag).
+/// Topic title: `{label_or_tag}[{space}]` — bare.
+/// e.g. `shell[shop]` (when labeled),
+/// or `2[tg]` (when unlabeled, using the assigned number).
 ///
 /// Kind lives in the topic ICON only (per-agent glyph, user customs
 /// kept): the title carries no suffix, so same-label panes across kinds
@@ -45,7 +46,7 @@ pub(crate) fn strip_leading_word<'a>(body: &'a str, word: &str) -> Option<&'a st
 /// truncate at Telegram's 128-char cap.
 ///
 /// Minimal-dedup: a body echoing the space head word collapses (`ip
-/// shell` in space `ip` → `shell. ip`).
+/// shell` in space `ip` → `shell[ip]`).
 /// Near-identical labels can still converge (`foo` vs `[tg] foo` →
 /// one title — identical labels always could).
 /// Pasted chrome sheds tolerantly: any `·•⋅` code (any 1–2 alnum, stale
@@ -54,7 +55,7 @@ pub(crate) fn strip_leading_word<'a>(body: &'a str, word: &str) -> Option<&'a st
 /// case-blind, whitespace-collapsed.
 ///
 /// Idempotent: `format_title(space, &format_title(space, l, k), k)`
-/// is stable (chrome shed drops the trailing `. space`, then re-wrapped).
+/// is stable (chrome shed drops the trailing `[space]`, then re-wrapped).
 ///
 /// Telegram caps topic names at 128 UTF-8 characters; space is truncated to 20.
 /// Prefix matching uses the DISPLAYED (possibly truncated) space.
@@ -69,7 +70,7 @@ pub fn format_title(space: &str, label_or_tag: &str, kind: &str) -> String {
         k => code(k),
     };
 
-    // A pasted rendered title unwraps first (our own `core . space`, and
+    // A pasted rendered title unwraps first (our own `core[space]`, and
     // the legacy `[space] core`) so re-formatting never double-wraps;
     // a custom `[bracket]` name (not this space) stays whole.
     let mut body = match strip_space_prefix(trimmed, space.trim(), &short_space) {
@@ -123,7 +124,7 @@ pub fn format_title(space: &str, label_or_tag: &str, kind: &str) -> String {
         return trimmed.chars().take(128).collect();
     }
 
-    let formatted = format!("{} . {}", core.trim(), short_space);
+    let formatted = format!("{}[{}]", core.trim(), short_space);
     formatted.chars().take(128).collect()
 }
 

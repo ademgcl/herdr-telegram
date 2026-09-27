@@ -1,12 +1,14 @@
-//! Stable short tags per pane (`o2`): kept as persisted ids; the
-//! VISIBLE title is bare Format B `[ws] label` (e.g. `[tg] o2`) — see
-//! [`format_title`]. Kind lives in the topic icon only (one glyph per
-//! agent, 💬 shell); live status surfaces in cards and the typing
-//! indicator (plus one unpinned identity card per topic).
+//! Stable per-pane tags (`2`): kept as persisted ids AND shown in the
+//! title (`2 . tg`) — see [`format_title`]. They used to carry the
+//! agent's short code (`o2`) so two kinds in one space could not collide;
+//! the kind now lives in the topic ICON, so the number alone is both the
+//! identity and what you see. Live status surfaces in cards and the
+//! typing indicator (plus one unpinned identity card per topic).
 
 mod chrome;
 mod core;
 mod format;
+mod suffix;
 
 pub(crate) use chrome::{norm_title, space_rename_parts};
 pub use core::topic_core;
@@ -64,18 +66,47 @@ pub fn code(kind: &str) -> String {
     short
 }
 
-/// Smallest positive `n` such that `{code}{n}` is unused. Deterministic for
-/// a given tag set; gaps from closed agents are refilled.
-pub fn assign(existing: &[String], kind: &str) -> String {
-    let c = code(kind);
+/// The number inside a tag: `2` from `2`, or from a legacy `o2`.
+///
+/// Legacy tags carried the agent's short code so two kinds in one space
+/// never collided on `1`. The kind now lives in the topic ICON, so the
+/// visible title dropped the code — and a code prefix in the identity
+/// would then render as a stray `o` in the title. So tags are bare
+/// numbers, unique per space, and a legacy `o2` still occupies `2` (so
+/// upgrading never hands a second pane a number already on screen).
+pub fn tag_number(tag: &str) -> Option<u32> {
+    let t = tag.trim();
+    let digits: String = t
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    // A bare number, or a short code glued to one (`o2`, `sh1`).
+    let head_ok = digits.len() < t.len();
+    if digits.is_empty() || (!head_ok && digits.len() != t.len()) {
+        return None;
+    }
+    if !head_ok && !t.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Smallest positive `n` unused in this space. Deterministic for a given
+/// tag set; gaps from closed agents are refilled. `kind` is no longer part
+/// of the id — the icon carries it — but kept in the signature so callers
+/// (and their call sites) do not churn.
+pub fn assign(existing: &[String], _kind: &str) -> String {
+    let used: std::collections::HashSet<u32> =
+        existing.iter().filter_map(|t| tag_number(t)).collect();
     let mut n = 1u32;
-    loop {
-        let tag = format!("{c}{n}");
-        if !existing.iter().any(|t| t == &tag) {
-            return tag;
-        }
+    while used.contains(&n) {
         n += 1;
     }
+    n.to_string()
 }
 
 /// One topic icon per mapped kind + generic fallback (custom emoji IDs from Telegram's
@@ -217,12 +248,21 @@ mod tests {
 
     #[test]
     fn test_assign_sequence_and_gap_fill() {
-        assert_eq!(assign(&[], "opencode"), "o1");
-        let taken = ["o1".to_string(), "o2".to_string(), "c1".to_string()];
-        assert_eq!(assign(&taken, "opencode"), "o3");
-        assert_eq!(assign(&taken, "claude"), "c2");
-        let gapped = ["o1".to_string(), "o3".to_string()];
-        assert_eq!(assign(&gapped, "opencode"), "o2");
+        // Numbers are per SPACE, not per kind — the icon carries the kind.
+        assert_eq!(assign(&[], "opencode"), "1");
+        let taken = ["1".to_string(), "2".to_string(), "3".to_string()];
+        assert_eq!(assign(&taken, "opencode"), "4");
+        assert_eq!(assign(&taken, "claude"), "4", "kinds share one sequence");
+        // Gaps refill.
+        let gapped = ["1".to_string(), "3".to_string()];
+        assert_eq!(assign(&gapped, "opencode"), "2");
+        // Legacy code tags still occupy their number, so upgrading never
+        // hands a live pane a number already on screen.
+        let legacy = ["o1".to_string(), "o3".to_string(), "c1".to_string()];
+        assert_eq!(assign(&legacy, "kilo"), "2");
+        assert_eq!(tag_number("o2"), Some(2));
+        assert_eq!(tag_number("12"), Some(12));
+        assert_eq!(tag_number("shell"), None);
     }
 
     #[test]

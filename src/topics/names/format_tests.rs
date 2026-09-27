@@ -4,73 +4,73 @@ use super::*;
 #[test]
 fn test_title_format() {
     // Bare titles on every kind: kind lives in the icon only.
-    assert_eq!(format_title("tg", "o2", "opencode"), "o2 . tg");
-    assert_eq!(format_title("tg", "a1", "agy"), "a1 . tg");
-    assert_eq!(format_title("tg", "main", "shell"), "main . tg");
-    assert_eq!(format_title("tg", "main", "opencode"), "main . tg");
-    assert_eq!(format_title("tg", "main", "agy"), "main . tg");
-    assert_eq!(format_title("demo", "c1", "claude"), "c1 . demo");
+    assert_eq!(format_title("tg", "o2", "opencode"), "o2[tg]");
+    assert_eq!(format_title("tg", "a1", "agy"), "a1[tg]");
+    assert_eq!(format_title("tg", "main", "shell"), "main[tg]");
+    assert_eq!(format_title("tg", "main", "opencode"), "main[tg]");
+    assert_eq!(format_title("tg", "main", "agy"), "main[tg]");
+    assert_eq!(format_title("demo", "c1", "claude"), "c1[demo]");
     assert_eq!(
         format_title("a-very-long-workspace-label-here", "o1", "opencode"),
-        "o1 . a-very-long-workspac"
+        "o1[a-very-long-workspac]"
     );
     assert_eq!(
         format_title("shop", "shop-backend", "claude"),
-        "shop-backend . shop"
+        "shop-backend[shop]"
     );
     // Pasted rendered titles unwrap to the same bare title.
     assert_eq!(
         format_title("shop", "[shop] shop-backend · claude", "claude"),
-        "shop-backend . shop"
+        "shop-backend[shop]"
     );
-    assert_eq!(format_title("tg", "o2 · tg", "opencode"), "o2 . tg");
-    assert_eq!(format_title("space-1", "sh1", "shell"), "sh1 . space-1");
-    assert_eq!(format_title("infra", "s1", "shell"), "s1 . infra");
+    assert_eq!(format_title("tg", "o2 · tg", "opencode"), "o2[tg]");
+    assert_eq!(format_title("space-1", "sh1", "shell"), "sh1[space-1]");
+    assert_eq!(format_title("infra", "s1", "shell"), "s1[infra]");
     // Unknown kinds render bare too.
-    assert_eq!(format_title("tg", "x1", "my-agent"), "x1 . tg");
-    assert_eq!(format_title("tg", "x1", "?"), "x1 . tg");
+    assert_eq!(format_title("tg", "x1", "my-agent"), "x1[tg]");
+    assert_eq!(format_title("tg", "x1", "?"), "x1[tg]");
     assert_eq!(
         format_title("herdr-telegram", "main · herdr-telegram dev", "opencode"),
-        "main · herdr-telegram dev . herdr-telegram"
+        "main · herdr-telegram dev[herdr-telegram]"
     );
     // Minimal-dedup: space head-word echoes collapse...
-    assert_eq!(format_title("ip", "ip shell", "shell"), "shell . ip");
-    assert_eq!(format_title("ip", "IP SHELL", "shell"), "SHELL . ip");
-    assert_eq!(format_title("ip", "ip ip shell", "shell"), "shell . ip");
-    assert_eq!(format_title("ip", "ip ·", "shell"), "ip . ip");
+    assert_eq!(format_title("ip", "ip shell", "shell"), "shell[ip]");
+    assert_eq!(format_title("ip", "IP SHELL", "shell"), "SHELL[ip]");
+    assert_eq!(format_title("ip", "ip ip shell", "shell"), "shell[ip]");
+    assert_eq!(format_title("ip", "ip ·", "shell"), "ip[ip]");
     assert_eq!(
         format_title("tg", "tg opencode", "opencode"),
-        "opencode . tg"
+        "opencode[tg]"
     );
     // ...legacy suffixed labels shed and re-sync bare...
-    assert_eq!(format_title("tg", "o2 · o", "opencode"), "o2 . tg");
-    assert_eq!(format_title("tg", "o2 · opencode", "opencode"), "o2 . tg");
-    assert_eq!(format_title("ip", "sh1 · shell", "shell"), "sh1 . ip");
-    assert_eq!(format_title("ip", "foo · SHELL", "shell"), "foo . ip");
-    assert_eq!(format_title("ip", "sh1 · $", "shell"), "sh1 . ip");
-    assert_eq!(format_title("tg", "main · $", "opencode"), "main . tg");
+    assert_eq!(format_title("tg", "o2 · o", "opencode"), "o2[tg]");
+    assert_eq!(format_title("tg", "o2 · opencode", "opencode"), "o2[tg]");
+    assert_eq!(format_title("ip", "sh1 · shell", "shell"), "sh1[ip]");
+    assert_eq!(format_title("ip", "foo · SHELL", "shell"), "foo[ip]");
+    assert_eq!(format_title("ip", "sh1 · $", "shell"), "sh1[ip]");
+    assert_eq!(format_title("tg", "main · $", "opencode"), "main[tg]");
     // Alt separators shed known codes; Unicode alnum never sheds.
-    assert_eq!(format_title("tg", "main | q", "opencode"), "main . tg");
-    assert_eq!(format_title("tg", "main  |  q", "opencode"), "main . tg");
-    assert_eq!(format_title("tg", "foo | é", "opencode"), "foo | é . tg");
+    assert_eq!(format_title("tg", "main | q", "opencode"), "main[tg]");
+    assert_eq!(format_title("tg", "main  |  q", "opencode"), "main[tg]");
+    assert_eq!(format_title("tg", "foo | é", "opencode"), "foo | é[tg]");
     // Bare `$` is part of the name (only `· $` sheds).
-    assert_eq!(format_title("tg", "main$", "opencode"), "main$ . tg");
+    assert_eq!(format_title("tg", "main$", "opencode"), "main$[tg]");
     // ...kind match is case-blind (herdr kinds are lowercase anyway)...
-    assert_eq!(format_title("ip", "sh1", "SHELL"), "sh1 . ip");
+    assert_eq!(format_title("ip", "sh1", "SHELL"), "sh1[ip]");
     // ...short-code bodies render plain, never stuttering...
-    assert_eq!(format_title("tg", "o", "opencode"), "o . tg");
-    assert_eq!(format_title("ip", "sh", "shell"), "sh . ip");
-    assert_eq!(format_title("tg", "opencode", "opencode"), "opencode . tg");
+    assert_eq!(format_title("tg", "o", "opencode"), "o[tg]");
+    assert_eq!(format_title("ip", "sh", "shell"), "sh[ip]");
+    assert_eq!(format_title("tg", "opencode", "opencode"), "opencode[tg]");
     // ...degenerate kind-word bodies stay (documented)...
-    assert_eq!(format_title("ip", "shell", "shell"), "shell . ip");
+    assert_eq!(format_title("ip", "shell", "shell"), "shell[ip]");
     // ...exact-space bodies stay (stable, unambiguous)...
-    assert_eq!(format_title("ip", "ip", "shell"), "ip . ip");
+    assert_eq!(format_title("ip", "ip", "shell"), "ip[ip]");
     // ...and compounds are untouched.
     assert_eq!(
         format_title("shop", "shop-backend", "shell"),
-        "shop-backend . shop"
+        "shop-backend[shop]"
     );
-    assert_eq!(format_title("ip", "ip: shell", "shell"), "ip: shell . ip");
+    assert_eq!(format_title("ip", "ip: shell", "shell"), "ip: shell[ip]");
 }
 
 #[test]
@@ -128,8 +128,8 @@ fn test_rename_roundtrip_recovers_the_label() {
     ] {
         let title = format_title(space, label, kind);
         assert!(
-            title.ends_with(&format!(" . {}", super::short_space_for(space))),
-            "space must trail: {title:?}"
+            title.ends_with(&format!("[{}]", super::short_space_for(space))),
+            "space must trail as a qualifier: {title:?}"
         );
         assert!(
             title.starts_with(label),
@@ -164,21 +164,20 @@ fn test_format_is_idempotent() {
 /// A title already in the NEW shape, re-saved, stays put.
 #[test]
 fn test_pasted_new_shape_is_not_double_wrapped() {
-    assert_eq!(format_title("tg", "o2 . tg", "opencode"), "o2 . tg");
+    assert_eq!(format_title("tg", "o2[tg]", "opencode"), "o2[tg]");
     // Tight spacing a user may type is understood too.
-    assert_eq!(format_title("tg", "o2.tg", "opencode"), "o2 . tg");
+    assert_eq!(format_title("tg", "o2.tg", "opencode"), "o2[tg]");
     // The legacy shape still parses, so old topics migrate on rename.
-    assert_eq!(format_title("tg", "[tg] o2", "opencode"), "o2 . tg");
+    assert_eq!(format_title("tg", "[tg] o2", "opencode"), "o2[tg]");
 }
 
 /// A label that merely ENDS in a dot, or names another space, is the
 /// user's label and must not be eaten by the suffix strip.
 #[test]
 fn test_custom_label_ending_in_a_dot_is_kept() {
-    assert_eq!(format_title("tg", "v1.2", "opencode"), "v1.2 . tg");
-    // A trailing `. other-space` is the label's own trailing word.
+    assert_eq!(format_title("tg", "v1.2", "opencode"), "v1.2[tg]");
     assert_eq!(
         format_title("tg", "notes . elsewhere", "opencode"),
-        "notes . elsewhere . tg"
+        "notes . elsewhere[tg]"
     );
 }

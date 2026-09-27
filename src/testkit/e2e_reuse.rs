@@ -76,3 +76,22 @@ async fn e2e_read_still_works_with_transient_off() {
     })
     .await;
 }
+
+/// A closed topic must be DELETED, not left greyed out in the forum.
+///
+/// Telegram refuses to delete an open topic, so the close path closes and
+/// then deletes. Before this, every finished agent left a dead topic
+/// holding its slot in the list forever.
+#[tokio::test]
+async fn e2e_closed_topic_is_deleted_not_left_behind() {
+    let h = Harness::start().await;
+    h.map_topic();
+    let thread = h.thread;
+    h.s.topics.close_topic_for_thread(&h.pane, thread).await;
+    assert_eq!(h.sent_count("closeForumTopic"), 1, "topic closed");
+    assert_eq!(
+        h.sent_count("deleteForumTopic"),
+        1,
+        "a closed topic must be deleted, not left in the forum"
+    );
+}

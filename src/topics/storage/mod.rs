@@ -9,6 +9,8 @@ mod prune;
 #[cfg(test)]
 #[path = "restore_tests.rs"]
 mod restore_tests;
+#[cfg(test)]
+mod tag_tests;
 mod tags;
 #[cfg(test)]
 mod tests;

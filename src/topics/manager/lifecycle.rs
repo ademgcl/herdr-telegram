@@ -53,10 +53,9 @@ impl TopicManager {
     /// Badge a live-but-agentless pane as shell: no title touch (titles
     /// sync 1:1 with herdr names), just ensures the topic. Returns true
     /// when the mapping was pruned this call (caller retires its dialog
-    /// generation — uniform with every other sync site).
-    /// Reuse-only when the workspace is unknown: minting with a "[?]"
-    /// placeholder leaks a visible stub until the watchdog converges —
-    /// defer the mint to the tick that knows the real space.
+    /// generation — uniform with every other sync site). Reuse-only when
+    /// the workspace is unknown: minting a "[?]" placeholder leaks a
+    /// visible stub until the watchdog converges.
     pub async fn mark_shell(&self, pane: &str) -> bool {
         if self.storage.get_thread(pane).is_none() {
             return false;
@@ -64,10 +63,10 @@ impl TopicManager {
         self.sync_topic_prune(pane, "shell", "?").await.1
     }
 
-    /// Race-free close: RPCs the SNAPSHOT thread id directly, never
-    /// re-reading the mapping (a remint landing between check and RPC
-    /// must not have its fresh topic closed). Compare-deletes the mapping
-    /// only when it still equals the snapshot.
+    /// Race-free close-then-delete: RPCs the SNAPSHOT thread id directly,
+    /// never re-reading the mapping (a remint landing between check and
+    /// RPC must not have its fresh topic closed). Compare-deletes the
+    /// mapping only when it still equals the snapshot.
     pub async fn close_topic_for_thread(&self, pane: &str, thread: i64) -> bool {
         let Some(forum) = self.forum_id else {
             return true;
@@ -87,6 +86,18 @@ impl TopicManager {
             }
         };
         if ok {
+            // A closed topic still sits in the forum, greyed out, forever.
+            // Telegram refuses to delete an OPEN topic, so close then
+            // delete. Best-effort: a failed delete leaves a closed topic —
+            // the state this improves on — never a failed close.
+            match self.tg.delete_forum_topic(forum, thread).await {
+                Ok(()) => println!("[topics] closed+deleted topic #{thread} ({pane})"),
+                Err(e) if crate::telegram::topic_gone(&e.to_string()) => {}
+                Err(e) => eprintln!(
+                    "[topics] delete after close #{thread} ({pane}) failed: {}",
+                    self.tg.redact(&e.to_string())
+                ),
+            }
             self.remove_mapping_if_thread(pane, thread);
         }
         ok

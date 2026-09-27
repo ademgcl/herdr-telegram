@@ -45,15 +45,15 @@ fn test_tags_stable_and_reassigned() {
     let st = TopicStorage::at(
         std::env::temp_dir().join(format!("herdr-tg-test-tags-{}.json", super::test_tag())),
     );
-    assert_eq!(st.assign_tag("w1:p1", "opencode"), "o1");
-    assert_eq!(st.assign_tag("w1:p1", "opencode"), "o1");
-    assert_eq!(st.assign_tag("w1:p2", "opencode"), "o2");
-    assert_eq!(st.assign_tag("w2:p1", "claude"), "c1");
+    assert_eq!(st.assign_tag("w1:p1", "opencode"), "1");
+    assert_eq!(st.assign_tag("w1:p1", "opencode"), "1");
+    assert_eq!(st.assign_tag("w1:p2", "opencode"), "2");
+    assert_eq!(st.assign_tag("w2:p1", "claude"), "3");
     // Persisted across reopen; freed tags are refilled.
     let re = TopicStorage::at(st.file_path.clone());
-    assert_eq!(re.assign_tag("w1:p2", "opencode"), "o2");
+    assert_eq!(re.assign_tag("w1:p2", "opencode"), "2");
     re.remove("w1:p1");
-    assert_eq!(re.assign_tag("w3:p9", "opencode"), "o1");
+    assert_eq!(re.assign_tag("w3:p9", "opencode"), "1");
     let _ = std::fs::remove_file(&st.file_path);
 }
 
@@ -266,32 +266,4 @@ fn test_clear_msgs_and_icon_drop_stale() {
     st.clear_icon("w1:p1");
     assert_eq!(st.get_icon("w1:p1"), None);
     let _ = std::fs::remove_file(&st.file_path);
-}
-
-#[test]
-fn test_empty_object_falls_back_to_prev_and_tag_reassigns_on_flip() {
-    // `{}` truncates like empty: last-good wins, never a mass re-mint.
-    let path =
-        std::env::temp_dir().join(format!("herdr-tg-test-emptyobj-{}.json", super::test_tag()));
-    let prev = std::path::PathBuf::from(format!("{}.prev", path.display()));
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&prev);
-    let st = TopicStorage::at(path.clone());
-    st.insert("w1:p1".into(), 42);
-    assert!(prev.exists());
-    std::fs::write(&path, "{}").unwrap();
-    let re = TopicStorage::at(path.clone());
-    assert_eq!(re.get_thread("w1:p1"), Some(42));
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&prev);
-    // Shell→agent pane reuse must not keep the `sh*` family tag.
-    let st2 = TopicStorage::at(
-        std::env::temp_dir().join(format!("herdr-tg-test-tagflip-{}.json", super::test_tag())),
-    );
-    let t1 = st2.assign_tag("w1:p1", "shell");
-    assert!(t1.starts_with("sh"));
-    let t2 = st2.assign_tag("w1:p1", "opencode");
-    assert!(!t2.starts_with("sh"));
-    assert_eq!(st2.get_tag("w1:p1").as_deref(), Some(t2.as_str()));
-    let _ = std::fs::remove_file(&st2.file_path);
 }

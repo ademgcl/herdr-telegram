@@ -275,23 +275,5 @@ pub(crate) fn trim_stray(body: &str) -> &str {
 #[path = "chrome_tests.rs"]
 mod tests;
 
-/// Tolerant `core . space` SUFFIX strip: the shape this build renders
-/// (`o2 . tg`), plus the tight `o2. tg` a user may paste, and the
-/// legacy `[space] core` for old titles re-saved.
-///
-/// `None` = not this space (a custom `core . other` label keeps its own
-/// trailing word as part of the name), so re-formatting is idempotent
-/// without eating a user's label.
-pub(crate) fn strip_space_suffix<'a>(body: &'a str, space: &str, short: &str) -> Option<&'a str> {
-    let t = body.trim_end();
-    let (head, tail) = t.rsplit_once('.')?;
-    if head.trim().is_empty() {
-        return None;
-    }
-    let n = norm_title(tail);
-    if n == norm_title(space.trim()) || n == norm_title(short) {
-        Some(head.trim_end())
-    } else {
-        None
-    }
-}
+/// Tolerant `core[space]` suffix strip — see [`super::suffix`].
+pub(crate) use super::suffix::strip_space_suffix;
