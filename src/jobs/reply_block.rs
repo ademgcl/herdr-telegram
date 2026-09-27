@@ -17,9 +17,15 @@
 use crate::jobs::stream::join_trimmed;
 
 /// Opening marker, alone on its line.
-pub const REPLY_OPEN: &str = "[[reply]]";
+///
+/// Deliberately bracket-free. The agent TUI renders markdown, and `[[x]]`
+/// is wiki-link syntax there: `[[reply]]` was rendered `[reply]` on the
+/// live pane, so the marker never matched the screen and every turn fell
+/// back to the leaky extraction. Plain uppercase words survive markdown
+/// verbatim, so what the agent writes is what the bot reads.
+pub const REPLY_OPEN: &str = "REPLY-BEGIN";
 /// Closing marker, alone on its line.
-pub const REPLY_CLOSE: &str = "[[end]]";
+pub const REPLY_CLOSE: &str = "REPLY-END";
 
 fn is_marker(line: &str, marker: &str) -> bool {
     line.trim() == marker
@@ -137,8 +143,22 @@ mod tests {
     /// scan: only a marker ALONE on its line counts.
     #[test]
     fn test_marker_must_be_alone_on_its_line() {
-        let lines = v(&["see the [[end]] convention, e.g. [[reply]] then prose"]);
+        let lines = v(&["see the REPLY-END convention, e.g. REPLY-BEGIN then prose"]);
         assert_eq!(marked_reply(&lines), None);
+    }
+
+    /// The marker must survive the TUI's markdown rendering verbatim.
+    /// `[[reply]]` came back as `[reply]` on the live pane — a single
+    /// bracket — so the bot searched for text the screen never showed.
+    #[test]
+    fn test_marker_survives_markdown_rendering() {
+        // No markdown-active characters, so a renderer cannot rewrite it.
+        for m in [REPLY_OPEN, REPLY_CLOSE] {
+            assert!(
+                m.chars().all(|c| c.is_ascii_uppercase() || c == '-'),
+                "marker is markdown-active: {m}"
+            );
+        }
     }
 }
 
