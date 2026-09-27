@@ -48,6 +48,30 @@ pub fn marked_reply(lines: &[String]) -> Option<String> {
     found
 }
 
+/// The marked answer for THIS turn only.
+///
+/// A whole-screen scan is not enough: the settled screen still holds the
+/// PREVIOUS turn's markers in its scrollback, so an unscoped search
+/// re-posted last turn's marked block as this turn's card (the live
+/// report: turn 2's final was turn 1's `[[reply]]` body). Scoping starts
+/// after the last prompt echo — the same echo rule the final card's
+/// segmentation uses — and falls back to the whole buffer when no echo
+/// is visible (alt-screen panes often scroll it away), which keeps a
+/// marked reply reachable rather than silently dropped.
+pub fn marked_reply_for_turn(lines: &[String], prompt: &str) -> Option<String> {
+    let want = prompt.lines().next().map(str::trim).unwrap_or("");
+    let start = if want.is_empty() {
+        0
+    } else {
+        lines
+            .iter()
+            .rposition(|l| crate::jobs::echo::is_prompt_echo(l, want))
+            .map(|i| i + 1)
+            .unwrap_or(0)
+    };
+    marked_reply(&lines[start..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::{REPLY_CLOSE, REPLY_OPEN, marked_reply};
@@ -115,5 +139,77 @@ mod tests {
     fn test_marker_must_be_alone_on_its_line() {
         let lines = v(&["see the [[end]] convention, e.g. [[reply]] then prose"]);
         assert_eq!(marked_reply(&lines), None);
+    }
+}
+
+#[cfg(test)]
+mod turn_scope_tests {
+    use super::{REPLY_CLOSE, REPLY_OPEN, marked_reply, marked_reply_for_turn};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The live failure: turn 1's markers are still in the screen
+    /// scrollback when turn 2 finalizes, and the unscoped scan handed
+    /// turn 1's body back as turn 2's card.
+    #[test]
+    fn test_previous_turns_markers_never_become_this_turns_card() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let prompt = format!("second message {n}");
+        let lines = v(&[
+            "  ┃  first message",
+            REPLY_OPEN,
+            "turn one answer, already delivered",
+            REPLY_CLOSE,
+            "  ┃  $ cargo test",
+            "  ┃  test result: ok. 540 passed",
+            &format!("  ┃  {prompt}"),
+            REPLY_OPEN,
+            "turn two answer, the one that belongs here",
+            REPLY_CLOSE,
+        ]);
+        // Unscoped: last pair still wins, but only because turn 2 marked
+        // one. With turn 2 silent the old pair would answer for it.
+        assert_eq!(
+            marked_reply(&lines).as_deref(),
+            Some("turn two answer, the one that belongs here")
+        );
+        assert_eq!(
+            marked_reply_for_turn(&lines, &prompt).as_deref(),
+            Some("turn two answer, the one that belongs here")
+        );
+    }
+
+    /// Turn 2 produced no marked reply: turn 1's block must NOT be reused
+    /// (that was the reported wrong final), and the caller falls back to
+    /// the normal arbitration.
+    #[test]
+    fn test_unmarked_turn_does_not_inherit_the_previous_markers() {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let prompt = format!("second message {n}");
+        let lines = v(&[
+            "  ┃  first message",
+            REPLY_OPEN,
+            "turn one answer, already delivered",
+            REPLY_CLOSE,
+            &format!("  ┃  {prompt}"),
+            "  ┃  $ cargo test",
+        ]);
+        assert_eq!(marked_reply_for_turn(&lines, &prompt), None);
+    }
+
+    /// No visible echo (alt-screen panes scroll it away): scan the whole
+    /// buffer rather than silently losing a real marked reply.
+    #[test]
+    fn test_missing_echo_still_finds_the_marked_reply() {
+        let lines = v(&["  ┃  $ cargo test", REPLY_OPEN, "the answer", REPLY_CLOSE]);
+        assert_eq!(
+            marked_reply_for_turn(&lines, "a prompt that scrolled away").as_deref(),
+            Some("the answer")
+        );
     }
 }

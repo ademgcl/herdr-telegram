@@ -22,7 +22,7 @@ pub fn select_final_body(acc: &[String], screen: &[String], prompt: &str) -> Str
     // its answer, so no arbitration applies. Stream first (it holds the
     // turn's own output), then the settled screen.
     for src in [acc, screen] {
-        if let Some(b) = crate::jobs::reply_block::marked_reply(src) {
+        if let Some(b) = crate::jobs::reply_block::marked_reply_for_turn(src, prompt) {
             return b;
         }
     }

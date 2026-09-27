@@ -177,6 +177,11 @@ pub fn is_chrome(line: &str) -> bool {
     if CHROME_PREFIXES.iter().any(|p| t.starts_with(p)) {
         return true;
     }
+    // Reply-block scaffolding: the agent's own markers, never reply text
+    // and never something to stream into the transient.
+    if t == crate::jobs::reply_block::REPLY_OPEN || t == crate::jobs::reply_block::REPLY_CLOSE {
+        return true;
+    }
     if CHROME_MARKERS.iter().any(|m| line.contains(m)) {
         return true;
     }

@@ -42,6 +42,16 @@ const TAIL_RESERVE: usize = 64;
 /// untouched (arbitration cleans at display time); only the transient
 /// renders through the filter, so prose survives byte-for-byte by the
 /// filter/prose battery.
+/// Transient body for this turn: a marked reply if the agent has written
+/// one, else the streamed tail. Scoped to the turn so a previous turn's
+/// markers cannot pose as this one's status.
+pub fn render_progress_for(acc: &[String], prompt: &str) -> String {
+    if let Some(b) = super::reply_block::marked_reply_for_turn(acc, prompt) {
+        return tail_fit(&[b], MAX_MSG_UNITS.saturating_sub(TAIL_RESERVE));
+    }
+    render_progress(acc)
+}
+
 pub fn render_progress(acc: &[String]) -> String {
     if acc.is_empty() {
         return THINKING.to_string();
@@ -112,7 +122,7 @@ pub async fn refresh_live(s: &AppState, pane: &str, job: &Arc<Job>, acc: &[Strin
     if !is_owner(s, pane, job).await {
         return;
     }
-    let next = render_progress(acc);
+    let next = render_progress_for(acc, &job.prompt.lock().await);
     let dest = *job.dest.lock().await;
     let now = Instant::now();
     match s.live_get(pane).await {

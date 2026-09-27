@@ -170,3 +170,58 @@ async fn test_moved_on_generation_stands_retire_down() {
     assert_eq!((kept.mid, kept.turn), (42, 4));
     s.set_transient_remove(false).await;
 }
+
+/// The transient must show the marked answer, not the tool transcript
+/// streaming behind it.
+#[test]
+fn test_transient_renders_the_marked_reply_not_the_tool_dump() {
+    use crate::jobs::reply_block::{REPLY_CLOSE, REPLY_OPEN};
+    let acc = acc_of(&[
+        "   ┃  $ cargo test 2>&1 | tail -12",
+        "   ┃  test result: ok. 549 passed; 0 failed",
+        REPLY_OPEN,
+        "Working on it — the parser is the real cause.",
+        REPLY_CLOSE,
+    ]);
+    let body = super::render_progress(&acc);
+    assert!(
+        body.contains("the parser is the real cause"),
+        "transient showed something else: {body:?}"
+    );
+    for junk in ["cargo test", "549 passed", "[["] {
+        assert!(
+            !body.contains(junk),
+            "tool output in the transient: {junk:?} in {body:?}"
+        );
+    }
+}
+
+/// A previous turn's markers must not pose as this turn's status.
+#[test]
+fn test_transient_ignores_previous_turns_markers() {
+    use crate::jobs::reply_block::{REPLY_CLOSE, REPLY_OPEN};
+    let acc = acc_of(&[
+        "  ┃  older message",
+        REPLY_OPEN,
+        "stale answer from the previous turn",
+        REPLY_CLOSE,
+        "  ┃  newer message",
+        "  ┃  $ cargo test",
+        REPLY_OPEN,
+        "fresh answer for this turn only",
+        REPLY_CLOSE,
+    ]);
+    let body = super::render_progress_for(&acc, "newer message");
+    assert!(
+        body.contains("fresh answer for this turn only"),
+        "transient showed something else: {body:?}"
+    );
+    assert!(
+        !body.contains("stale answer from the previous turn"),
+        "re-served the previous turn: {body:?}"
+    );
+}
+
+fn acc_of(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
