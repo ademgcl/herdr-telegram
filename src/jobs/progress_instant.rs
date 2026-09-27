@@ -29,6 +29,15 @@ use super::progress_retire::post_fresh;
 /// previous turn's own retire deletes it. Best-effort — a miss banks an
 /// unsent slot and the next stream tick retries.
 pub async fn ensure_instant(s: &AppState, pane: &str, job: &Arc<Job>) {
+    // Working messages are off by default (`/transient` to enable): the
+    // typing indicator carries progress and the final carries the reply,
+    // so no message is posted at all. The edits that follow a working
+    // message cannot be muted — Telegram's `editMessageText` has no
+    // `disable_notification` — so posting one buzzes the phone however
+    // quietly the first send was.
+    if !s.transient_on() {
+        return;
+    }
     let dest = *job.dest.lock().await;
     match s.live_get(pane).await {
         // Any live slot on this dest is an EARLIER turn's message: post

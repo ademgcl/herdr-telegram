@@ -29,7 +29,7 @@ fn instant_mid(h: &Harness) -> i64 {
 async fn e2e_turn_posts_instant_then_final_and_retires_transient() {
     let h = Harness::start().await;
     h.map_topic();
-    h.s.set_transient_remove(true).await;
+    h.s.set_transient_on(true).await;
     h.run_turn("hello", &["hi there"]).await;
 
     let sent = sends(&h);
@@ -58,70 +58,27 @@ async fn e2e_turn_posts_instant_then_final_and_retires_transient() {
     assert_eq!(h.sent_count("deleteMessage"), 1, "one delete only");
 }
 
-/// Auto-remove off (the default): the working message stays as history
-/// when the turn ends. The next turn must get its OWN working message:
-/// reusing the first turn's is the reported "second msg overrode the
-/// first — same transient with the wrong history".
+/// Working messages are off by default: a turn posts NO message, so the
+/// chat shows only the typing indicator and then the final. This is what
+/// keeps the phone quiet — the edits that follow a working message cannot
+/// be muted, since Telegram's `editMessageText` has no
+/// `disable_notification`.
 #[tokio::test]
-async fn e2e_transient_kept_by_default_and_new_each_turn() {
+async fn e2e_transient_off_by_default_posts_no_working_message() {
     let h = Harness::start().await;
     h.map_topic();
-    assert!(!h.s.transient_remove());
+    assert!(!h.s.transient_on(), "working messages are opt-in");
     h.run_turn("first", &["one"]).await;
-    assert_eq!(h.sent_count("deleteMessage"), 0, "kept, never deleted");
-    let first_instant = instant_mid(&h);
-
-    // The reported precondition, reproduced: the first turn settled
-    // before any tick rendered its tail, so its message was still the
-    // BARE placeholder. The log for the live report shows exactly this
-    // — `post m2957` then straight to `finalize`, no edit in between —
-    // and the second turn then reused m2957 as its own working message.
-    // (A turn that DID render took the post-fresh path already, which is
-    // why a naive two-turn test never caught this.)
-    let bare = h.s.live_get(&h.pane).await.expect("turn one left a slot");
-    assert_eq!(bare.mid, first_instant, "the slot is turn one's message");
-    h.s.live_put(
-        &h.pane,
-        crate::state::live::LiveSlot {
-            text: crate::jobs::progress::THINKING.to_string(),
-            ..bare
-        },
-    )
-    .await;
-
-    h.run_turn("second", &["two"]).await;
-    let second_final = sends(&h)
-        .iter()
-        .find(|c| c.text().contains("two"))
-        .expect("second final")
-        .sent_id();
-    assert_ne!(second_final, first_instant, "final is still a new message");
-
-    // The regression, stated directly: the second turn's transient is a
-    // message of its own, and the first turn's message never carries the
-    // second turn's output (nor gets reset to the placeholder).
-    let placeholders: Vec<i64> = sends(&h)
-        .iter()
-        .filter(|c| c.text() == crate::jobs::progress::THINKING)
-        .map(|c| c.sent_id())
-        .collect();
+    // No message carries the working header — only the final (and the
+    // topic pin, which is not a working message).
     assert!(
-        placeholders.contains(&first_instant),
-        "first turn posted its own placeholder: {placeholders:?}"
+        !h.sent_texts()
+            .iter()
+            .any(|t| t.starts_with(crate::jobs::progress::THINKING)),
+        "a working message was posted: {:?}",
+        h.sent_texts()
     );
-    assert!(
-        placeholders.iter().any(|m| *m != first_instant),
-        "second turn posted its OWN placeholder, never the first's: {placeholders:?}"
-    );
-    for c in edits(&h) {
-        if c.message_id() == first_instant {
-            assert!(
-                !c.text().contains("two"),
-                "second turn rendered onto the first turn's message: {:?}",
-                c.text()
-            );
-        }
-    }
+    assert!(h.sent_texts().iter().any(|t| t.contains("one")));
 }
 
 /// Dead transient (the user deleted it): the next turn must detect and
@@ -130,6 +87,7 @@ async fn e2e_transient_kept_by_default_and_new_each_turn() {
 async fn e2e_dead_transient_is_detected_and_reposted() {
     let h = Harness::start().await;
     h.map_topic();
+    h.s.set_transient_on(true).await; // this test exercises transient mechanics
     h.run_turn("first", &["one"]).await;
     // Telegram says the kept message no longer exists.
     h.fault("editMessageText", "Bad Request: MESSAGE_ID_INVALID");
@@ -151,6 +109,7 @@ async fn e2e_dead_transient_is_detected_and_reposted() {
 async fn e2e_flood_on_instant_backs_off_without_duplicate() {
     let h = Harness::start().await;
     h.map_topic();
+    h.s.set_transient_on(true).await; // this test exercises transient mechanics
     h.fault("sendMessage", "Too Many Requests: retry after 1");
     h.run_turn("hello", &["hi"]).await;
     // Exactly ONE instant message: the flooded attempt banked and the
@@ -189,9 +148,10 @@ async fn e2e_flood_on_instant_backs_off_without_duplicate() {
 async fn e2e_second_prompt_never_overwrites_the_first_reply() {
     let h = Harness::start().await;
     h.map_topic();
+    h.s.set_transient_on(true).await; // this test exercises transient mechanics
     assert!(
-        !h.s.transient_remove(),
-        "kept-history mode is the case that loses text"
+        h.s.transient_on(),
+        "this test needs working messages on: it checks the first turn's"
     );
     let chrome = " ⬝ esc interrupt   145.6K (14%)  ctrl+p commands";
     h.herdr.set_status("working");

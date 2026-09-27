@@ -63,9 +63,10 @@ pub const TRANSIENT_USAGE: &str = "usage: `/transient [on|off]` — bare shows t
 /// Single source for the `/transient` status line (every surface).
 pub fn transient_status(on: bool) -> String {
     if on {
-        "🧹 transient auto-remove is on — working messages delete when the final lands".to_string()
+        "🧹 working messages are ON — a silent `💭 thinking…` shows while each turn runs"
+            .to_string()
     } else {
-        "🧹 transient auto-remove is off — working messages stay as history".to_string()
+        "🧹 working messages are OFF — you get finals only".to_string()
     }
 }
 

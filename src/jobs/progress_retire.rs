@@ -48,9 +48,6 @@ async fn delete_live(s: &AppState, pane: &str, slot: LiveSlot) {
 /// and the stale retire stands down. When auto-remove is off this is a
 /// no-op: the slot survives for the next turn to reuse.
 pub async fn clear_live_if_epoch(s: &AppState, pane: &str, live_entry: Option<(i64, u64)>) {
-    if !s.transient_remove() {
-        return;
-    }
     let Some((mid0, turn0)) = live_entry else {
         return;
     };
@@ -75,10 +72,9 @@ pub async fn clear_live_if_epoch(s: &AppState, pane: &str, live_entry: Option<(i
 /// successor): nobody else can own the turn — delete when auto-remove
 /// is on, keep (slot included) when off. Idempotent.
 pub async fn clear_live(s: &AppState, pane: &str) {
-    if !s.transient_remove() {
-        println!("[live] retire {pane}: kept (transient off)");
-        return;
-    }
+    // Transients are off by default, so there is normally nothing to
+    // delete; when `/transient on` is in force, a leftover slot is
+    // cleaned up rather than left to outlive the turn.
     let Some(sl) = s.live_take(pane).await else {
         return;
     };

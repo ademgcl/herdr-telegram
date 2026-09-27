@@ -145,18 +145,15 @@ fn test_edit_due_throttles_then_releases() {
 }
 
 #[tokio::test]
-async fn test_keep_mode_retire_leaves_slot_for_the_next_turn() {
-    // Auto-remove off (the default): the retire is a no-op — the slot
-    // survives so the next turn can continue the generation lineage and
-    // post its OWN message beside it (it never edits this one). No RPC
-    // fires here either.
+async fn test_transient_off_by_default_retires_nothing() {
+    // Working messages are opt-in now, so the default run has no slot to
+    // retire and no delete fires.
     let (s, _dir) = crate::state::cancel::isolated_state();
-    assert!(!s.transient_remove());
+    assert!(!s.transient_on());
     s.live_put("w1:p1", slot(42, 3)).await;
     clear_live_if_epoch(&s, "w1:p1", Some((42, 3))).await;
     clear_live(&s, "w1:p1").await;
-    let kept = s.live_get("w1:p1").await.expect("slot kept");
-    assert_eq!((kept.mid, kept.turn), (42, 3));
+    assert!(s.live_get("w1:p1").await.is_none(), "slot cleaned up");
 }
 
 #[tokio::test]
@@ -164,7 +161,7 @@ async fn test_moved_on_generation_stands_retire_down() {
     // Entry mismatch returns before any RPC (safe with auto-remove on:
     // no delete fires for a slot the retire does not own).
     let (s, _dir) = crate::state::cancel::isolated_state();
-    s.set_transient_remove(true).await;
+    s.set_transient_on(true).await;
     s.live_put("w1:p1", slot(42, 4)).await;
     // No entry at all: nothing to retire.
     clear_live_if_epoch(&s, "w1:p1", None).await;
@@ -173,7 +170,7 @@ async fn test_moved_on_generation_stands_retire_down() {
     clear_live_if_epoch(&s, "w1:p1", Some((42, 3))).await;
     let kept = s.live_get("w1:p1").await.expect("slot kept");
     assert_eq!((kept.mid, kept.turn), (42, 4));
-    s.set_transient_remove(false).await;
+    s.set_transient_on(false).await;
 }
 
 /// The transient must show the marked answer, not the tool transcript

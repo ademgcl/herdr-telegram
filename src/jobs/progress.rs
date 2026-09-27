@@ -126,7 +126,7 @@ pub(crate) fn edit_due(last: &str, next: &str, last_at: Option<Instant>, now: In
 /// on remap, else edit on new throttled text. Detached watchers (map
 /// holds another Arc) and stopped jobs never create traffic.
 pub async fn refresh_live(s: &AppState, pane: &str, job: &Arc<Job>, acc: &[String]) {
-    if job.is_stopped() {
+    if job.is_stopped() || !s.transient_on() {
         return;
     }
     if !is_owner(s, pane, job).await {

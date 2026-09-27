@@ -1,6 +1,6 @@
-//! `/transient [on|off]`: keep the silent working message as history
-//! (off, the default) or auto-remove it when the final lands (on).
-//! Global display pref — works on every prompt surface.
+//! `/transient [on|off]`: show the silent working message while a turn
+//! runs (off by default — finals only). Global display pref — works on
+//! every prompt surface.
 use crate::state::AppState;
 
 /// Pure arg verdict (tested): bare shows status (`Ok(None)`), on/off
@@ -29,14 +29,14 @@ pub async fn handle_transient(s: &AppState, chat: i64, thread: Option<i64>, arg:
         }
         Ok(flip) => {
             if let Some(on) = flip {
-                s.set_transient_remove(on).await;
+                s.set_transient_on(on).await;
             }
         }
     }
     s.tg.send_msg(
         chat,
         thread,
-        &crate::ui::transient_status(s.transient_remove()),
+        &crate::ui::transient_status(s.transient_on()),
         None,
     )
     .await;

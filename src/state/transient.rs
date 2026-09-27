@@ -12,22 +12,23 @@ impl State {
     }
 
     /// Fail-open load (tested): only a literal `on` enables — empty,
-    /// torn, or hand-edited garbage keeps transients.
-    pub(crate) fn load_transient_remove() -> bool {
+    /// torn, or hand-edited garbage keeps transients OFF, so a bad write
+    /// can never flood the chat with working messages.
+    pub(crate) fn load_transient_on() -> bool {
         std::fs::read_to_string(Self::transient_file())
             .map(|s| s.trim().eq_ignore_ascii_case("on"))
             .unwrap_or(false)
     }
 
-    pub fn transient_remove(&self) -> bool {
-        self.transient_remove.load(Ordering::Relaxed)
+    pub fn transient_on(&self) -> bool {
+        self.transient_on.load(Ordering::Relaxed)
     }
 
     /// Flip the flag + persist (short local write, no RPC). Memory
     /// first: a failed disk write keeps the live value for this run
     /// while the next boot re-reads the last good file.
-    pub async fn set_transient_remove(&self, on: bool) {
-        self.transient_remove.store(on, Ordering::Relaxed);
+    pub async fn set_transient_on(&self, on: bool) {
+        self.transient_on.store(on, Ordering::Relaxed);
         let file = Self::transient_file();
         let tmp = crate::types::unique_tmp(&file);
         if crate::types::write_private(&tmp, if on { b"on" } else { b"off" }).is_ok() {
@@ -43,9 +44,9 @@ mod tests {
     #[tokio::test]
     async fn test_transient_load_fail_open_off() {
         // Only a literal `on` enables; missing/torn/garbage keeps
-        // transients (fail-open off).
+        // transients OFF (fail-open).
         let (_s, _dir) = crate::state::cancel::isolated_state();
-        assert!(!State::load_transient_remove());
+        assert!(!State::load_transient_on());
         for (content, want) in [
             ("on", true),
             ("ON", true),
@@ -56,19 +57,19 @@ mod tests {
             ("onn", false),
         ] {
             std::fs::write(State::transient_file(), content).expect("write");
-            assert_eq!(State::load_transient_remove(), want, "{content:?}");
+            assert_eq!(State::load_transient_on(), want, "{content:?}");
         }
     }
 
     #[tokio::test]
     async fn test_transient_set_persists_and_reloads() {
         let (s, _dir) = crate::state::cancel::isolated_state();
-        assert!(!s.transient_remove());
-        s.set_transient_remove(true).await;
-        assert!(s.transient_remove());
-        assert!(State::load_transient_remove());
-        s.set_transient_remove(false).await;
-        assert!(!s.transient_remove());
-        assert!(!State::load_transient_remove());
+        assert!(!s.transient_on());
+        s.set_transient_on(true).await;
+        assert!(s.transient_on());
+        assert!(State::load_transient_on());
+        s.set_transient_on(false).await;
+        assert!(!s.transient_on());
+        assert!(!State::load_transient_on());
     }
 }

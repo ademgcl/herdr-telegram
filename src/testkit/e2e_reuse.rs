@@ -14,6 +14,7 @@ use super::Harness;
 async fn e2e_delivered_reply_never_reappears_in_a_later_transient() {
     let h = Harness::start().await;
     h.map_topic();
+    h.s.set_transient_on(true).await; // asserts on the working message
     let delivered = "the delivered first turn answer";
 
     h.run_turn("first", &[delivered]).await;
@@ -52,4 +53,26 @@ async fn e2e_delivered_reply_never_reappears_in_a_later_transient() {
         !seen_in_turn_two.iter().any(|t| t.contains(delivered)),
         "turn one's delivered reply reappeared in turn two's working message: {seen_in_turn_two:?}"
     );
+}
+
+/// With working messages off, `/read` is how the user sees the pane.
+///
+/// It must keep working: `/read` reads the agent's screen straight from
+/// herdr and has never touched the transient slot, so switching the
+/// default off must not take the only remaining way to read a reply with
+/// it. Pinned here because the flag change is exactly the kind of edit
+/// that could quietly couple the two.
+#[tokio::test]
+async fn e2e_read_still_works_with_transient_off() {
+    let h = Harness::start().await;
+    h.map_topic();
+    assert!(!h.s.transient_on(), "working messages are off by default");
+
+    let marker = "a distinctive line only the pane knows";
+    h.herdr.set_screen(&["> a prompt", marker]);
+    h.say("/read").await;
+    h.wait_for("/read replied with the pane", || {
+        h.sent_texts().iter().any(|t| t.contains(marker))
+    })
+    .await;
 }

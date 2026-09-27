@@ -156,17 +156,17 @@ pub struct State {
     /// (`notifier::pin_sync`): an unchanged status sample must cost
     /// zero API writes.
     pub pinned_card: Mutex<HashMap<String, String>>,
-    /// Auto-remove the silent transient when the final lands
-    /// (`/transient on`; off by default so the working trace stays
-    /// readable). Plain bool flag, never a map — nothing to prune.
-    pub transient_remove: AtomicBool,
-    /// One silent working message per pane (see `live`): shared across
-    /// all turns so updates are edits (never notify), pruned with pane
-    /// death in hygiene.
+    /// Show the silent working message at all (`/transient on`; OFF by
+    /// default — finals only). It used to mean "auto-remove when the
+    /// final lands", which still posted one every turn, and the edits
+    /// that follow cannot be muted (`editMessageText` has no
+    /// `disable_notification`) — so one always buzzed the phone.
+    pub transient_on: AtomicBool,
+    /// One silent working message per pane (see `live`), only while
+    /// `/transient` is on. Pruned with pane death in hygiene.
     pub live: Mutex<HashMap<String, crate::state::live::LiveSlot>>,
-    /// Panes with a transient post in flight (single-flight across
-    /// tasks). RAM-only, always released in the same call — nothing to
-    /// persist; dead entries pruned with pane death in hygiene.
+    /// Panes with a transient post in flight (single-flight). RAM-only,
+    /// always released in the same call; nothing to persist.
     pub live_sending: Mutex<HashSet<String>>,
 }
 
@@ -282,9 +282,9 @@ impl State {
             shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),
             pinned_card: Mutex::new(HashMap::new()),
-            // Fail-open default off (keep transients): a torn write must
-            // never flip the user into auto-remove.
-            transient_remove: AtomicBool::new(Self::load_transient_remove()),
+            // Fail-open default off: a torn/missing write must never
+            // start posting working messages.
+            transient_on: AtomicBool::new(Self::load_transient_on()),
             // Fresh boot owns no transient pointers (never persisted —
             // rebuilt on demand) and no post flights.
             live: Mutex::new(HashMap::new()),
