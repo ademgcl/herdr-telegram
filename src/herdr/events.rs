@@ -45,14 +45,23 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
     let agents = list_agents(&s.cfg.socket)
         .await
         .map_err(|e| e.to_string())?;
-    let subs: Vec<Value> = agents
+    let mut subs: Vec<Value> = agents
         .iter()
         .map(|a| json!({"type": "pane.agent_status_changed", "pane_id": a.pane}))
         .collect();
-
-    if subs.is_empty() {
-        tokio::time::sleep(Duration::from_secs(20)).await;
-        return Ok("no agents to watch");
+    // Birth events, UNSCOPED (no pane_id): a pane spawned from the herdr
+    // CLI is not in `agents` yet, so a per-pane subscription can never
+    // see it arrive. Without these, discovery waited for the 60s watchdog
+    // — the reported "I thought it did not arrive". `pane.agent_detected`
+    // is the precise one: it fires the moment a pane becomes an agent,
+    // which is exactly when a topic must exist for it.
+    for t in [
+        "pane.created",
+        "pane.agent_detected",
+        "tab.created",
+        "workspace.created",
+    ] {
+        subs.push(json!({ "type": t }));
     }
 
     let conn =
@@ -179,7 +188,15 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
         };
         // NOTE: wire name is dotted ("pane.agent_status_changed", same as
         // the subscription type) — NOT underscored.
-        if ev["event"].as_str() == Some("pane.agent_status_changed")
+        let ev_name = ev["event"].as_str().unwrap_or("");
+        if is_lifecycle_event(ev_name) {
+            // Discovery nudge, not a reconcile: the main loop owns the
+            // scan (single-flight), so this only wakes it.
+            println!("[events] {ev_name} — waking reconcile");
+            crate::state::wake_reconcile();
+            continue;
+        }
+        if ev_name == "pane.agent_status_changed"
             && let Some((pane, status)) = parse_status_event(&ev)
         {
             // Paced reset owns topic lifecycle: card/debounce arms must
@@ -194,6 +211,16 @@ async fn run_stream(s: &AppState) -> Res<&'static str> {
     }
 }
 
+/// Pure: does this event mean "something was born"? Drives the
+/// discovery nudge, so a typo here is a silent latency regression —
+/// hence a test naming the exact set.
+pub(crate) fn is_lifecycle_event(name: &str) -> bool {
+    matches!(
+        name,
+        "pane.created" | "pane.agent_detected" | "tab.created" | "workspace.created"
+    )
+}
+
 /// (pane, status) straight from the event payload. The event IS the
 /// transition — re-fetching via agent.get here races herdr's own state
 /// machine and records wrong/superseded statuses (stuck 🔄, invisible
@@ -205,30 +232,5 @@ fn parse_status_event(ev: &Value) -> Option<(&str, &str)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_status_event_wire_shape() {
-        let ev: Value = serde_json::from_str(
-            r#"{"data":{"agent":"opencode","agent_status":"working","pane_id":"wG:p2","workspace_id":"wG"},"event":"pane.agent_status_changed"}"#,
-        )
-        .unwrap();
-        assert_eq!(parse_status_event(&ev), Some(("wG:p2", "working")));
-    }
-
-    #[test]
-    fn test_parse_status_event_rejects_malformed() {
-        let missing: Value = serde_json::from_str(
-            r#"{"data":{"pane_id":"wG:p2"},"event":"pane.agent_status_changed"}"#,
-        )
-        .unwrap();
-        assert_eq!(parse_status_event(&missing), None);
-        let wrong_name: Value = serde_json::from_str(
-            r#"{"data":{"agent_status":"idle","pane_id":"wG:p2"},"event":"pane_agent_status_changed"}"#,
-        )
-        .unwrap();
-        // Caller matches the dotted name first; parser only reads data.
-        assert_eq!(parse_status_event(&wrong_name), Some(("wG:p2", "idle")));
-    }
-}
+#[path = "events_tests.rs"]
+mod tests;

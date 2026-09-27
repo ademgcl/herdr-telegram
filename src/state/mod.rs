@@ -28,12 +28,14 @@ mod targets;
 mod test_state;
 mod transient;
 mod typing;
+mod wake;
 
 pub use self::guard::OpGuard;
 pub(crate) use self::persist_paths::offset_file;
 pub use self::persist_paths::state_dir;
 #[cfg(test)]
 pub(crate) use self::persist_paths::test_home_dir;
+pub use self::wake::{wait as wait_reconcile, wake as wake_reconcile};
 /// Armed shell-run waiter: workspace id + arm instant (see `runwait`).
 /// Alias keeps the triple-nested map under clippy's type-complexity bar.
 pub(crate) type RunWait = (String, std::time::Instant);
@@ -162,11 +164,9 @@ pub struct State {
     /// that follow cannot be muted (`editMessageText` has no
     /// `disable_notification`) — so one always buzzed the phone.
     pub transient_on: AtomicBool,
-    /// One silent working message per pane (see `live`), only while
-    /// `/transient` is on. Pruned with pane death in hygiene.
+    /// One silent working message per pane; only while `/transient` is on.
     pub live: Mutex<HashMap<String, crate::state::live::LiveSlot>>,
-    /// Panes with a transient post in flight (single-flight). RAM-only,
-    /// always released in the same call; nothing to persist.
+    /// Panes with a transient post in flight (single-flight). RAM-only.
     pub live_sending: Mutex<HashSet<String>>,
 }
 

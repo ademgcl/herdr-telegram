@@ -113,6 +113,27 @@ async fn main() -> Res<()> {
                 s.save_offset().await;
                 break;
             }
+            // A pane/tab/workspace was born: scan NOW. The 60s watchdog
+            // is the floor for discovery, and herdr-spawned panes were
+            // invisible until it fired — the reported "I thought it did
+            // not arrive". Coalesced: `Notify` keeps one permit, so a
+            // burst of births is one extra scan, never a stampede, and
+            // reconcile is single-flight per process anyway.
+            _ = crate::state::wait_reconcile() => {
+                let s2 = s.clone();
+                tokio::spawn(async move {
+                    let started = std::time::Instant::now();
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(50),
+                        reconcile(&s2, false, "birth"),
+                    )
+                    .await;
+                    println!(
+                        "[main] birth scan done in {}ms",
+                        started.elapsed().as_millis()
+                    );
+                });
+            }
             _ = watchdog_tick.tick() => {
                 crate::ops::rotate_log_if_huge();
                 // Spawned, NEVER awaited inline: this arm holds the
