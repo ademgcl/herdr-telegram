@@ -1,7 +1,9 @@
 //! Reverse of Format-B titles: recover the herdr tab/pane core from a
 //! Telegram topic name that may carry rendering chrome. Split from
 //! `format` (300-line file limit).
-use super::chrome::{shed_once, short_space_for, strip_space_prefix, trim_stray};
+use super::chrome::{
+    shed_once, short_space_for, strip_space_prefix, strip_space_suffix, trim_stray,
+};
 use super::code;
 use super::format::strip_leading_word;
 
@@ -28,7 +30,9 @@ pub fn topic_core(raw: &str, space: &str, kind: &str) -> String {
     }
     let sp = space.trim();
     let short = short_space_for(sp);
-    let mut body = match strip_space_prefix(trimmed, sp, &short) {
+    let mut body = match strip_space_prefix(trimmed, sp, &short)
+        .or_else(|| strip_space_suffix(trimmed, sp, &short))
+    {
         Some(rest) if !rest.trim().is_empty() => rest.trim(),
         // Custom `[bracket]` (not this space): keep whole as core so a
         // pasted ` · code` still sheds below; unclosed `[tg main`

@@ -106,17 +106,17 @@ fn test_reset_desired_title_raw_split_custom() {
             true,
             Some("Custom")
         ),
-        "[tg] Custom"
+        "Custom . tg"
     );
 }
 
 #[test]
 fn test_reset_desired_title_verbatim_or_formatted() {
-    // 1:1 Format-B always: even a verbatim pre-reset custom gains
-    // the space wrap (user text preserved, kind lives in the icon).
+    // 1:1 always: even a verbatim pre-reset custom gains the space
+    // suffix (user text preserved, kind lives in the icon).
     assert_eq!(
         reset_desired_title(Some("My Title"), "tg", "My Title", "opencode", false, None),
-        "[tg] My Title"
+        "My Title . tg"
     );
     assert_eq!(
         reset_desired_title(
@@ -127,7 +127,7 @@ fn test_reset_desired_title_verbatim_or_formatted() {
             false,
             None
         ),
-        "[tg] My Title"
+        "My Title . tg"
     );
     // Split tab cores format — a stored title covering the pane
     // label re-wraps it bare.
@@ -140,7 +140,7 @@ fn test_reset_desired_title_verbatim_or_formatted() {
             true,
             None
         ),
-        "[tg] console o27"
+        "console o27 . tg"
     );
     assert_eq!(
         reset_desired_title(
@@ -151,20 +151,20 @@ fn test_reset_desired_title_verbatim_or_formatted() {
             true,
             Some("Custom Name")
         ),
-        "[tg] Custom Name"
+        "Custom Name . tg"
     );
     // Formatted otherwise (new/changed cores, case-only changes).
     assert_eq!(
         reset_desired_title(Some("[tg] api"), "tg", "backend", "opencode", false, None),
-        "[tg] backend"
+        "backend . tg"
     );
     assert_eq!(
         reset_desired_title(None, "tg", "backend", "opencode", false, None),
-        "[tg] backend"
+        "backend . tg"
     );
     assert_eq!(
         reset_desired_title(Some("My Title"), "tg", "my title", "opencode", false, None),
-        "[tg] my title"
+        "my title . tg"
     );
 }
 
