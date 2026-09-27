@@ -90,6 +90,28 @@ fn sidebar_column(lines: &[&str]) -> Option<usize> {
         .map(|(c, _)| c)
 }
 
+/// A sidebar's cells are WILDLY uneven — `▼ Context` next to
+/// `▶ Space Bunny Alpha …   204     $0.00` next to a file diff. Aligned
+/// body text (a code table, a markdown table) is the opposite: the cells
+/// to the right of a gap are near-identical in length, row after row.
+///
+/// That difference is what separates a real sidebar from a body that
+/// merely has aligned columns, and it matters: the geometry alone
+/// truncates single-column screens for the other 17 supported agents,
+/// silently eating part of a real answer.
+fn sidebar_cells_vary(cells: &[String]) -> bool {
+    if cells.len() < 3 {
+        return false;
+    }
+    let lens: Vec<usize> = cells.iter().map(|c| c.trim().chars().count()).collect();
+    let max = lens.iter().max().copied().unwrap_or(0);
+    let min = lens.iter().min().copied().unwrap_or(0);
+    // A sidebar spans a wide range of cell widths; a table's columns do
+    // not. Requiring a real spread also rejects a sidebar of one-token
+    // labels, which is not what these TUIs paint.
+    max >= 12 && max.saturating_sub(min) >= 8
+}
+
 /// Screen lines with the sidebar column cut off. A screen with no
 /// agreed column passes through untouched, so ordinary prose with wide
 /// gaps is never truncated.
@@ -98,6 +120,20 @@ fn strip_columns(text: &str) -> Vec<String> {
     let Some(col) = sidebar_column(&lines) else {
         return lines.iter().map(|l| l.trim_end().to_string()).collect();
     };
+    // Reject when the right-hand cells are uniform: that is an aligned
+    // body, not a sidebar, and cutting it would truncate a real reply.
+    let cells: Vec<String> = lines
+        .iter()
+        .filter_map(|l| {
+            l.chars()
+                .nth(col)
+                .map(|_| l.chars().skip(col).collect::<String>())
+        })
+        .filter(|c: &String| !c.trim().is_empty())
+        .collect();
+    if !sidebar_cells_vary(&cells) {
+        return lines.iter().map(|l| l.trim_end().to_string()).collect();
+    }
     lines
         .iter()
         .map(|l| {
@@ -228,3 +264,7 @@ mod gutter_tests {
         assert_eq!(strip_columns(text).join("\n"), text);
     }
 }
+
+#[cfg(test)]
+#[path = "screens_single_column_tests.rs"]
+mod single_column_tests;
