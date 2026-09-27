@@ -111,11 +111,12 @@ pub(crate) fn blocked_kb(pane: &str, options: &[String]) -> Value {
     if !opt_row.is_empty() {
         rows.push(Value::Array(opt_row));
     }
-    if rows.is_empty() {
-        rows.push(json!([
-            {"text": "✅ Confirm ⏎", "callback_data": format!("B:allow:{pane}")},
-        ]));
-    }
+    // NO guessing button when nothing parsed. A lone "Confirm" sends
+    // `B:allow`, which confirms whatever the agent happens to have
+    // highlighted — on an agent whose option layout we do not parse
+    // (kilo) that is a coin flip, and it answers the WRONG option
+    // silently. Offering no answer is strictly safer than offering a
+    // wrong one, and the row below always carries a way out.
     // 1:1 with the live TUI: an option dialog is answered by navigating
     // its options — free text has nowhere to land (typed keys + Enter
     // can confirm the wrong highlight). Type shows only for option-less
@@ -133,7 +134,10 @@ pub(crate) fn blocked_kb(pane: &str, options: &[String]) -> Value {
 pub(crate) fn blocked_card_text(q: &str, options: &[String]) -> String {
     // Same 1:1: promise typing only where the button exists.
     let hint = if options.is_empty() {
-        "\n\nTap an answer, or just type it."
+        // The buttons could not be read off the pane, so say that rather
+        // than implying there are answers to tap.
+        "\n\nCouldn't read the options off the pane — type your answer, \
+or `/read` to see it raw."
     } else {
         "\n\nTap an answer."
     };

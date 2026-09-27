@@ -214,7 +214,11 @@ fn test_type_button_only_without_options() {
     let kb = blocked_kb("w1:p1", &[]);
     let flat = kb.to_string();
     assert!(flat.contains("Type answer"), "text input needs Type");
-    assert!(flat.contains("Confirm"), "fallback Confirm stays");
+    // The guessing Confirm is GONE. It sent `B:allow`, which confirms
+    // whatever the agent has highlighted — on an agent whose option
+    // layout we do not parse (kilo) that answers the WRONG option
+    // silently. Offering no answer beats offering a wrong one.
+    assert!(!flat.contains("Confirm"), "no guessing button: {flat}");
 }
 
 #[test]
@@ -222,8 +226,11 @@ fn test_blocked_card_text_promises_typing_only_without_options() {
     let t = blocked_card_text("Pick?", &v(&["Yes", "No"]));
     assert!(t.contains("Tap an answer."));
     assert!(!t.contains("type it"));
+    // No parsed options: the card must say the buttons could not be read
+    // rather than imply there are answers to tap.
     let t = blocked_card_text("Name?", &[]);
-    assert!(t.contains("or just type it"));
+    assert!(t.contains("Couldn't read the options"), "{t}");
+    assert!(t.contains("/read"), "must offer a way to see it raw: {t}");
 }
 
 #[test]
