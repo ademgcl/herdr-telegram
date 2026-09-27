@@ -24,40 +24,91 @@ pub async fn read_screen_adaptive(socket: &str, pane: &str) -> Vec<String> {
     }
 }
 
-/// Consecutive spaces that mean "column gutter", not indentation.
-///
-/// A two-column TUI (Kilo and friends) glues a LIVE sidebar — model
-/// name, `Steps`/`Cost`, token counters, modified files, `esc
-/// interrupt` — onto the SAME lines as the conversation, separated by a
-/// run of padding. That breaks everything downstream: consecutive reads
-/// never match line-for-line (the counters move), so the line-exact
-/// delta anchor missed and its fallback re-served PRIOR-TURN scrollback
-/// as this turn's output; and the sidebar text rode along into replies
-/// and the transient. Cutting each line at its gutter keeps the
-/// conversation column and drops the furniture.
-///
-/// 20, not 8: the widest real indentation (nested code) stays under it,
-/// while a TUI gutter is far wider.
-const GUTTER_SPACES: usize = 20;
+/// Shortest space run that votes for a column split. Small on purpose:
+/// the cut lands on the agreed COLUMN, so a long line leaving a narrow
+/// gap is still caught.
+const MIN_GUTTER: usize = 3;
 
-/// One screen line, truncated at the first column gutter.
-fn strip_gutter(line: &str) -> String {
-    let mut run = 0usize;
-    for (i, c) in line.char_indices() {
-        if c == ' ' {
-            run += 1;
-            if run >= GUTTER_SPACES {
-                return line[..i].trim_end().to_string();
+/// A screen narrower than this has no sidebar column to find.
+const MIN_SIDEBAR_WIDTH: usize = 80;
+
+/// The split must sit at least this far into the screen, in tenths.
+const SPLIT_FRACTION: usize = 6;
+
+/// Rows that must agree before a column is believed to be the sidebar's
+/// left edge. Real capture: 37 of 60 rows vote for column 171.
+const MIN_VOTES: usize = 3;
+
+/// Narrowest screen that can carry a sidebar, and how far right the split
+/// must sit (as a fraction of the widest row).
+///
+/// A row with text, a gap, then more text is ambiguous on its own —
+/// prose with aligned columns looks identical. What settles it is WHERE:
+/// a sidebar occupies the right of a WIDE terminal (the real pane splits
+/// at 171 of ~210 columns), while aligned prose gaps sit near the start.
+/// Without this, four aligned lines of `"one<gap>two"` truncate themselves.
+/// A two-column TUI (Kilo and friends) glues a LIVE sidebar — model,
+/// `Steps`/`Cost`, context/cache meters, modified files — onto the SAME
+/// lines as the conversation. That breaks everything downstream:
+/// consecutive reads never match line-for-line (the counters move), so
+/// the line-exact delta anchor missed and its cut landed ABOVE the new
+/// output, re-serving prior-turn scrollback; and the sidebar rode
+/// straight into replies and the transient.
+///
+/// A fixed WIDTH threshold cannot work: the sidebar sits at a fixed
+/// COLUMN, so the gap before it SHRINKS as conversation text grows, and
+/// long lines left three or four spaces that slipped past the cut. So
+/// vote for the split instead — the gap END column with text on BOTH
+/// sides, most-voted wins. The shared indent never qualifies (nothing to
+/// its left) and a trailing gap never does (nothing to its right).
+fn sidebar_column(lines: &[&str]) -> Option<usize> {
+    let widest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    if widest < MIN_SIDEBAR_WIDTH {
+        return None;
+    }
+    let min_col = widest * SPLIT_FRACTION / 10;
+    let mut votes: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for l in lines {
+        let b: Vec<char> = l.chars().collect();
+        let mut run = 0usize;
+        for (i, c) in b.iter().enumerate() {
+            if *c == ' ' {
+                run += 1;
+            } else {
+                let (rs, re) = (i - run, i);
+                if run >= MIN_GUTTER && b[..rs].iter().any(|c| !c.is_whitespace()) {
+                    *votes.entry(re).or_default() += 1;
+                }
+                run = 0;
             }
-        } else {
-            run = 0;
         }
     }
-    line.trim_end().to_string()
+    votes
+        .into_iter()
+        .filter(|(c, n)| *n >= MIN_VOTES && *c >= min_col)
+        .max_by_key(|(c, n)| (*n, std::cmp::Reverse(*c)))
+        .map(|(c, _)| c)
+}
+
+/// Screen lines with the sidebar column cut off. A screen with no
+/// agreed column passes through untouched, so ordinary prose with wide
+/// gaps is never truncated.
+fn strip_columns(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(col) = sidebar_column(&lines) else {
+        return lines.iter().map(|l| l.trim_end().to_string()).collect();
+    };
+    lines
+        .iter()
+        .map(|l| {
+            let cut: String = l.chars().take(col).collect();
+            cut.trim_end().to_string()
+        })
+        .collect()
 }
 
 fn wrap(text: String) -> Vec<String> {
-    text.lines().map(strip_gutter).collect()
+    strip_columns(&text)
 }
 
 /// Visible-tail width for blocked panes. Kept equal to
@@ -101,84 +152,79 @@ async fn read_wide(socket: &str, pane: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod gutter_tests {
-    use super::{GUTTER_SPACES, strip_gutter};
+    use super::strip_columns;
 
-    /// Verbatim rows from the live Kilo pane (via `herdr pane read`): the
-    /// conversation and a churning sidebar share each line.
-    const LIVE: &[&str] = &[
-        "  ┃         herdr --session <name> [options]                                                                                                                               ▼ Models (1)",
-        "  ┃         herdr session attach <name>                                                                                                                                             Kilo Gateway",
-        "  ┃         herdr update [--handoff]                                                                                                                                       Model               Steps      Cost",
-        "  ┃         herdr pane get                                                                                                                                                ▶ Space Bunny Alpha …   204     $0.00",
-        "  ┃  …                                                                                                                                                                     Code Indexing",
-        "  ┃  Click to expand                                                                                                                                                        LSP",
-        "     herdr pane read is exactly what I need — the real screen.                                                                                                             Memory",
-        "  ┃         herdr --remote <ssh-target> [--session]                                                                                                                         Kilo Gateway · max",
+    /// Rows captured verbatim from the live Kilo pane, split at the real
+    /// sidebar edge: every row's conversation is padded out to the SAME
+    /// column (171 on the live pane) and the furniture hangs off it. These
+    /// are the narrow-gap rows that beat a 20-space threshold and shipped
+    /// `Context`, `Cache rate` and `src/jobs/progress.rs +20 -8` into the
+    /// card — the gap shrinks as the conversation gets longer, the column
+    /// never moves.
+    const ROWS: &[(&str, &str)] = &[
+        (
+            "     Still outstanding: the duplicate instant post.",
+            "\u{25bc} Reasoning",
+        ),
+        (
+            "     I would rather not touch the threshold on a guess.",
+            "Cache rate",
+        ),
+        (
+            "     Deployed: b440a47, PID 22360, tree clean.",
+            "src/jobs/progress.rs   +20 -8",
+        ),
     ];
 
+    /// Rebuild a screen the way the TUI paints it: shared column edge.
+    fn screen(edge: usize) -> String {
+        ROWS.iter()
+            .map(|(l, r)| {
+                let n = l.chars().count();
+                format!("{l}{}{r}", " ".repeat(edge.saturating_sub(n)))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
-    fn test_sidebar_is_cut_and_conversation_kept() {
-        let kept: Vec<String> = LIVE.iter().map(|l| strip_gutter(l)).collect();
-        // The conversation survives verbatim.
-        assert!(kept[0].contains("herdr --session <name> [options]"));
-        assert!(kept[1].contains("herdr session attach <name>"));
-        assert!(kept[3].contains("herdr pane get"));
-        // Every piece of churning furniture is gone.
-        for junk in [
-            "Models (1)",
-            "Kilo Gateway",
-            "Steps",
-            "Cost",
-            "Space Bunny Alpha",
-            "Code Indexing",
-            "LSP",
-            "Memory",
-        ] {
+    fn test_narrow_gap_rows_lose_the_sidebar() {
+        let joined = strip_columns(&screen(80)).join("\n");
+        for keep in ["duplicate instant", "not touch the threshold", "b440a47"] {
             assert!(
-                !kept.iter().any(|l| l.contains(junk)),
-                "sidebar survived: {junk:?} in {kept:?}"
+                joined.contains(keep),
+                "conversation lost {keep:?}: {joined:?}"
+            );
+        }
+        for junk in ["Reasoning", "Cache rate", "progress.rs", "+20 -8"] {
+            assert!(
+                !joined.contains(junk),
+                "sidebar survived: {junk:?} in {joined:?}"
             );
         }
     }
 
     #[test]
-    fn test_gutter_cut_makes_consecutive_reads_comparable() {
-        // The actual failure: same sentence, sidebar counters moved. Line
-        // -exact anchoring could never match, so the delta fallback cut
-        // above the new output and re-served the previous turn.
-        let before = strip_gutter(LIVE[3]);
-        let after = strip_gutter(
-            "  ┃         herdr pane get                                                                                                                                                ▶ Space Bunny Alpha …   262.4K (26%)  $0.07",
-        );
-        assert_eq!(
-            before, after,
-            "counter churn must not change the conversation line"
+    fn test_shared_indent_is_never_the_column() {
+        let cut = strip_columns(&screen(80));
+        assert!(
+            cut.iter().all(|l| l.starts_with("     ")),
+            "cut inside the indent: {cut:?}"
         );
     }
 
+    /// One column of agreement is noise, not a sidebar.
     #[test]
-    fn test_normal_indentation_is_never_cut() {
-        // Real content: nested code and indented prose must survive.
-        for line in [
-            "        let x = 1;",
-            "    - a bullet",
-            "  ┃         nested code stays",
-            "a  b  c",
-        ] {
-            assert_eq!(strip_gutter(line), line.trim_end(), "cut: {line:?}");
-        }
-        // Must out-worst-case indentation (checked at compile time).
-        const { assert!(GUTTER_SPACES > 8) };
+    fn test_a_single_agreeing_row_is_not_a_sidebar() {
+        let text = "left column here            right one\nplain line\nanother line";
+        assert_eq!(strip_columns(text).join("\n"), text);
     }
 
+    /// Ordinary prose with wide gaps must survive untouched: without an
+    /// agreed column there is nothing to cut on.
     #[test]
-    fn test_opencode_status_bar_keeps_its_marker() {
-        // The existing inventory shape: truncated, still recognisable as
-        // chrome by its leading marker (never mistaken for a reply).
-        let row = strip_gutter(
-            " ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt                                                                                                                  145.6K (14%)  ctrl+p commands    ~/projects/herdr-telegram:main",
-        );
-        assert!(row.contains("esc interrupt"));
-        assert!(!row.contains("145.6K"));
+    fn test_single_column_prose_is_untouched() {
+        let text = "one        two\nthree      four\nfive       six\nseven      eight";
+        assert_eq!(strip_columns(text).join("\n"), text);
     }
 }
