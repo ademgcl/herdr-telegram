@@ -96,37 +96,38 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
             // transient retires in the exit footer), buzz nothing.
             break;
         }
-        // New prompt on a reused watcher restarts the episode timers and
-        // drops the old prompt's stream state: stale accumulation belongs
-        // to the previous turn.
+        // New prompt: restart the episode timers and drop the old
+        // prompt's stream state. Stale accumulation belongs to the
+        // previous turn.
         let epoch = job.epoch.load(Ordering::Relaxed);
         if epoch != last_epoch {
             // The publish that created this job bumps the epoch too, and
-            // the watcher is spawned before that publish lands — so the
-            // first bump a fresh watcher sees is its OWN turn, not a
-            // supersede. Clearing acc there dropped the new turn's first
-            // output burst: the transient sat on the placeholder forever
-            // and the final lost its acc body. See
-            // `live::is_creating_publish` (unit-tested).
+            // the watcher is spawned before it lands — so a fresh
+            // watcher's first bump is its OWN turn, not a supersede.
             let creating = super::live::is_creating_publish(started_at, bumps_seen, epoch);
             bumps_seen += 1;
             last_epoch = epoch;
             episode.reset();
             settled_since = None;
+            // The accumulator belongs to the turn that filled it, so drop
+            // it on EVERY epoch change. This was gated on `!creating` — a
+            // boolean standing in for turn identity, and it lies when a
+            // creating publish coalesces, leaving the previous turn's prose
+            // in the new turn's transient. A fresh job's acc is empty, so
+            // clearing on its own creating bump costs nothing.
+            acc.clear();
             if !creating {
-                acc.clear();
-                // The baseline must go with it: a persisted baseline makes
-                // the next delta re-deliver the previous turn's output as
-                // fresh (content leak across turns).
+                // The baseline is NOT unconditional: a fresh job anchored
+                // its baseline before the submit, and resetting it there
+                // drops this turn's first burst. A reused job's baseline
+                // covers the previous turn, so it must go — else the delta
+                // re-delivers it as fresh.
                 job.reset_baseline().await;
             }
             retry_wait = RETRY_BACKOFF_SECS;
             // Herdr-error streak belongs to the old prompt: 11 failures
             // there + 1 here must not back the new prompt off for 60s.
             fails = 0;
-            // Baseline persists: it already covers everything streamed,
-            // so the next delta is exactly the new turn's output
-            // (resetting drops the first burst — fresh and reused).
         }
         // Reconnect the event stream lazily — never in a hot loop.
         // Bounded: a hung ack degrades to polling, never freezes pre-select.
