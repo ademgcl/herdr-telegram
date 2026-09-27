@@ -1,10 +1,12 @@
-//! Instant progress message for prompt turns: the pane's ONE silent
-//! working message (placeholder on first submit, transient tail edited
-//! in place after that — thinking, tool echoes, progress verbs), then
-//! retired when the buzzing final lands as a NEW message (deleted with
-//! `/transient on`, kept as history when off). After the very first
-//! muted entry, every update is an edit (edits never notify) — only
-//! finals buzz, so the notification shade holds finals alone.
+//! Instant progress message for prompt turns: ONE silent working message
+//! PER TURN (placeholder on submit, that turn's transient tail edited in
+//! place after), retired when that turn's buzzing final lands as a NEW
+//! message (deleted with `/transient on`, kept as history when off). A
+//! turn never borrows the previous turn's message — every user message
+//! gets its own, so a second message can never render onto the first's.
+//! After the very first muted entry, every update is an edit (edits
+//! never notify) — only finals buzz, so the notification shade holds
+//! finals alone.
 //!
 //! Fail-closed: every send/edit/delete is best-effort (a miss retries
 //! next tick, a gone message frees the slot). No lock is held across an

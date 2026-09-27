@@ -59,20 +59,35 @@ async fn e2e_turn_posts_instant_then_final_and_retires_transient() {
 }
 
 /// Auto-remove off (the default): the working message stays as history
-/// when the turn ends. A later turn must never destroy that history:
-///
-/// the reported "second msg deleted the first reply". If the first
-/// turn rendered its answer into its message, no later edit may reset
-/// that message to the placeholder; the new turn posts its own
-/// placeholder instead.
+/// when the turn ends. The next turn must get its OWN working message:
+/// reusing the first turn's is the reported "second msg overrode the
+/// first — same transient with the wrong history".
 #[tokio::test]
-async fn e2e_transient_kept_by_default_and_reused_next_turn() {
+async fn e2e_transient_kept_by_default_and_new_each_turn() {
     let h = Harness::start().await;
     h.map_topic();
     assert!(!h.s.transient_remove());
     h.run_turn("first", &["one"]).await;
     assert_eq!(h.sent_count("deleteMessage"), 0, "kept, never deleted");
     let first_instant = instant_mid(&h);
+
+    // The reported precondition, reproduced: the first turn settled
+    // before any tick rendered its tail, so its message was still the
+    // BARE placeholder. The log for the live report shows exactly this
+    // — `post m2957` then straight to `finalize`, no edit in between —
+    // and the second turn then reused m2957 as its own working message.
+    // (A turn that DID render took the post-fresh path already, which is
+    // why a naive two-turn test never caught this.)
+    let bare = h.s.live_get(&h.pane).await.expect("turn one left a slot");
+    assert_eq!(bare.mid, first_instant, "the slot is turn one's message");
+    h.s.live_put(
+        &h.pane,
+        crate::state::live::LiveSlot {
+            text: crate::jobs::progress::THINKING.to_string(),
+            ..bare
+        },
+    )
+    .await;
 
     h.run_turn("second", &["two"]).await;
     let second_final = sends(&h)
@@ -81,36 +96,32 @@ async fn e2e_transient_kept_by_default_and_reused_next_turn() {
         .expect("second final")
         .sent_id();
     assert_ne!(second_final, first_instant, "final is still a new message");
-    // History check over the edit log: once the first message showed the
-    // answer, no later edit may reset it to the placeholder. (If the
-    // first turn never rendered, there is nothing to destroy — the
-    // check is vacuously true.)
-    let mut saw_answer = false;
+
+    // The regression, stated directly: the second turn's transient is a
+    // message of its own, and the first turn's message never carries the
+    // second turn's output (nor gets reset to the placeholder).
+    let placeholders: Vec<i64> = sends(&h)
+        .iter()
+        .filter(|c| c.text() == crate::jobs::progress::THINKING)
+        .map(|c| c.sent_id())
+        .collect();
+    assert!(
+        placeholders.contains(&first_instant),
+        "first turn posted its own placeholder: {placeholders:?}"
+    );
+    assert!(
+        placeholders.iter().any(|m| *m != first_instant),
+        "second turn posted its OWN placeholder, never the first's: {placeholders:?}"
+    );
     for c in edits(&h) {
-        if c.message_id() != first_instant {
-            continue;
-        }
-        if c.text().contains("one") {
-            saw_answer = true;
-        } else if saw_answer {
-            assert_ne!(
-                c.text(),
-                crate::jobs::progress::THINKING,
-                "second turn reset the first reply to the placeholder"
+        if c.message_id() == first_instant {
+            assert!(
+                !c.text().contains("two"),
+                "second turn rendered onto the first turn's message: {:?}",
+                c.text()
             );
         }
     }
-    // The second turn is never instant-less: it reuses the bare
-    // placeholder or posts its own.
-    assert!(
-        sends(&h)
-            .iter()
-            .filter(|c| c.text() == crate::jobs::progress::THINKING)
-            .count()
-            >= 1,
-        "second turn must have its own placeholder: {:?}",
-        h.sent_texts()
-    );
 }
 
 /// Dead transient (the user deleted it): the next turn must detect and

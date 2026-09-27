@@ -1,110 +1,44 @@
-//! New-turn claim on the shared slot (split from `progress`: 300-line
-//! file limit). Posts the silent placeholder before the slow submit RPC,
-//! and decides whether the existing slot is reused or superseded.
+//! New-turn claim on the slot (split from `progress`: 300-line file
+//! limit). Posts this turn's own silent placeholder before the slow
+//! submit RPC. A turn NEVER borrows the previous turn's message.
 use crate::{
-    jobs::{
-        job::Job,
-        progress::{THINKING, not_modified, retry_at},
-    },
-    state::{AppState, live::LiveSlot},
-    telegram::errors::edit_gone,
+    jobs::{job::Job, progress::THINKING},
+    state::AppState,
 };
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::progress_retire::post_fresh;
 
-/// New-turn claim on the shared slot: a BARE placeholder is edited back
-/// to the placeholder (the old tail never poses as the new turn) and
-/// bumps the generation (a stale retire gated on the old one stands
-/// down); delivered output is never overwritten (see the arm below); a
-/// changed dest drops the stale thread's message and posts fresh. Silent
-/// (no buzz) — the final owns the notification. Best-effort: a miss
-/// retries on the next stream tick.
+/// New-turn claim on the slot: post THIS turn's own placeholder, silent
+/// (no buzz — the final owns the notification), before the slow submit
+/// RPC so the feedback is instant.
+///
+/// A turn owns its transient outright: minted here, edited in place with
+/// that turn's tail, retired when its final lands. The previous turn's
+/// message is never reused. Editing it back to the placeholder instead —
+/// the old behavior for a slot still showing a bare `💭 thinking…` — is
+/// what made a second Telegram message render onto the first turn's
+/// message ("the second msg overrode the first, same transient with the
+/// wrong history"). It is also the only case where reuse was safe, since
+/// a bare placeholder looks like it holds no history; it still reads as
+/// one message per turn in the chat, so it was never safe.
+///
+/// The generation still bumps (`turn + 1`) so a stale retire gated on
+/// the old entry stands down. The old message is left exactly as it was:
+/// with `/transient` off it IS the user's history, and with it on the
+/// previous turn's own retire deletes it. Best-effort — a miss banks an
+/// unsent slot and the next stream tick retries.
 pub async fn ensure_instant(s: &AppState, pane: &str, job: &Arc<Job>) {
     let dest = *job.dest.lock().await;
-    let now = Instant::now();
     match s.live_get(pane).await {
+        // Any live slot on this dest is an EARLIER turn's message: post
+        // fresh beside it, never on top of it.
         Some(sl) if (sl.chat, sl.thread) == dest && sl.mid >= 0 => {
-            if sl.text != THINKING {
-                // Delivered output in the slot: KEEP it, post this turn's
-                // own placeholder. Resetting it destroyed the previous
-                // reply in place — the reported "my second message deleted
-                // the first reply and replaced it with thinking…", which
-                // then also sat stuck on the placeholder forever (a
-                // superseded turn's accumulation is dropped, so nothing
-                // refilled it). With `/transient` off that message IS the
-                // user's copy of the reply: history from now on. No
-                // liveness probe needed — the action is the same whether
-                // it is alive or gone.
-                println!(
-                    "[live] supersede {pane} m{}: keeps delivered output, posting fresh",
-                    sl.mid
-                );
-                post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await;
-                return;
-            }
-            // Same message, new turn: reset + claim the generation.
-            // The reset ALWAYS runs — it is the liveness probe for the
-            // slot: a message the user deleted (or one that aged out)
-            // must be detected and re-posted, never trusted because it
-            // still looks like the placeholder (the old early-return
-            // left a dead slot looking alive, so the turn ran with no
-            // instant feedback at all).
-            //
-            // Bypasses the edit cooldown: at most one attempt per turn
-            // (bounded, never churn), while a throttled reset leaves the
-            // previous turn's tail posing as the new turn's status — and
-            // a fast-settling turn ends before any tick retries.
-            let res = s.tg.try_edit_msg(sl.chat, sl.mid, THINKING, None).await;
-            let emsg = res
-                .as_ref()
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            if res.is_ok() || not_modified(&emsg) {
-                // Converged (edited, or already the placeholder —
-                // Telegram reports the no-op edit; logging it would
-                // spam every turn).
-                if sl.text != THINKING {
-                    println!("[live] reset {pane} m{} to placeholder", sl.mid);
-                }
-                s.live_put(
-                    pane,
-                    LiveSlot {
-                        text: THINKING.to_string(),
-                        at: Some(now),
-                        turn: sl.turn + 1,
-                        ..sl
-                    },
-                )
-                .await;
-            } else if edit_gone(&emsg) {
-                // Dead message (deleted by the user, or aged out):
-                // free the slot and post fresh so the turn is never
-                // silently instant-less.
-                println!("[live] reset {pane} m{} gone, repost fresh", sl.mid);
-                s.live_take_if(pane, sl.mid, sl.turn).await;
-                s.forget_target(sl.chat, sl.mid).await;
-                post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await;
-            } else {
-                // Fail-visible + flood-aware: a silent retry here left
-                // the user staring at a typing indicator with no message.
-                println!(
-                    "[live] reset {pane} m{} failed: {}",
-                    sl.mid,
-                    crate::types::mask_home(&emsg)
-                );
-                s.live_put(
-                    pane,
-                    LiveSlot {
-                        at: Some(retry_at(&now, &emsg)),
-                        turn: sl.turn + 1,
-                        ..sl
-                    },
-                )
-                .await;
-            }
+            println!(
+                "[live] new turn {pane}: m{} was the previous turn's, posting own",
+                sl.mid
+            );
+            post_fresh(s, pane, job, dest, THINKING, sl.turn + 1).await;
         }
         Some(sl) if sl.mid >= 0 => {
             // Retargeted (remap): the old thread is stale — drop it

@@ -140,10 +140,11 @@ fn test_edit_due_throttles_then_releases() {
 }
 
 #[tokio::test]
-async fn test_keep_mode_retire_leaves_slot_for_reuse() {
-    // Auto-remove off (the default): the retire is a no-op — same
-    // message, same slot, next turn reuses it with zero new
-    // notification entries. No RPC fires here either.
+async fn test_keep_mode_retire_leaves_slot_for_the_next_turn() {
+    // Auto-remove off (the default): the retire is a no-op — the slot
+    // survives so the next turn can continue the generation lineage and
+    // post its OWN message beside it (it never edits this one). No RPC
+    // fires here either.
     let (s, _dir) = crate::state::cancel::isolated_state();
     assert!(!s.transient_remove());
     s.live_put("w1:p1", slot(42, 3)).await;
