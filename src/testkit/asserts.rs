@@ -24,8 +24,10 @@ impl Harness {
     pub fn fault(&self, method: &str, description: &str) {
         self.tg.fault_next(self.chat, method, description);
     }
-    /// Fault for a method that carries no chat id (getFile).
-    pub fn fault_any(&self, method: &str, description: &str) {
-        self.tg.fault_global(method, description);
+    /// Fault for a method that carries no chat id (getFile), scoped to
+    /// this case's file id — an unscoped bucket would fail a parallel
+    /// case's happy path.
+    pub fn fault_any(&self, method: &str, file_id: &str, description: &str) {
+        self.tg.fault_global(method, file_id, description);
     }
 }

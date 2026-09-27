@@ -46,7 +46,7 @@ impl Call {
 #[derive(Default)]
 pub struct FakeTg {
     pub calls: Mutex<Vec<Call>>,
-    faults: Mutex<HashMap<(i64, String), Vec<String>>>,
+    faults: Mutex<HashMap<(i64, String, String), Vec<String>>>,
     next_id: Mutex<i64>,
 }
 
@@ -76,20 +76,27 @@ impl FakeTg {
     pub fn sent_count(&self, chat: i64, method: &str) -> usize {
         self.calls_of(chat, method).len()
     }
-    /// Unscoped count for calls that carry no chat id (getFile).
-    pub fn count_all(&self, method: &str) -> usize {
+    /// Count `method` calls carrying one `file_id` — the per-case scope
+    /// for chat-less methods (getFile carries no chat id, so an
+    /// unscoped count would include every parallel case's traffic).
+    pub fn count_file(&self, method: &str, file_id: &str) -> usize {
         self.calls
             .lock()
             .unwrap()
             .iter()
-            .filter(|c| c.method == method)
+            .filter(|c| c.method == method && c.body["file_id"].as_str() == Some(file_id))
             .count()
     }
-    /// Queue a failure for the next `method` call in ANY chat (for
-    /// chat-less methods like getFile, where the per-chat key can never
-    /// match).
-    pub fn fault_global(&self, method: &str, description: &str) {
-        self.fault_next(0, method, description);
+    /// Queue a failure for the next `method` call on `file_id` in ANY
+    /// chat (chat-less methods like getFile, where the per-chat key can
+    /// never match — keying on the file id keeps cases independent).
+    pub fn fault_global(&self, method: &str, file_id: &str, description: &str) {
+        self.faults
+            .lock()
+            .unwrap()
+            .entry((0, method.to_string(), file_id.to_string()))
+            .or_default()
+            .push(description.to_string());
     }
     /// Queue a failure for the next `method` call in `chat` (other
     /// chats are untouched — parallel tests stay independent).
@@ -97,14 +104,17 @@ impl FakeTg {
         self.faults
             .lock()
             .unwrap()
-            .entry((chat, method.to_string()))
+            .entry((chat, method.to_string(), String::new()))
             .or_default()
             .push(description.to_string());
     }
-    /// Per-chat fault first, then the global bucket (chat-less calls).
-    fn take_fault(&self, chat: i64, method: &str) -> Option<String> {
+    /// Per-chat fault first, then the per-file bucket (chat-less calls).
+    fn take_fault(&self, chat: i64, method: &str, file_id: &str) -> Option<String> {
         let mut m = self.faults.lock().unwrap();
-        for key in [(chat, method.to_string()), (0, method.to_string())] {
+        for key in [
+            (chat, method.to_string(), String::new()),
+            (0, method.to_string(), file_id.to_string()),
+        ] {
             if let Some(q) = m.get_mut(&key)
                 && !q.is_empty()
             {
@@ -234,7 +244,7 @@ async fn serve_one(sock: &mut tokio::net::TcpStream, fake: Arc<FakeTg>) -> std::
         assigned_id: None,
     });
 
-    let payload = match fake.take_fault(chat, &method) {
+    let payload = match fake.take_fault(chat, &method, body["file_id"].as_str().unwrap_or("")) {
         Some(desc) => json!({"ok": false, "error_code": 400, "description": desc}),
         None => match method.as_str() {
             "sendMessage" => {

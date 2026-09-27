@@ -49,14 +49,12 @@ pub struct Harness {
 }
 
 impl Harness {
-    /// Fakes first, then ONE state mint pointed at the fake socket —
-    /// two mints would deadlock on the env guard `isolated_state` holds.
-    /// The env var is set BEFORE the mint: `TelegramClient::new` reads
-    /// it there (test builds only), and the guard already serializes
-    /// env access against every other test.
+    /// Fakes first, then ONE state mint pointed at the fake socket.
+    /// The fake base is published BEFORE the mint: `TelegramClient::new`
+    /// reads it there (test builds only). It is write-once per binary
+    /// (the URL never changes), so parallel cases cannot steal it and
+    /// no env mutation is needed.
     pub async fn start() -> Harness {
-        // One fake per binary: the env override is written once (the
-        // URL never changes), so parallel cases cannot steal it.
         let (tg, url) = tg_fake::start();
         let n = case_seq();
         let chat = 5_000 + n;
@@ -65,7 +63,7 @@ impl Harness {
         let dir = std::env::temp_dir().join(socket_seq());
         std::fs::create_dir_all(&dir).expect("herdr fake dir");
         let (herdr, sock) = herdr_fake::start(&dir).await;
-        unsafe { std::env::set_var("HERDR_TG_FAKE_BASE", url) };
+        crate::telegram::client::set_fake_base(url);
         let (s, dir_guard) =
             crate::state::cancel::isolated_state_for(&sock, Some(chat), vec![OWNER]);
         Harness {

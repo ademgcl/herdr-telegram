@@ -1,36 +1,25 @@
 //! Isolated AppState for tests (shared by cancel/hygiene/ctl suites).
-/// Cancel + reap paths persist jobs.state, so tests must never touch the
-/// repo's live files: each call mints a fresh temp state dir. Serialized
-/// via a static mutex: `set_var`/`var` is UB under parallel `cargo test`
-/// (Edition 2024 marks it unsafe), so holders keep the guard for the
-/// whole test (`_dir` alive) and restore the prior value on drop.
-/// Split from `cancel` (300-line file limit); re-exported there so
-/// existing `state::cancel::isolated_state` call sites keep working.
+//! Cancel + reap paths persist jobs.state, so tests must never touch the
+//! repo's live files: each call mints a fresh temp state dir, published
+//! as a THREAD-LOCAL (see `persist_paths::set_test_dir`) rather than an
+//! env var. Every test is a `#[tokio::test]`, so its body — and every
+//! task it spawns — stays on that one thread and the dir is exactly as
+//! isolated as before. The env var is the wrong tool: `set_var` is UB
+//! beside a live `env::var` on another thread (Edition 2024), and the
+//! process-wide mutex that papered over it was held across the whole
+//! test, serializing every case and leaving 7 of 8 cores idle.
+//! Split from `cancel` (300-line file limit); re-exported there so
+//! existing `state::cancel::isolated_state` call sites keep working.
 use super::State;
-
-#[cfg(test)]
-static TEST_ENV_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 pub(crate) struct TestStateDir {
     path: std::path::PathBuf,
-    _guard: std::sync::MutexGuard<'static, ()>,
-    old: Option<std::ffi::OsString>,
-    old_home: Option<std::ffi::OsString>,
 }
 #[cfg(test)]
 impl Drop for TestStateDir {
     fn drop(&mut self) {
-        if let Some(old) = self.old.take() {
-            unsafe { std::env::set_var("HERDR_STATE_DIR", old) };
-        } else {
-            unsafe { std::env::remove_var("HERDR_STATE_DIR") };
-        }
-        if let Some(old) = self.old_home.take() {
-            unsafe { std::env::set_var("HOME", old) };
-        } else {
-            unsafe { std::env::remove_var("HOME") };
-        }
+        super::persist_paths::clear_test_dir();
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
@@ -51,8 +40,6 @@ pub(crate) fn isolated_state_with_forum(forum: Option<i64>) -> (super::AppState,
 }
 
 /// E2E harness state: like `isolated_state_with_forum` but pointed at
-/// the fake herdr socket, so prompts really submit and settle.
-/// E2E harness state: like `isolated_state_with_forum` but pointed at
 /// the fake herdr socket with real owners, so prompts route and submit.
 #[cfg(test)]
 pub(crate) fn isolated_state_for(
@@ -60,9 +47,6 @@ pub(crate) fn isolated_state_for(
     forum: Option<i64>,
     owners: Vec<i64>,
 ) -> (super::AppState, TestStateDir) {
-    let guard = TEST_ENV_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let old = std::env::var_os("HERDR_STATE_DIR");
-    let old_home = std::env::var_os("HOME");
     let n = TEST_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -70,13 +54,13 @@ pub(crate) fn isolated_state_for(
         .unwrap_or(0);
     let path = std::env::temp_dir().join(format!("ht-{n}-{nanos}"));
     std::fs::create_dir_all(&path).expect("test tempdir");
-    unsafe { std::env::set_var("HERDR_STATE_DIR", &path) };
     // Hermetic HOME: State::new + TopicStorage migrate legacy
     // `~/.local/share/herdr-telegram/{focus,topics.json}` when the fresh
     // dir is empty. Without this the dev machine's real focus (e.g.
     // `w8:p1`) leaks into every isolated state and stale focus shadows
-    // the sole-agent fallback (see handlers::target dm_pane).
-    unsafe { std::env::set_var("HOME", &path) };
+    // the sole-agent fallback (see handlers::target dm_pane). The
+    // thread-local dir doubles as HOME — same value the env var carried.
+    super::persist_paths::set_test_dir(path.clone());
     let cfg = crate::config::Cfg {
         token: "test-token".to_string(),
         socket: socket.to_string(),
@@ -84,13 +68,5 @@ pub(crate) fn isolated_state_for(
         forum,
     };
     let s = State::new(cfg).expect("test state");
-    (
-        s,
-        TestStateDir {
-            path,
-            _guard: guard,
-            old,
-            old_home,
-        },
-    )
+    (s, TestStateDir { path })
 }

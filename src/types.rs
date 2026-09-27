@@ -4,16 +4,15 @@ pub type Res<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 // existing `types::{write_private, chmod_private, unique_tmp}` call
 // sites keep working unchanged.
 pub(crate) use crate::fsutil::{chmod_private, prune_corrupt_backups, unique_tmp, write_private};
-
 pub const TG_POLL_SECS: i64 = 25;
 pub const STALE_SECS: u64 = 600;
 /// Setup-note window: an unconfigured group reminds once a day —
 /// time-bounded like stale notices, never forever-mute, never spam.
 pub const NAGGED_SECS: u64 = 86400;
-/// Bound for silent live RPCs (stream edits/sends): flood-wait retries
-/// flood-wait retries must not stall settle past the tick — a miss
-/// retries next tick. Single source for jobs + telegram (distinct from
-/// the edit cooldown above, same seconds by design).
+/// Bound for silent live RPCs (stream edits/sends): a flood-wait retry
+/// must not stall settle past the tick — a miss retries next tick.
+/// Single source for jobs + telegram (same seconds as the edit
+/// cooldown above, by design).
 pub const LIVE_RPC_TIMEOUT_SECS: u64 = 4;
 pub const MAX_MSG_UNITS: usize = 3900;
 pub const SINGLE_INSTANCE_PORT: u16 = 47319;
@@ -69,11 +68,9 @@ pub struct PromptRequest {
 /// Mask $HOME anywhere in a display string (chat/log hygiene: herdr
 /// errors carry socket/cwd paths with the username). Boundary-aware:
 /// `/Users/x2` never matches `/Users/x`; only a trailing `/` or
-/// end-of-string counts. Pure so it is unit-tested.
-///
-/// Scope note: HOME-only by design (error strings keep their reasons).
-/// Full display masking (tokens, chat IDs) lives in
-/// `ops::mask::mask_line` for console output — don't merge the two.
+/// end-of-string counts. Pure so it is unit-tested. HOME-only by design
+/// (error strings keep reasons) — full display masking (tokens, chat
+/// ids) lives in `ops::mask::mask_line`; don't merge the two.
 pub fn mask_home_with(s: &str, home: &str) -> String {
     let home = home
         .strip_suffix('/')
@@ -101,8 +98,13 @@ pub fn mask_home_with(s: &str, home: &str) -> String {
 
 /// Process $HOME (empty when unset). Single source for every
 /// `env::var("HOME")` read — dup'd literals re-drift (one site once
-/// read `HOM` and every path silently fell back to CWD-relative).
+/// read `HOM` and every path silently fell back to CWD-relative). Tests
+/// resolve to the thread-local state dir (see `state::persist_paths`).
 pub fn home_dir() -> String {
+    #[cfg(test)]
+    if let Some(d) = crate::state::test_home_dir() {
+        return d;
+    }
     std::env::var("HOME").unwrap_or_default()
 }
 
@@ -152,7 +154,7 @@ pub fn collapse_home(path: &str, home: &str) -> String {
 /// cleared pane (non-empty all-blank lines) must never wipe the delta
 /// baseline — anchoring it reposts scrollback as fresh on the next tick.
 /// Single source for every `seen` anchor (jobs finalize paths, the
-/// spontaneous stray arm, `Job::anchor_baseline`, the status watchdog) —
+/// spontaneous stray arm, `Job::anchor_baseline`, the status watchdog);
 /// dup'd predicates re-drift (one site once checked emptiness only and
 /// cleared panes wiped).
 pub fn anchorable_screen(screen: &[String]) -> bool {
@@ -259,8 +261,8 @@ mod tests {
         assert!(is_non_agent_status("dead"));
         assert!(is_non_agent_status("closed"));
         assert!(is_non_agent_status("exited"));
-        // Live agent statuses (incl. blocked — still an agent waiting
-        // on input) are never corpse.
+        // Live agent statuses (incl. blocked — an agent awaiting input)
+        // are never corpse.
         assert!(!is_non_agent_status("working"));
         assert!(!is_non_agent_status("idle"));
         assert!(!is_non_agent_status("done"));
@@ -276,10 +278,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777,
-                0o600
-            );
+            let mode = std::fs::metadata(&p).expect("meta").permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
         }
         let _ = std::fs::remove_file(&p);
     }

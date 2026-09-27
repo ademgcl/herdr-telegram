@@ -3,6 +3,13 @@
 //! buzz exactly once.
 use super::Harness;
 
+/// getFile carries no chat id, so its fake-side scope is the file id
+/// itself. Distinct per case: a shared id would put the failure-injection
+/// case's queued fault in the happy-path case's bucket when they run
+/// beside each other.
+const FILE: &str = "file-abc";
+const FILE_FAULTED: &str = "file-abc-faulted";
+
 /// Photo in an agent topic: downloaded, written under the state dir and
 /// attached to the prompt as an absolute path (agents resolve relative
 /// to their own cwd).
@@ -10,9 +17,10 @@ use super::Harness;
 async fn e2e_photo_downloads_and_attaches_to_prompt() {
     let h = Harness::start().await;
     h.map_topic();
-    // getFile carries no chat id, so count the delta, not the total.
-    let getfile_before = h.tg.count_all("getFile");
-    h.say_photo("why is this failing?", "file-abc").await;
+    // getFile carries no chat id, so scope the count to this case's
+    // file id — an unscoped one counts every parallel case's calls.
+    let getfile_before = h.tg.count_file("getFile", FILE);
+    h.say_photo("why is this failing?", FILE).await;
     h.wait_for("submit with the image", || h.herdr.submit_count() >= 1)
         .await;
     let submitted = h.herdr.submitted().join("\n");
@@ -38,7 +46,7 @@ async fn e2e_photo_downloads_and_attaches_to_prompt() {
     );
     // And the getFile + raw download really went through the API.
     assert_eq!(
-        h.tg.count_all("getFile") - getfile_before,
+        h.tg.count_file("getFile", FILE) - getfile_before,
         1,
         "exactly one getFile for one photo"
     );
@@ -50,8 +58,8 @@ async fn e2e_photo_downloads_and_attaches_to_prompt() {
 async fn e2e_failed_photo_download_refuses_visibly() {
     let h = Harness::start().await;
     h.map_topic();
-    h.fault_any("getFile", "Bad Request: file is too big");
-    h.say_photo("look at this", "file-abc").await;
+    h.fault_any("getFile", FILE_FAULTED, "Bad Request: file is too big");
+    h.say_photo("look at this", FILE_FAULTED).await;
     h.wait_for("fetch-failure notice", || {
         h.sent_texts()
             .iter()

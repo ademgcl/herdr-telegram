@@ -7,6 +7,13 @@ use std::path::PathBuf;
 /// behavior). Launchd and manual runs MUST use the same one — split
 /// directories mean replayed prompts and orphaned intents.
 pub fn state_dir() -> PathBuf {
+    // Test override first: a per-test dir, scoped to this thread (see
+    // `set_test_dir`). Read before the env so a parallel case can never
+    // observe another case's `HERDR_STATE_DIR`.
+    #[cfg(test)]
+    if let Some(d) = test_dir() {
+        return d;
+    }
     let raw = crate::config::env_or_file("HERDR_STATE_DIR")
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
@@ -32,6 +39,39 @@ pub fn state_dir() -> PathBuf {
 
 pub(crate) fn focus_file() -> PathBuf {
     state_dir().join("focus.state")
+}
+
+// Per-test state dir, thread-scoped. Cases used to get isolation from
+// `set_var("HERDR_STATE_DIR")` plus a process-wide mutex held for the
+// WHOLE test — which serialized every case and was UB anyway (Edition
+// 2024: `set_var` races any live `env::var` elsewhere). A `#[tokio::test]`
+// body runs on ONE thread, so a thread-local isolates just as well and
+// lets cases run fully parallel.
+#[cfg(test)]
+thread_local! {
+    static TEST_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_dir(dir: PathBuf) {
+    TEST_DIR.with(|d| *d.borrow_mut() = Some(dir));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_test_dir() {
+    TEST_DIR.with(|d| *d.borrow_mut() = None);
+}
+
+#[cfg(test)]
+fn test_dir() -> Option<PathBuf> {
+    TEST_DIR.with(|d| d.borrow().clone())
+}
+
+/// The same thread-local dir as $HOME for tests (hermetic against the
+/// legacy `~/.local/share/herdr-telegram` migration).
+#[cfg(test)]
+pub(crate) fn test_home_dir() -> Option<String> {
+    test_dir().map(|d| d.display().to_string())
 }
 
 pub(crate) fn offset_file() -> PathBuf {

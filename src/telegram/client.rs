@@ -2,6 +2,19 @@ use crate::types::Res;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+/// Test-only: the e2e harness points the client at a local fake API.
+/// Written once per binary from the shared fake's own startup, read by
+/// every `new` — a `OnceLock` publishes it safely, where the old
+/// `set_var` per test raced live `env::var` readers (Edition 2024 UB)
+/// and needed the whole-suite lock to stay coherent.
+#[cfg(test)]
+static FAKE_BASE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) fn set_fake_base(url: String) {
+    let _ = FAKE_BASE.set(url);
+}
+
 #[derive(Clone)]
 pub struct TelegramClient {
     token: String,
@@ -21,8 +34,10 @@ impl TelegramClient {
         // cannot swap the field). Release builds never read it — the
         // endpoint is pinned in code.
         #[cfg(test)]
-        let base = std::env::var("HERDR_TG_FAKE_BASE")
-            .unwrap_or_else(|_| "https://api.telegram.org".to_string());
+        let base = FAKE_BASE
+            .get()
+            .cloned()
+            .unwrap_or_else(|| "https://api.telegram.org".to_string());
         #[cfg(not(test))]
         let base = "https://api.telegram.org".to_string();
         Ok(Self { token, base, http })

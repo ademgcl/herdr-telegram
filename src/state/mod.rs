@@ -32,7 +32,8 @@ mod typing;
 pub use self::guard::OpGuard;
 pub(crate) use self::persist_paths::offset_file;
 pub use self::persist_paths::state_dir;
-
+#[cfg(test)]
+pub(crate) use self::persist_paths::test_home_dir;
 /// Armed shell-run waiter: workspace id + arm instant (see `runwait`).
 /// Alias keeps the triple-nested map under clippy's type-complexity bar.
 pub(crate) type RunWait = (String, std::time::Instant);
