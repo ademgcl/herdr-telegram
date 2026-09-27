@@ -39,6 +39,7 @@ launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop before manual runs —
 
 ## Use
 
+- `tgshape` (CLI, same binary) — stdin/file → phone-shaped stdout, exit non-zero on empty input or if shaping would empty a non-empty reply. Shares one implementation with the bot, so what you test is what gets posted. `--max-para N`, `--json`.
 - `/shape [on|off]` — phone-shape final cards: long replies are split into short paragraphs, tables become bullets, blank-line pile-ups collapse. On by default; code blocks and lists pass through untouched.
 - `/new` — a command index: lists only the commands that work on the surface you run it from (topic / General / DM), each with what it is for. Creates nothing.
 - General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/pane [space]` `/start` `/reset` (all topics, `/reset <pane>` targets one) `/cancel` `/transient [on|off]` `/help` — topic/DM commands (`/quit` `/kill` `/split` `/read` `/output` `/status` `/keys` `/model` `/history` `/card` `/esc`) redirect here with guidance.

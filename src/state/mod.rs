@@ -23,6 +23,9 @@ pub(crate) mod live;
 mod pending_cas;
 mod persist_paths;
 mod retire;
+#[cfg(test)]
+#[path = "shape_pref_tests.rs"]
+mod shape_pref_tests;
 mod targets;
 #[cfg(test)]
 mod test_state;
