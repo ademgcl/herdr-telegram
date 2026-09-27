@@ -7,7 +7,7 @@ use crate::{
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// Re-exports: pure gates live in `recover_gate` (300-line split) but
+// Re-exports: pure gates live in `recover_gate` (500-line split) but
 // every historical path (`recover::recoverable`, enqueue/follow
 // `claim_watcher`, tests) keeps working unchanged.
 pub(crate) use super::recover_gate::claim_watcher;

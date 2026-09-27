@@ -1,5 +1,5 @@
 //! Cross-turn reuse: a turn's output must never surface in a later
-//! turn's working message. Split from `e2e_delivery` (300-line file
+//! turn's working message. Split from `e2e_delivery` (500-line file
 //! limit).
 use super::Harness;
 

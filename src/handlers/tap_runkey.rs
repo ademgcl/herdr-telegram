@@ -1,4 +1,4 @@
-//! Armed run/key waiter consume (split from `tap_input`, 300-line
+//! Armed run/key waiter consume (split from `tap_input`, 500-line
 //! file limit): runwait runs text as a shell command, keywait sends it
 //! as keys to the pane.
 use crate::{

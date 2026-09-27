@@ -1,4 +1,4 @@
-//! Boot-recover pure gates (split from `recover`, 300-line file limit).
+//! Boot-recover pure gates (split from `recover`, 500-line file limit).
 use crate::jobs::job::Job;
 
 /// Boot-rearm eligibility, pure so tests pin it: stale (>24h) or

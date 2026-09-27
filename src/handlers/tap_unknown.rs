@@ -1,4 +1,4 @@
-//! Stale/unknown button-tap refresh: split from `tap_answer` (300-line
+//! Stale/unknown button-tap refresh: split from `tap_answer` (500-line
 //! file limit). Re-renders the tapped card in place with the live option
 //! set; outage/moved-on paths strip + heal instead of stranding buttons.
 use super::tap_refresh::delayed_refresh;

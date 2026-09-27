@@ -1,4 +1,4 @@
-//! Tests for [`super::agents`] (split: 300-line file limit).
+//! Tests for [`super::agents`] (split: 500-line file limit).
 use super::*;
 
 #[test]

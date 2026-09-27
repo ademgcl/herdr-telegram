@@ -1,4 +1,4 @@
-//! Tests for [`super`] (split: 300-line file limit).
+//! Tests for [`super`] (split: 500-line file limit).
 use super::super::model_parse::free_tap;
 use super::*;
 

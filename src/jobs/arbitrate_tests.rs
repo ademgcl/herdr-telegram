@@ -1,4 +1,4 @@
-//! Tests for [`super::arbitrate`] (split: 300-line file limit).
+//! Tests for [`super::arbitrate`] (split: 500-line file limit).
 use super::*;
 use crate::{types::MAX_MSG_UNITS, ui::chunks};
 

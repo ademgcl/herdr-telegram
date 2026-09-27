@@ -1,5 +1,5 @@
 //! Native Telegram topic-rename parsing (pure, no I/O): split from
-//! `titles` (300-line file limit).
+//! `titles` (500-line file limit).
 use serde_json::Value;
 
 /// Pure extract of a native topic rename: (thread, new name). Service

@@ -1,4 +1,4 @@
-//! Dialog parser tests. Split from `dialog` (300-line file limit).
+//! Dialog parser tests. Split from `dialog` (500-line file limit).
 use super::surfaces::{settle_select, track_card};
 use super::{blocked_card_text, blocked_kb, parse_options, winner_lines};
 use std::collections::HashMap;

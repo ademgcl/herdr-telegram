@@ -1,4 +1,4 @@
-//! Tests for cancel ownership + delivery verdicts (split: 300-line limit).
+//! Tests for cancel ownership + delivery verdicts (split: 500-line limit).
 use super::*;
 use crate::jobs::job::Job;
 

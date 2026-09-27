@@ -1,5 +1,5 @@
 //! Content-addressed blocked-card refresh for status observations.
-//! Split from `dialog` (300-line file limit): repeats of the same dialog
+//! Split from `dialog` (500-line file limit): repeats of the same dialog
 //! stay silent, a NEW dialog posts even with no status transition.
 use super::{dialog_sig, is_blank_card, send_with};
 use crate::{

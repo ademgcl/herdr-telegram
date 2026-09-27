@@ -268,7 +268,7 @@ impl TelegramClient {
     }
 
     /// Download a Telegram file (photo `file_path` from `getFile`).
-    /// Split to `client_file` (300-line file limit).
+    /// Split to `client_file` (500-line file limit).
     pub async fn download_file(&self, file_path: &str) -> Res<Vec<u8>> {
         self.download_file_impl(file_path).await
     }

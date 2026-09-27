@@ -19,7 +19,7 @@ pub fn split_reset_target(target: &str) -> Result<i64, String> {
     clean.parse::<i64>().map_err(|_| clean.to_string())
 }
 
-/// Step-3 dead-topic prune: split from `reset` (300-line file limit).
+/// Step-3 dead-topic prune: split from `reset` (500-line file limit).
 /// Deletes topics for panes gone from Herdr. Snapshot-id delete plus a
 /// generation gate before the retire: `mappings` predates minutes of
 /// paced sleeps, so a live foreign mapping now is a remint whose fresh

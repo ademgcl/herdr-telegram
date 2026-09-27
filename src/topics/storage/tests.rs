@@ -1,4 +1,4 @@
-//! Storage round-trip tests. Split from `storage` (300-line file limit).
+//! Storage round-trip tests. Split from `storage` (500-line file limit).
 use super::{TopicStorage, disk::Store};
 
 #[test]

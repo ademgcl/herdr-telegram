@@ -4,7 +4,7 @@
 //! notification entries: reuse is always an edit). Deletes are gated on
 //! the entry (mid, generation): a successor turn claiming the slot
 //! (bump in `ensure_instant`) or reposting (new mid) owns it now and
-//! the stale retire stands down. Split from `progress` (300-line file
+//! the stale retire stands down. Split from `progress` (500-line file
 //! limit) — call sites keep `progress::…` (re-exported there).
 //! Fail-closed like `progress`: best-effort, never a lock across RPC.
 use crate::{

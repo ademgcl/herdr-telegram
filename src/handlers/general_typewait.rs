@@ -1,5 +1,5 @@
 //! General-topic typewait shell-flip probe (split from `general`:
-//! 300-line file limit).
+//! 500-line file limit).
 use crate::state::AppState;
 
 /// Shell-flip probe verdict (pure, tested): classifies the

@@ -1,4 +1,4 @@
-//! Agent-card tap (`a:<pane>`): split from `callback` (300-line file limit).
+//! Agent-card tap (`a:<pane>`): split from `callback` (500-line file limit).
 use super::callback_parse::gone_card;
 use crate::{
     herdr::client::{get_agent, list_panes, list_workspaces},

@@ -2,7 +2,7 @@ use crate::{jobs::persist::PendingPrompt, state::AppState, ui::tail_fit};
 
 // Re-exported for the submit paths (`shell_run`, boot-recover): the
 // snapshot reader lives in `shell_settle` with its poll-loop consumer;
-// the settle+report loop lives in `shell_report` (300-line split).
+// the settle+report loop lives in `shell_report` (500-line split).
 pub(crate) use super::shell_report::{ShellSettle, settle_report_shell};
 pub(crate) use super::shell_settle::shell_snapshot;
 

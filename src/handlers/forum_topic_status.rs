@@ -1,4 +1,4 @@
-//! Topic status/model arms: split from `forum_topic` (300-line file limit).
+//! Topic status/model arms: split from `forum_topic` (500-line file limit).
 use crate::{state::AppState, types::AgentDetail};
 
 /// Shared forum-topic guard (pure, tested): DM mode (no forum),

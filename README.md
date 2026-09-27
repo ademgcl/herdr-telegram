@@ -39,6 +39,7 @@ launchctl bootout gui/$(id -u)/dev.herdr.telegram  # stop before manual runs —
 
 ## Use
 
+- `/shape [on|off]` — phone-shape final cards: long replies are split into short paragraphs, tables become bullets, blank-line pile-ups collapse. On by default; code blocks and lists pass through untouched.
 - `/new` — a command index: lists only the commands that work on the surface you run it from (topic / General / DM), each with what it is for. Creates nothing.
 - General: `/agents` `/spawn <kind> [space]` `/space [name]` `/shell [space]` `/pane [space]` `/start` `/reset` (all topics, `/reset <pane>` targets one) `/cancel` `/transient [on|off]` `/help` — topic/DM commands (`/quit` `/kill` `/split` `/read` `/output` `/status` `/keys` `/model` `/history` `/card` `/esc`) redirect here with guidance.
 - Agent topic: plain text = prompt. `/new` `/agents` `/spawn <kind> [space]` `/read [n]` `/output [n]` `/model` `/quit` `/kill` `/keys` `/status` `/shell [space]` `/pane [space]` `/space [name]` `/split [right|down]` `/card` `/esc` `/cancel` `/transient [on|off]` `/reset` (this topic, bare only) `/history [n]` `/help` (+ `/start` shows help).

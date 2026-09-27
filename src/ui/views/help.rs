@@ -1,9 +1,10 @@
-//! Help texts per surface (split from `views`: 300-line file limit).
+//! Help texts per surface (split from `views`: 500-line file limit).
 //! Single source with routers — parity tests pin Help≡router.
 use super::super::GENERAL_HINT;
 
 pub fn help_text() -> &'static str {
     "`/new`     what works here: the commands for this surface\n\
+     `/shape [on|off]`  phone-shape replies (long text split, tables bulleted)\n\
      `/agents`   control panel: spaces, agents, ➕ spawn\n\
      `/spawn <kind> [space]`   spawn a new agent\n\
      `/space [name]`   new space + shell topic\n\
@@ -33,7 +34,7 @@ pub fn help_text() -> &'static str {
 pub fn general_help_text() -> String {
     format!(
         "🤖 **Herdr Telegram Bot**\n\n\
-     • `/new` — what works from General (and in a topic)\n     • `/agents` — open spaces & agents control panel\n\
+     • `/new` — what works from General (and in a topic)\n     • `/shape [on|off]` — phone-shape replies\n     • `/agents` — open spaces & agents control panel\n\
      • `/spawn <kind> [space]` — spawn a new agent & topic\n\
       • `/shell [space]` — open a fresh shell pane & topic\n\
       • `/pane [space]` — shell pane in this space, stays here\n\
@@ -54,7 +55,7 @@ pub fn topic_help_text(pane: &str, kind: &str) -> String {
         "🤖 **{kind}** topic [{pane}]\n\n\
          • Plain text sends a prompt to this agent\n\
          • `/start` — show this help\n\
-         • `/new` — what works in this topic\n         • `/agents` — spaces & agents panel (here)\n\
+         • `/new` — what works in this topic\n         • `/shape [on|off]` — phone-shape replies\n         • `/agents` — spaces & agents panel (here)\n\
           • `/spawn <kind> [space]` — spawn a new agent & topic\n\
          • `/read [n]` or `/output [n]` — fetch recent terminal output\n\
          • `/history [n]` — recent prompts you sent here\n\
@@ -85,7 +86,7 @@ pub fn shell_help_text(pane: &str) -> String {
          • Plain text runs as a shell command\n\
          • `opencode`, `claude`, … — run one to re-enter as agent\n\
          • `/start` — show this help\n\
-         • `/new` — what works in this topic\n         • `/agents` — spaces & agents panel (here)\n\
+         • `/new` — what works in this topic\n         • `/shape [on|off]` — phone-shape replies\n         • `/agents` — spaces & agents panel (here)\n\
           • `/spawn <kind> [space]` — spawn a new agent & topic\n\
          • `/read [n]` — recent shell output (`/output [n]` too)\n\
          • `/history [n]` — recent shell commands\n\
@@ -105,6 +106,16 @@ pub fn shell_help_text(pane: &str) -> String {
          • `/shell` — already in a shell topic (`/pane` for a second)\n\
          • ✏️ rename this topic = renames in herdr (kept in sync)"
     )
+}
+
+/// One-liner for `/shape` (text lives with the other status lines so
+/// help and the reply cannot drift).
+pub fn shape_status(on: bool) -> String {
+    if on {
+        "📱 phone shaping is ON — long replies are broken into short paragraphs, tables become bullets".to_string()
+    } else {
+        "📱 phone shaping is OFF — replies are sent exactly as written".to_string()
+    }
 }
 
 /// Which surface `/new` was run from. The index only lists what works

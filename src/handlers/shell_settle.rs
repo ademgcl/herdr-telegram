@@ -1,6 +1,6 @@
 //! Shell settle wait: poll the snapshot + the foreground-process busy
 //! signal until the command completes. Split from `shell_common`
-//! (300-line file limit).
+//! (500-line file limit).
 use crate::{
     herdr::client::{is_shell_idle, read_shell_output},
     state::AppState,

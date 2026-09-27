@@ -1,5 +1,5 @@
 //! Boot sequence: herdr ping, mode banner, menu sync, forum probes.
-//! Split from `main` (300-line file limit).
+//! Split from `main` (500-line file limit).
 use crate::{
     herdr::ping,
     shutdown::shutdown_signal,

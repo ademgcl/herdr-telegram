@@ -1,4 +1,4 @@
-//! Tests for [`super::title_rules`] (split: 300-line file limit).
+//! Tests for [`super::title_rules`] (split: 500-line file limit).
 use super::*;
 use crate::herdr::labels::PaneFacts;
 

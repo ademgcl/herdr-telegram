@@ -1,4 +1,4 @@
-//! Topic control-plane commands (split from `forum_topic`: 300-line
+//! Topic control-plane commands (split from `forum_topic`: 500-line
 //! file limit). True when the command was consumed: an armed waiter
 //! never sees it (the caller checked waiters first). Pane-lifecycle
 //! arms (`/reset`, `/quit`, `/kill`, `/split`, `/pane`, `/shell`) live
@@ -56,6 +56,10 @@ pub(crate) async fn handle_control_plane(
     }
     if cmd == "/pane" {
         super::shell::open_pane_here(s, chat, Some(thread_id), pane, arg).await;
+        return true;
+    }
+    if cmd == "/shape" {
+        super::shape::handle(s, chat, Some(thread_id), arg).await;
         return true;
     }
     if cmd == "/new" {

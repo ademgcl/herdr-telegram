@@ -7,7 +7,7 @@
 //! take a successor's message. `live_sending` single-flights posts
 //! across tasks (enqueue instant vs watcher ticks). Both maps are
 //! pane-keyed: pruned with pane death in hygiene (live-only retain),
-//! never persisted (rebuilt on demand). Split from `state` (300-line
+//! never persisted (rebuilt on demand). Split from `state` (500-line
 //! file limit). Locks never cross RPC — snapshot, drop, then call.
 use super::State;
 

@@ -1,4 +1,4 @@
-//! Tests for [`super::topic_core`] (split: 300-line file limit).
+//! Tests for [`super::topic_core`] (split: 500-line file limit).
 use super::topic_core;
 use crate::topics::names::format_title;
 

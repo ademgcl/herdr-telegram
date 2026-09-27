@@ -1,5 +1,5 @@
 //! Agent-topic message routing: commands + bare-message prompts.
-//! Split from `forum` (300-line file limit).
+//! Split from `forum` (500-line file limit).
 use crate::{
     herdr::client::{get_agent, list_agents},
     jobs::enqueue_prompt,
@@ -142,11 +142,11 @@ pub(crate) async fn handle_topic_agent_message(
 
     // An armed typed-answer waiter wins over every command except
     // the escapes checked above (/cancel, /card, /esc) — see
-    // `forum_typewait` (split for the 300-line cap).
+    // `forum_typewait` (split for the 500-line cap).
     match super::forum_typewait::consume_typewait(&s, chat, thread_id, text).await {
         super::forum_typewait::WaitOut::Handled => return,
         super::forum_typewait::WaitOut::ResumedPrompt(wpane, armed_at) => {
-            // Split to `forum_typewait` (300-line file limit).
+            // Split to `forum_typewait` (500-line file limit).
             super::forum_typewait::serve_resumed_prompt(
                 s,
                 chat,
@@ -163,7 +163,7 @@ pub(crate) async fn handle_topic_agent_message(
 
     // Control plane works in-thread, after the waiters (an armed
     // waiter owns the next message). Split to `forum_control`
-    // (300-line file limit).
+    // (500-line file limit).
     if super::forum_control::handle_control_plane(
         &s,
         chat,

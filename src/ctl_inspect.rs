@@ -1,4 +1,4 @@
-//! `inspect <pane>` detail view: split from `ctl_cmd` (300-line file limit).
+//! `inspect <pane>` detail view: split from `ctl_cmd` (500-line file limit).
 use crate::{
     ctl_cmd::{DEGRADED_BANNER, degraded_banner},
     handlers::title_rules::title_core_for,

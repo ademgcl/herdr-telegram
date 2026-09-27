@@ -1,5 +1,5 @@
 //! Shared cancel retire for prompt watchers. Split from `runner`
-//! (300-line file limit): mark, clear the intent only when the map
+//! (500-line file limit): mark, clear the intent only when the map
 //! still points here (a superseding enqueue owns it otherwise), then
 //! retire the silent transient and post the cancel card fresh as a NEW
 //! message. Single source for the select arm, the backoff arm, and
@@ -44,7 +44,7 @@ pub(crate) enum DialOut {
 }
 
 /// Reopen outcome for the runner's lazy event-stream dial (split from
-/// `runner`, 300-line file limit): break retires via the cancel path,
+/// `runner`, 500-line file limit): break retires via the cancel path,
 /// cooled skips the dial (loop-top serves the new turn), ready means a
 /// stream is connected (or the open failed loudly — polling covers).
 pub(crate) enum Reopen {

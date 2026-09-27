@@ -1,4 +1,4 @@
-//! Tests for the limit-claim drop backstop (split: 300-line file limit).
+//! Tests for the limit-claim drop backstop (split: 500-line file limit).
 use super::*;
 use crate::state::cancel::isolated_state;
 

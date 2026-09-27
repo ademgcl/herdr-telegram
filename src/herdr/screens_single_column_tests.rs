@@ -1,5 +1,5 @@
 //! Column-cut regressions for SINGLE-COLUMN agents (split from
-//! `screens`: 300-line file limit).
+//! `screens`: 500-line file limit).
 //!
 /// The column cut exists for a two-column TUI (Kilo). Every other
 /// supported agent renders ONE column, and this battery proves the cut

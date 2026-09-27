@@ -1,5 +1,5 @@
 //! Single-flight op guards: one tap/switch owns a pane until it lands.
-//! Split from `state` (300-line file limit).
+//! Split from `state` (500-line file limit).
 //!
 //! Why timestamps: every answer path (taps, typed answers, /card, /esc)
 //! refuses while `blockop` holds the pane, so a guard that never drops

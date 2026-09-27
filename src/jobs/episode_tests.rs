@@ -1,4 +1,4 @@
-//! Tests for [`super::BuzzEpisode`] (split: 300-line file limit).
+//! Tests for [`super::BuzzEpisode`] (split: 500-line file limit).
 //! `rate-limit` is stuck-gated like `error`: transient quota/auto-retry
 //! flashes stay silent, only a banner that persists the full gate pages.
 //! `provider` (overload/retry chatter) never pages at all — the agent

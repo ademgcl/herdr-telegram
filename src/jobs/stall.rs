@@ -1,5 +1,5 @@
 //! Mid-run limit/stall watch for prompt watchers. Split from `runner`
-//! (300-line file limit): opencode retries internally while herdr keeps
+//! (500-line file limit): opencode retries internally while herdr keeps
 //! reporting `working` — no settle, no notifier event, and live-message
 //! edits never buzz. Scans the raw screen every tick and posts one NEW
 //! (buzzing) card per episode.

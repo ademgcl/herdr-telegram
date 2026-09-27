@@ -1,4 +1,4 @@
-//! Dialog segmentation: split from `segment` (300-line file limit).
+//! Dialog segmentation: split from `segment` (500-line file limit).
 //! In blocked dialogs, '←' does not split headers and options are
 //! preserved in raw form so terminal padding rules never drop them
 //! before parsing.

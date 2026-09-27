@@ -1,5 +1,5 @@
 //! Dialog card-guard tests (sig, blank-outage, button caps). Split
-//! from `tests` (300-line file limit).
+//! from `tests` (500-line file limit).
 use super::{blocked_kb, dialog_sig, is_blank_card, parse_options};
 
 fn v(items: &[&str]) -> Vec<String> {

@@ -1,4 +1,4 @@
-//! Identity-pin sync for forum topics: split from `status` (300-line
+//! Identity-pin sync for forum topics: split from `status` (500-line
 //! file limit). Edits the pane's pin card in place, mints it fresh when
 //! definitely gone. Bounded: a flood-wait must not park the sequential
 //! reconcile loop — a timeout retries next tick.

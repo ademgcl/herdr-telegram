@@ -1,5 +1,5 @@
 //! 1:1 pane↔topic title sync (both directions) plus stable short tags.
-//! Split from `manager` (300-line file limit).
+//! Split from `manager` (500-line file limit).
 use super::TopicManager;
 
 /// Topic-liveness probes per reconcile tick (see `probe_deleted`): the

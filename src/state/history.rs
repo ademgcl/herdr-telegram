@@ -1,6 +1,6 @@
 //! Per-pane prompt history: what the owner sent each agent (prompts,
 //! typed answers, shell commands) for cross-device catch-up (`/history`).
-//! Split from `state` (300-line file limit).
+//! Split from `state` (500-line file limit).
 //!
 //! RAM-only by design: prompts carry pasted secrets, so history never
 //! touches disk (unlike `pending` intents) and never logs bodies.

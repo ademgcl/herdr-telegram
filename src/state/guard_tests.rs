@@ -1,4 +1,4 @@
-//! Guard unit tests: split from `guard` (300-line file limit).
+//! Guard unit tests: split from `guard` (500-line file limit).
 use super::*;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};

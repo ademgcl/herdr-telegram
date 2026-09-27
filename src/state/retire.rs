@@ -1,5 +1,5 @@
 //! Epoch-guarded retire primitives for cancel paths. Split from `jobs`
-//! (300-line file limit): same-Arc reuse bumps the epoch in place, so
+//! (500-line file limit): same-Arc reuse bumps the epoch in place, so
 //! every retire pins the entry generation — `ptr_eq` alone cannot tell
 //! a successor apart (see jobs::books). Lock order jobs→pending
 //! everywhere (never inverted: `publish_submit` only ever holds

@@ -8,7 +8,7 @@ use std::time::Duration;
 pub const EFFECT_FIRE: &str = "5104841245755180586";
 
 // Single-source verdicts live in `errors`; builders live in `markup`
-// (300-line file limit): re-exported so `messages::*` call sites and
+// (500-line file limit): re-exported so `messages::*` call sites and
 // tests keep working.
 pub use super::errors::{edit_gone, is_effect_rejection};
 pub use super::markup::{build_edit_msg_params, build_send_msg_params};

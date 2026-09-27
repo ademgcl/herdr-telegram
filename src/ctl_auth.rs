@@ -1,6 +1,6 @@
 //! Per-boot control-socket token: minted by the server into
 //! `<state_dir>/ctl.token` (0600), read back by the CLI client. Split
-//! from `ctl` (300-line file limit).
+//! from `ctl` (500-line file limit).
 use std::os::unix::fs::OpenOptionsExt;
 
 /// Path of the per-boot control token (0600, same user only).

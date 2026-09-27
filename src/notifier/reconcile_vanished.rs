@@ -1,5 +1,5 @@
 //! Vanished-agent retire (agent→shell flip with an owed prompt):
-//! split from `reconcile` (300-line file limit). Retires the dead
+//! split from `reconcile` (500-line file limit). Retires the dead
 //! watcher and surfaces the shell tail as the reply; a failed notice
 //! restores the intent with its ORIGINAL timestamp so the 24h stale
 //! bound still fires instead of retrying forever.

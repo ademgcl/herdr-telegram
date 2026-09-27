@@ -1,4 +1,4 @@
-//! Tests for cancel retire paths (split: 300-line file limit).
+//! Tests for cancel retire paths (split: 500-line file limit).
 use super::*;
 use crate::jobs::job::Job;
 use crate::jobs::persist::PendingPrompt;
@@ -9,7 +9,7 @@ fn prompt(chat: i64) -> PendingPrompt {
         thread: None,
         prompt: "hi".into(),
         started_unix: 0,
-    } // fmt:keep 1-line (300-line file limit)
+    } // fmt:keep 1-line (500-line file limit)
 }
 
 #[tokio::test]

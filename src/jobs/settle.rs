@@ -1,5 +1,5 @@
 //! Settle confirmation + finalization for prompt watchers. Split from
-//! `runner` (300-line file limit): one settled sample must not retire the
+//! `runner` (500-line file limit): one settled sample must not retire the
 //! watcher — agy idles briefly between phases mid-run, and retiring on
 //! that transient leaves the agent working unwatched (no final card at
 //! true completion) while the watchdog spams stall cards off prose.

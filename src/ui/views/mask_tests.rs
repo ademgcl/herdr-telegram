@@ -1,5 +1,5 @@
 //! $HOME-mask tests for menu/ws/agent/identity text (split from
-//! `views/tests`, 300-line file limit).
+//! `views/tests`, 500-line file limit).
 use super::*;
 
 #[test]

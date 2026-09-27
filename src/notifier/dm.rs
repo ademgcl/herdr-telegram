@@ -1,4 +1,4 @@
-//! Direct Message alert delivery (split from status.rs to respect the 300-line limit).
+//! Direct Message alert delivery (split from status.rs to respect the 500-line limit).
 use crate::{
     jobs::segment::final_block,
     jobs::stream::{delta, is_stale_body, join_trimmed},

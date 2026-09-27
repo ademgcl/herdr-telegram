@@ -226,7 +226,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                                 }
                                 ShellReuse::RetireVanished => {
                                     // Split to `reconcile_vanished`
-                                    // (300-line file limit).
+                                    // (500-line file limit).
                                     super::reconcile_vanished::retire_vanished(s, &pane, owed)
                                         .await;
                                 }
@@ -237,7 +237,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
                         // Compare-and-delete: a remint between snapshot and
                         // close must survive the outer remove. Quiet retire:
                         // loud's "✋ cancelled" card would break the silence.
-                        // Split to `reconcile_close` (300-line file limit).
+                        // Split to `reconcile_close` (500-line file limit).
                         // Unconfirmed by the second read above: a transient
                         // first-read miss, never a death — skip the close.
                         } else if dead.contains(&pane)
@@ -252,7 +252,7 @@ pub async fn reconcile(s: &AppState, silent: bool, src: &str) {
         }
     }
 
-    // DM flip + stall scan + hygiene + titles tail (split: 300-line file limit).
+    // DM flip + stall scan + hygiene + titles tail (split: 500-line file limit).
     super::reconcile_tail::reconcile_tail(s, &rows, &live_panes, &mut pane_list, silent).await;
 }
 

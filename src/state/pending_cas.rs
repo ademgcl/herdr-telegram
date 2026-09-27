@@ -1,5 +1,5 @@
 //! Atomic pending-intent guards for shared state. Split from `jobs`
-//! (300-line file limit): match checks + check-and-remember restores
+//! (500-line file limit): match checks + check-and-remember restores
 //! live here as `impl State`.
 use super::State;
 use crate::jobs::persist::{self, PendingPrompt};

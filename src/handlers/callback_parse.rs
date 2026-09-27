@@ -1,5 +1,5 @@
 //! Callback routing cuts + stale-pane guards. Split from `callback`
-//! (300-line file limit).
+//! (500-line file limit).
 use crate::{
     herdr::client::{get_agent, list_panes},
     state::AppState,

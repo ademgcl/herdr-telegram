@@ -11,7 +11,7 @@
 //! Fail-closed: every send/edit/delete is best-effort (a miss retries
 //! next tick, a gone message frees the slot). No lock is held across an
 //! RPC — snapshot, drop, then call. Retire paths live in
-//! `progress_retire` (300-line file limit), re-exported below.
+//! `progress_retire` (500-line file limit), re-exported below.
 use crate::{
     jobs::job::Job,
     state::{AppState, live::LiveSlot},

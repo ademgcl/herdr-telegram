@@ -1,4 +1,4 @@
-//! Tests for [`super::panes`] (split: 300-line file limit).
+//! Tests for [`super::panes`] (split: 500-line file limit).
 use super::*;
 use crate::herdr::labels::{PaneFacts, parse_facts};
 use crate::herdr::pane_select::pane_num;

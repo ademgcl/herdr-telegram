@@ -1,5 +1,5 @@
 //! Shared shell/keys input validation: split from `shell_run`
-//! (300-line file limit). Single source for the caps so every entry
+//! (500-line file limit). Single source for the caps so every entry
 //! point refuses the same way (fail-closed: no mint, no RPC, no silent
 //! truncation on absurd input).
 /// Max shell words per command (one message ≈ 4k chars of paste is

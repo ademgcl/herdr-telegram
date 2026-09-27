@@ -1,5 +1,5 @@
 //! Post-submit re-arm verdict (pure, tested): split from `enqueue`
-//! (300-line file limit).
+//! (500-line file limit).
 
 /// The map slot the submit raced against decides. A mapped STOPPED self
 /// (runner folds the card before its exit-removal wins the race) still

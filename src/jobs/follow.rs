@@ -1,6 +1,6 @@
 //! Answer-follow watcher: after a blocked answer (tap/type) resumes
 //! the agent, track the resumed turn to its final reply. Split from
-//! `runner`/`enqueue` (300-line file limit).
+//! `runner`/`enqueue` (500-line file limit).
 //!
 //! Why: taps/types own no job — the final reply relied solely on the
 //! spontaneous 15s debounce, which aborts when a new prompt lands first

@@ -111,7 +111,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
             let card = crate::ui::build_identity_card_text(
                 &kind, pane, raw_space, new_status, title_opt, branch,
             );
-            // Pin edit/mint lives in `pin_sync` (300-line file limit).
+            // Pin edit/mint lives in `pin_sync` (500-line file limit).
             super::pin_sync::sync_identity_pin(s, pane, forum, &card).await;
         }
     }
@@ -142,7 +142,7 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // last_done (documented TOCTOU, not closed).
     let job_owned = s.job_live(pane).await;
 
-    // Boot seed (split to `status_seed`, 300-line file limit).
+    // Boot seed (split to `status_seed`, 500-line file limit).
     if silent {
         super::status_seed::seed_blocked_card(s, pane, old.as_deref(), new_status).await;
         return;

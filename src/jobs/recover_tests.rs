@@ -1,4 +1,4 @@
-//! Boot-recovery tests. Split from `recover` (300-line file limit).
+//! Boot-recovery tests. Split from `recover` (500-line file limit).
 use super::*;
 use crate::jobs::recover_gate::STALE_KEEP_MAX_SECS;
 

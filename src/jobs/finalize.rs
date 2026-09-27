@@ -1,5 +1,5 @@
 //! Prompt result finalization: post the settled reply as the final
-//! card. Split from `runner` (300-line file limit). `watch_job` calls
+//! card. Split from `runner` (500-line file limit). `watch_job` calls
 //! `finalize` on settle; `enqueue_prompt` reports submit errors.
 //! Stamps (baseline, done-mark, books) are epoch-gated: a submit landing
 //! mid-RPC owns the pane, and the old prompt must stamp nothing.
@@ -112,7 +112,7 @@ pub async fn finalize(
 
     // Blocked settle: never the stream body (↳ echoes + footer would
     // pre-empt the question card) — always the blocked-card path.
-    // Split to `finalize_blocked` (300-line file limit).
+    // Split to `finalize_blocked` (500-line file limit).
     if let Some(r) = try_finalize_blocked(
         s,
         pane,
@@ -131,7 +131,7 @@ pub async fn finalize(
     // Empty non-blocked settle: post nothing, but anchor the screen so
     // the span never resurfaces as a stale "fresh" delta (the silent
     // transient retires inside — see try_finalize_empty).
-    // Split to `finalize_blocked::try_finalize_empty` (300-line file limit).
+    // Split to `finalize_blocked::try_finalize_empty` (500-line file limit).
     if body.is_empty()
         && let Some(r) = super::finalize_blocked::try_finalize_empty(
             s,

@@ -1,4 +1,4 @@
-//! Tests for [`super::shell_common`] (split: 300-line file limit).
+//! Tests for [`super::shell_common`] (split: 500-line file limit).
 use super::*;
 
 #[test]

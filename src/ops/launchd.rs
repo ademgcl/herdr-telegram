@@ -1,7 +1,7 @@
 //! launchd prod install: render the service plist + bootstrap it.
 //! Replaces dev.herdr.telegram.plist.example + the README sed recipe —
 //! every key below is byte-identical in meaning (ThrottleInterval 30 +
-//! rationale included). Split from `ops` (300-line file limit).
+//! rationale included). Split from `ops` (500-line file limit).
 //!
 //! install is idempotent (bootout → write → bootstrap) and never kills:
 //! a busy guard port refuses instead of murdering a foreign owner.

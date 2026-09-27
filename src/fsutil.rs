@@ -1,5 +1,5 @@
 //! Private file writes + unique tmp siblings for tmp+rename state
-//! files. Split from `types` (300-line file limit); re-exported there
+//! files. Split from `types` (500-line file limit); re-exported there
 //! so existing `crate::types::{write_private, chmod_private,
 //! unique_tmp}` call sites keep working unchanged.
 

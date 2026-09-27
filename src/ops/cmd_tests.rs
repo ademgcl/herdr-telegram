@@ -1,4 +1,4 @@
-//! One-shot ops command tests. Split from `cmd` (300-line file limit).
+//! One-shot ops command tests. Split from `cmd` (500-line file limit).
 use super::*;
 
 #[test]

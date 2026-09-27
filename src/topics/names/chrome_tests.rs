@@ -1,5 +1,5 @@
 //! Tests for [`super::split_bracket`] + [`super::space_rename_parts`]
-//! (split: 300-line file limit).
+//! (split: 500-line file limit).
 use super::*;
 
 #[test]

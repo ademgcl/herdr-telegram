@@ -1,4 +1,4 @@
-//! DM-mode shell flips: split from `hygiene` (300-line file limit).
+//! DM-mode shell flips: split from `hygiene` (500-line file limit).
 use super::hygiene::panes_once;
 use crate::{
     handlers::shell_common::classify_shell_reuse, herdr::client::get_agent, state::AppState,

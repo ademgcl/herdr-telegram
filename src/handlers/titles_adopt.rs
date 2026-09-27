@@ -1,4 +1,4 @@
-//! Telegram→herdr rename adopt (split from `titles`: 300-line file limit).
+//! Telegram→herdr rename adopt (split from `titles`: 500-line file limit).
 //! Native `forum_topic_edited` updates rename the herdr tab (single-pane)
 //! or pane label (split tab). See `titles` for the watchdog half and the
 //! 1:1 format contract.

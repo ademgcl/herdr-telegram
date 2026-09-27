@@ -8,7 +8,7 @@
 //! beside a live `env::var` on another thread (Edition 2024), and the
 //! process-wide mutex that papered over it was held across the whole
 //! test, serializing every case and leaving 7 of 8 cores idle.
-//! Split from `cancel` (300-line file limit); re-exported there so
+//! Split from `cancel` (500-line file limit); re-exported there so
 //! existing `state::cancel::isolated_state` call sites keep working.
 use super::State;
 

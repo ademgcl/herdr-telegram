@@ -1,4 +1,4 @@
-//! Event-stream tests (split from `events`: 300-line file limit).
+//! Event-stream tests (split from `events`: 500-line file limit).
 
 use super::*;
 

@@ -1,5 +1,5 @@
 //! Mid-job topic remap: paced reset migrates the topic + deletes the
-//! old thread. Split from `settle` (300-line file limit).
+//! old thread. Split from `settle` (500-line file limit).
 use crate::{jobs::job::Job, state::AppState};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;

@@ -1,4 +1,4 @@
-//! Age-based waiter/notice pruning (split from `hygiene`: 300-line
+//! Age-based waiter/notice pruning (split from `hygiene`: 500-line
 //! file limit) + cached single `list_panes` per tick (shared with the
 //! forum block: 1 RPC, not 2). Fail-open: Err keeps everything.
 use crate::{

@@ -1,6 +1,6 @@
 //! Pure title-decision rules (no I/O): tab→core picking, verbatim
 //! preservation, `[new-space]` rename core + duplicate guard, and the
-//! reset Step-4 choice. Split from `titles` (300-line file limit).
+//! reset Step-4 choice. Split from `titles` (500-line file limit).
 use crate::{topics::names::norm_title, types::WorkspaceInfo};
 use std::collections::HashMap;
 

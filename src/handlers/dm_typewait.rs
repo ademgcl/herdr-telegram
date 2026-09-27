@@ -3,7 +3,7 @@ use crate::{jobs::enqueue_prompt, state::AppState};
 /// Answering a waiting prompt (set by the ⌨️ button on blocked cards).
 /// Checked before routing: the next message belongs to the waiter.
 /// Returns true when the message was consumed. Split from dm_prompt
-/// (300-line file limit).
+/// (500-line file limit).
 pub(crate) async fn handle_typewait(s: &AppState, chat: i64, text: &str) -> bool {
     // Peek first (mirrors topics): a blockop race or failed send must
     // not consume the waiter — the retry is just sending again.

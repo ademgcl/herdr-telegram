@@ -1,5 +1,5 @@
 //! Telegram `[new-space]` topic renames → herdr workspace renames.
-//! Split from `titles` (300-line file limit): the bracket names the
+//! Split from `titles` (500-line file limit): the bracket names the
 //! space, the remainder names the pane — writing the whole `[new]
 //! label` to the tab duplicated (`[old] [new] label`). This path
 //! renames the workspace first, then the tab/pane only when the

@@ -7,6 +7,7 @@ fn test_dm_help_lists_every_dm_command() {
     let help = help_text();
     for cmd in [
         "/new",
+        "/shape",
         "/agents",
         "/spawn",
         "/space",
@@ -80,6 +81,7 @@ fn test_topic_help_matches_topic_router() {
         &[
             "/start",
             "/new",
+            "/shape",
             "/agents",
             "/spawn",
             "/space",
@@ -113,6 +115,7 @@ fn test_shell_help_matches_shell_router() {
         &[
             "/start",
             "/new",
+            "/shape",
             "/agents",
             "/spawn",
             "/space",
@@ -145,6 +148,7 @@ fn test_general_help_matches_general_router() {
         &general_help_text(),
         &[
             "/new",
+            "/shape",
             "/agents",
             "/spawn",
             "/space",
@@ -176,6 +180,7 @@ fn test_dm_help_matches_dm_router() {
         help_text(),
         &[
             "/new",
+            "/shape",
             "/agents",
             "/spawn",
             "/space",

@@ -1,4 +1,4 @@
-//! Tests for [`super::client`] (split: 300-line file limit).
+//! Tests for [`super::client`] (split: 500-line file limit).
 use super::*;
 
 fn test_client() -> TelegramClient {

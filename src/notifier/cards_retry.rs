@@ -1,5 +1,5 @@
 //! Bounded retry reads for the spontaneous settle check (split from
-//! `cards`: 300-line file limit). One-shot returns on ambiguous reads
+//! `cards`: 500-line file limit). One-shot returns on ambiguous reads
 //! lose the reply forever — no new transition re-fires the arm — so both
 //! helpers take two extra passes over a few seconds before giving up (a
 //! lasting outage leaves the arm for the next transition). Fail-closed
@@ -152,7 +152,7 @@ pub(crate) async fn read_screen_retry(
     None
 }
 
-/// Stray/empty settle arm (split from `cards`, 300-line file limit):
+/// Stray/empty settle arm (split from `cards`, 500-line file limit):
 /// single stray chars never page, but the baseline must still advance or
 /// the same stray re-RPCs every settle forever. Post-RPC re-checks (a
 /// prompt/final, moved-on work, or a newer arm landing during the reads

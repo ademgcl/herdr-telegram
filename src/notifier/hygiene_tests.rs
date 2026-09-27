@@ -1,4 +1,4 @@
-//! Tests for dead-pane reaping (split: 300-line file limit).
+//! Tests for dead-pane reaping (split: 500-line file limit).
 use super::*;
 use crate::{
     jobs::job::Job,

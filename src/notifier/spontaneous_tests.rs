@@ -1,4 +1,4 @@
-//! Tests for spontaneous pushes (split: 300-line file limit).
+//! Tests for spontaneous pushes (split: 500-line file limit).
 use super::*;
 
 #[test]

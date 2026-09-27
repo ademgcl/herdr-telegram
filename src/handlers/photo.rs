@@ -1,6 +1,6 @@
 //! Incoming photo routing: download-then-prompt for agent surfaces,
 //! visible hints everywhere else (a photo must never vanish silently).
-//! Split from the surface handlers (300-line file limit).
+//! Split from the surface handlers (500-line file limit).
 use crate::state::AppState;
 
 /// Prompt marker for a fetched image (single source — DM/topic-agent

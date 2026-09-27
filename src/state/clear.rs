@@ -1,4 +1,4 @@
-//! Per-pane retire (split from `state/mod`: 300-line file limit).
+//! Per-pane retire (split from `state/mod`: 500-line file limit).
 use super::{
     State,
     guard::{BLOCKOP_STALE_SECS, MODELOP_STALE_SECS, claim_stale},

@@ -1,5 +1,5 @@
 //! Chat-scoped assertion helpers for the harness (split from `mod`,
-//! 300-line file limit). Every read is filtered to this case's chat, so
+//! 500-line file limit). Every read is filtered to this case's chat, so
 //! parallel e2e cases never see each other's traffic in the shared fake.
 use super::Harness;
 use super::tg_fake;

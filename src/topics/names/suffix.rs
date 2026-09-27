@@ -1,6 +1,6 @@
 //! Tolerant space-suffix strip for topic titles.
 //!
-//! Split from `chrome` (300-line file limit). The title renders the space
+//! Split from `chrome` (500-line file limit). The title renders the space
 //! as a trailing qualifier (`2[tg]`), so the reverse pass must strip it
 //! or a rename double-wraps and recovers the wrong label.
 use super::chrome::norm_title;

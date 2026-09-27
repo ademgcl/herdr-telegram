@@ -36,12 +36,9 @@ pub use self::persist_paths::state_dir;
 #[cfg(test)]
 pub(crate) use self::persist_paths::test_home_dir;
 pub use self::wake::{wait as wait_reconcile, wake as wake_reconcile};
-/// Armed shell-run waiter: workspace id + arm instant (see `runwait`).
-/// Alias keeps the triple-nested map under clippy's type-complexity bar.
+/// Armed shell-run waiter: workspace + arm instant (alias for clippy).
 pub(crate) type RunWait = (String, std::time::Instant);
-/// Armed input waiter: target pane + arm instant (keywait, typewait).
-/// Age expiry lives in hygiene (values are panes, so pane-liveness
-/// reap applies too — unlike runwait's workspace ids).
+/// Armed input waiter: pane + arm instant. Expiry in hygiene (panes).
 pub(crate) type Waiter = (String, std::time::Instant);
 
 /// Global async-lock order (never inverted anywhere, never held across
@@ -164,7 +161,9 @@ pub struct State {
     /// that follow cannot be muted (`editMessageText` has no
     /// `disable_notification`) — so one always buzzed the phone.
     pub transient_on: AtomicBool,
-    /// One silent working message per pane; only while `/transient` is on.
+    /// Phone-shape final cards (see `telegram::shape`).
+    pub shape_telegram: AtomicBool,
+    /// Working message per pane; only while `/transient` is on.
     pub live: Mutex<HashMap<String, crate::state::live::LiveSlot>>,
     /// Panes with a transient post in flight (single-flight). RAM-only.
     pub live_sending: Mutex<HashSet<String>>,
@@ -285,6 +284,7 @@ impl State {
             // Fail-open default off: a torn/missing write must never
             // start posting working messages.
             transient_on: AtomicBool::new(Self::load_transient_on()),
+            shape_telegram: AtomicBool::new(Self::load_shape_telegram()),
             // Fresh boot owns no transient pointers (never persisted —
             // rebuilt on demand) and no post flights.
             live: Mutex::new(HashMap::new()),

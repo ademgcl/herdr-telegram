@@ -1,4 +1,4 @@
-//! Tag assignment tests (split from `tests`: 300-line file limit).
+//! Tag assignment tests (split from `tests`: 500-line file limit).
 //! Tags are per-space NUMBERS now — the kind lives in the topic icon, so
 //! nothing about a tag depends on the agent kind.
 use super::TopicStorage;

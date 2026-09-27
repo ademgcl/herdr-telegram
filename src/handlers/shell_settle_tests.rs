@@ -1,4 +1,4 @@
-//! Tests for [`super::shell_settle`] (split: 300-line file limit).
+//! Tests for [`super::shell_settle`] (split: 500-line file limit).
 use super::*;
 
 // Three identical idle reads settle; the first two only bank.

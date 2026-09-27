@@ -1,5 +1,5 @@
 //! One shell submit's settle + report loop. Split from `shell_common`
-//! (300-line file limit); re-exported there for submit/recover paths.
+//! (500-line file limit); re-exported there for submit/recover paths.
 use super::shell_common::{fresh_since, shell_result_text};
 use super::shell_settle::await_shell_settle;
 use crate::{herdr::client::get_agent, jobs::stream::delta, state::AppState};

@@ -1,4 +1,4 @@
-//! Restore/remint regression tests (split from `tests`, 300-line file limit).
+//! Restore/remint regression tests (split from `tests`, 500-line file limit).
 use super::TopicStorage;
 
 #[test]

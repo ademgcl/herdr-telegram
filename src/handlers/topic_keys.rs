@@ -1,5 +1,5 @@
 //! Topic `/keys` sender (agent flavor) + the shared first-token guard.
-//! Split from `forum_topic` (300-line file limit): the body moves
+//! Split from `forum_topic` (500-line file limit): the body moves
 //! verbatim, only the target guard is new (a pane-shaped first token
 //! was typed as keystrokes into the live agent — a write from a
 //! misread, never again).

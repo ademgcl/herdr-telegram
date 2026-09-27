@@ -1,6 +1,6 @@
 //! Reverse of Format-B titles: recover the herdr tab/pane core from a
 //! Telegram topic name that may carry rendering chrome. Split from
-//! `format` (300-line file limit).
+//! `format` (500-line file limit).
 use super::chrome::{
     shed_once, short_space_for, strip_space_prefix, strip_space_suffix, trim_stray,
 };

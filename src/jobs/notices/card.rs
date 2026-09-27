@@ -1,5 +1,5 @@
 //! Buzzing card body for a limit/stall episode. Split from `notices`
-//! (300-line file limit): detection lives in `notices::detect`, rendering
+//! (500-line file limit): detection lives in `notices::detect`, rendering
 //! lives here and is re-exported (`crate::jobs::notices::limit_card_text`
 //! keeps working for `runner`/`reconcile`).
 use super::types::{ERROR_KIND, LimitHit};

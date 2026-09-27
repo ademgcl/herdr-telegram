@@ -1,5 +1,5 @@
 //! Markup-only card edits (editMessageReplyMarkup): claim/strip buttons
-//! without touching text. Split from `messages` (300-line file limit).
+//! without touching text. Split from `messages` (500-line file limit).
 //!
 //! Strips are single-attempt best-effort (no retry): they run inside the
 //! tap's single-flight hold, so a degraded-Telegram retry storm must

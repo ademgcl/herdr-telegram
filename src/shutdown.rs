@@ -1,4 +1,4 @@
-//! Shutdown signal: split from `main` (300-line file limit).
+//! Shutdown signal: split from `main` (500-line file limit).
 /// SIGINT, SIGTERM (launchd/docker send TERM), or SIGHUP (reload-style
 /// stop): break the poll loop so the offset flushes instead of replaying
 /// the batch on next boot.

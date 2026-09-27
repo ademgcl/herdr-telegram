@@ -1,4 +1,4 @@
-//! Tests for [`super::settle`] (split: 300-line file limit).
+//! Tests for [`super::settle`] (split: 500-line file limit).
 use super::*;
 
 #[test]

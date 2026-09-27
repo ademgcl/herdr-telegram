@@ -1,4 +1,4 @@
-//! Match-table parity tests (split from `detect_tests`, 300-line file limit).
+//! Match-table parity tests (split from `detect_tests`, 500-line file limit).
 use super::super::types::ERROR_KIND;
 use super::*;
 

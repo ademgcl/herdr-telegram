@@ -1,6 +1,6 @@
 //! Shared esc acks: corpse-vs-outage probe, not-blocked refuse,
 //! get_agent error classify, and the stripped-card heal. Split from
-//! `escape` (300-line file limit); single source for post_card +
+//! `escape` (500-line file limit); single source for post_card +
 //! esc_pane (+ shell Esc corpse parity).
 use crate::state::AppState;
 use std::time::Duration;

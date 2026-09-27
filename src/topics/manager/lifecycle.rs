@@ -1,6 +1,6 @@
 //! Topic lifecycle: reopen/close/delete, shell badging, card
 //! retirement, and mapping removal.
-//! Split from `manager` (300-line file limit).
+//! Split from `manager` (500-line file limit).
 use super::TopicManager;
 use crate::topics::names;
 

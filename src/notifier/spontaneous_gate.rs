@@ -1,4 +1,4 @@
-//! Spontaneous send-gate verdicts: split from `spontaneous` (300-line
+//! Spontaneous send-gate verdicts: split from `spontaneous` (500-line
 //! file limit). Pure verdicts so tests pin them; the async gate only
 //! snapshots the four inputs.
 use crate::state::AppState;

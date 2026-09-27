@@ -1,4 +1,4 @@
-//! Proc tests. Split from `proc` (300-line file limit).
+//! Proc tests. Split from `proc` (500-line file limit).
 use super::*;
 
 #[test]

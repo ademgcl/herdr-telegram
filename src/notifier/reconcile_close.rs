@@ -1,4 +1,4 @@
-//! Dead-pane silent close: split from `reconcile` (300-line file limit).
+//! Dead-pane silent close: split from `reconcile` (500-line file limit).
 //! Compare-and-delete throughout: a remint racing the tick keeps its
 //! fresh topic, mapping, and work — the retire only runs for the corpse.
 use crate::jobs::persist::PendingPrompt;

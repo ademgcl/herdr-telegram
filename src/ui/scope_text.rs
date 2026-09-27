@@ -1,7 +1,7 @@
 //! Cross-surface command scope: shared redirect/usage texts, count
 //! parsers and the `/keys` target guard. Single source for every router
 //! arm + help text that names another surface's scope (dup'd literals
-//! re-drift). Split from `views` (300-line file limit).
+//! re-drift). Split from `views` (500-line file limit).
 //!
 //! Surface architecture (do not re-litigate per command): topics are
 //! own-pane-only (no target grammar in either topic router), DM is the

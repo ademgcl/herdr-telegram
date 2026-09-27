@@ -1,4 +1,4 @@
-//! Blocked-settle arm: split from `finalize` (300-line file limit).
+//! Blocked-settle arm: split from `finalize` (500-line file limit).
 //! Never the stream body — always the blocked-card path (single-flight
 //! with tap answers, contention silent).
 use crate::{
@@ -153,7 +153,7 @@ pub async fn try_finalize_blocked(
     Some(false)
 }
 
-/// Empty non-blocked settle arm (split from `finalize`, 300-line file
+/// Empty non-blocked settle arm (split from `finalize`, 500-line file
 /// limit): post nothing, but anchor the screen so the span never
 /// resurfaces as a stale "fresh" delta. `Some(retry)` when handled.
 #[allow(clippy::too_many_arguments)]

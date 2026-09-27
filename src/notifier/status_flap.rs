@@ -1,4 +1,4 @@
-//! Done↔idle flap collapse (split from `status`: 300-line file limit).
+//! Done↔idle flap collapse (split from `status`: 500-line file limit).
 use std::time::{Duration, Instant};
 
 /// done↔idle bounces closer than this are flap (collapsed); slower ones

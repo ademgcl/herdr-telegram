@@ -117,7 +117,7 @@ pub async fn type_text(s: &AppState, pane: &str, text: &str) -> Result<(), TypeE
 
 /// Arm the typed-answer waiter (B:type button): the next message in
 /// this chat types into the pane's waiting prompt + Enter. Split from
-/// `tap_answer` (300-line file limit).
+/// `tap_answer` (500-line file limit).
 pub(crate) async fn arm_type_waiter(s: &AppState, chat: i64, thread: Option<i64>, pane: &str) {
     // 1:1 arming: a stale Type button racing a turnover to options
     // must not arm a waiter that eats the next message into refuses

@@ -1,5 +1,5 @@
 //! Tag identity (pane→`sh<n>`/`o<n>`): stable short ids (split from
-//! `storage/mod`, 300-line file limit). Reassigns on kind-family flips
+//! `storage/mod`, 500-line file limit). Reassigns on kind-family flips
 //! so `is_shell_tagged` never reads a stale family tag.
 use super::TopicStorage;
 use crate::topics::names;

@@ -1,5 +1,5 @@
 //! Global cancel: retire every watcher + intent in one pass. Split from
-//! `cancel` (300-line file limit). Same LWW/CAS rules as the per-pane
+//! `cancel` (500-line file limit). Same LWW/CAS rules as the per-pane
 //! paths; typing abort + done-stamps run AFTER CAS against keys that
 //! were actually removed (early-snapshot abort kills a successor's
 //! typing when its CAS loses).

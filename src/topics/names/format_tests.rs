@@ -1,4 +1,4 @@
-//! Tests for [`super::format_title`] (split: 300-line file limit).
+//! Tests for [`super::format_title`] (split: 500-line file limit).
 use super::*;
 
 #[test]

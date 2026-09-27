@@ -1,4 +1,4 @@
-//! Tests for [`super::cards`] reset-arm consume (split: 300-line limit).
+//! Tests for [`super::cards`] reset-arm consume (split: 500-line limit).
 use super::*;
 use std::{collections::HashMap, time::Duration};
 

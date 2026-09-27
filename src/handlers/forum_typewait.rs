@@ -1,4 +1,4 @@
-//! Agent-topic typed-answer waiter: split from `forum_topic` (300-line cap).
+//! Agent-topic typed-answer waiter: split from `forum_topic` (500-line cap).
 use crate::state::AppState;
 
 /// Waiter outcome: handled (caller returns), resumed-as-prompt (caller
@@ -155,7 +155,7 @@ pub(crate) async fn consume_typewait(
 }
 
 /// Serve a resumed-prompt waiter outcome (split from `forum_topic`,
-/// 300-line file limit): re-read the WAITER pane (the routing snapshot
+/// 500-line file limit): re-read the WAITER pane (the routing snapshot
 /// may point elsewhere after a re-arm) and enqueue as a prompt, or
 /// restore the waiter on an unreadable read.
 pub(crate) async fn serve_resumed_prompt(

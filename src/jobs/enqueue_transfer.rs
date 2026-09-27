@@ -1,4 +1,4 @@
-//! Last-wins prompt transfer (split from `enqueue`: 300-line file limit).
+//! Last-wins prompt transfer (split from `enqueue`: 500-line file limit).
 //! Single source for the delivered-books handoff: dest/prompt move to
 //! the delivered req so they match the durable slot, or a prompt/dest
 //! split mismatches `clear_pending_if_matches` and leaks the intent

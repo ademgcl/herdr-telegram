@@ -1,5 +1,5 @@
 //! Post-submit re-arm: mint a watcher when the submit landed on a
-//! retired job. Split from `enqueue` (300-line file limit).
+//! retired job. Split from `enqueue` (500-line file limit).
 use super::runner::watch_job;
 use crate::{herdr::client::read_screen_adaptive, jobs::job::Job, state::AppState};
 use std::sync::Arc;

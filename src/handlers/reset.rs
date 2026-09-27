@@ -249,7 +249,7 @@ pub async fn run_paced_reset(s: &AppState, chat: i64, thread_id: Option<i64>) {
         }
     }
 
-    // Step 3: dead-topic prune (split to `reset_single`: 300-line limit).
+    // Step 3: dead-topic prune (split to `reset_single`: 500-line limit).
     let dead_deleted = super::reset_single::prune_dead_topics(s, mappings, &live_panes).await;
 
     let mut summary = format!(

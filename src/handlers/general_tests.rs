@@ -1,4 +1,4 @@
-//! Tests for [`super::general`] (split: 300-line file limit).
+//! Tests for [`super::general`] (split: 500-line file limit).
 use super::super::general_typewait::{TypewaitProbe, classify_typewait_probe};
 
 #[test]

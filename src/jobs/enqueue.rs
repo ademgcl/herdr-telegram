@@ -1,5 +1,5 @@
 //! Prompt submit: deliver to the agent, record last-wins books, arm the
-//! watcher. Split from `runner` (300-line file limit).
+//! watcher. Split from `runner` (500-line file limit).
 use super::runner::watch_job;
 use crate::{
     herdr::client::{read_screen_adaptive, rpc_t},

@@ -1,4 +1,4 @@
-//! Tests for the stripped-card heal (split: 300-line file limit).
+//! Tests for the stripped-card heal (split: 500-line file limit).
 use super::*;
 
 #[test]

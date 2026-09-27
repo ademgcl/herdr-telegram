@@ -1,5 +1,5 @@
 //! Tracked button surfaces per pane: which posted cards still carry
-//! live answer buttons. Split from `dialog` (300-line file limit).
+//! live answer buttons. Split from `dialog` (500-line file limit).
 //!
 //! Contracts (do not blur):
 //! * [`track_card`] + [`repoint_card`]: same-chat replace — parallel

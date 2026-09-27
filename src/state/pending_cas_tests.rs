@@ -1,4 +1,4 @@
-//! Tests for the migration-only CAS variant (split: 300-line file limit).
+//! Tests for the migration-only CAS variant (split: 500-line file limit).
 use crate::state::cancel::isolated_state;
 
 #[tokio::test]

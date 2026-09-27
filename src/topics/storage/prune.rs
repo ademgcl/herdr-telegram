@@ -1,4 +1,4 @@
-//! Orphan prune for topic storage (split from `mod`, 300-line limit).
+//! Orphan prune for topic storage (split from `mod`, 500-line limit).
 use super::TopicStorage;
 
 impl TopicStorage {

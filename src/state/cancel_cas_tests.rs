@@ -1,4 +1,4 @@
-//! CAS stamp + job_live tests (split from `cancel_tests`, 300-line limit).
+//! CAS stamp + job_live tests (split from `cancel_tests`, 500-line limit).
 use super::*;
 use crate::jobs::job::Job;
 

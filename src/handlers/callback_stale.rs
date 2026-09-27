@@ -1,4 +1,4 @@
-//! Stale-tap gate for callback cards: split from `callback` (300-line
+//! Stale-tap gate for callback cards: split from `callback` (500-line
 //! file limit). Pure verdicts so tests pin them.
 use crate::{state::AppState, types::STALE_SECS};
 use serde_json::Value;

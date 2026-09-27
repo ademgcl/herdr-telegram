@@ -33,6 +33,7 @@ mod newcmd;
 pub mod photo;
 pub mod reset;
 pub mod reset_single;
+mod shape;
 pub mod shell;
 pub mod shell_common;
 pub mod shell_lifecycle;

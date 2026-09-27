@@ -1,6 +1,6 @@
 /// Message routing for agentless-topic panes: the shell command set.
 /// Bare text runs as a command (any agent binary re-enters by itself). Split
-/// from handlers/shell under the 300-line file cap.
+/// from handlers/shell under the 500-line file cap.
 use crate::{
     handlers::forum::bare_cmd,
     herdr::client::{read_shell_output, send_pane_keys},
@@ -72,6 +72,10 @@ pub async fn handle_shell_topic(s: AppState, chat: i64, thread_id: i64, pane: &s
     }
     // Everything below follows the waiter (see forum_topic): an
     // armed run waiter owns the next message.
+    if cmd == "/shape" {
+        super::shape::handle(&s, chat, Some(thread_id), arg).await;
+        return;
+    }
     if cmd == "/new" {
         super::newcmd::handle_new(&s, chat, Some(thread_id), crate::ui::Scope::Topic).await;
         return;

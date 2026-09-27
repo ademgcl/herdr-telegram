@@ -1,5 +1,5 @@
 //! Spontaneous answer pushes (forum + DM): the body alone, delivery-gated.
-//! Split from `cards` (300-line file limit).
+//! Split from `cards` (500-line file limit).
 use crate::{
     herdr::client::list_panes,
     state::AppState,

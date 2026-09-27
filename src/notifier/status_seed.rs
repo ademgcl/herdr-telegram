@@ -1,4 +1,4 @@
-//! Boot-seed blocked card (split from `status`, 300-line file limit).
+//! Boot-seed blocked card (split from `status`, 500-line file limit).
 //! An already-blocked pane genuinely needs input NOW (its question was
 //! missed while the bot was down), so the seed posts the answer card
 //! instead of staying mute until the next transition. Content-addressed

@@ -62,7 +62,7 @@ pub fn port_busy(port: u16) -> bool {
     std::net::TcpListener::bind(format!("127.0.0.1:{port}")).is_err()
 }
 
-// Validated discovery + kill live in `proc_kill` (300-line file limit);
+// Validated discovery + kill live in `proc_kill` (500-line file limit);
 // re-exported so `proc::bot_pids()` call sites stay untouched.
 #[cfg(test)]
 pub(crate) use super::proc_kill::looks_like_bot;

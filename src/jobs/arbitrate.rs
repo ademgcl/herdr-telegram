@@ -1,5 +1,5 @@
 //! Final-card arbitration: stream vs settled screen. Split from
-//! `finalize` (300-line file limit).
+//! `finalize` (500-line file limit).
 use crate::{jobs::segment::final_block, jobs::stream::join_trimmed};
 
 /// Minimum streamed body trusted outright. Below this the stream is

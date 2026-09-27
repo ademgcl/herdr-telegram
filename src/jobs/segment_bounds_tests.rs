@@ -1,6 +1,6 @@
 //! Boundary regression tests: tool-echo splits, Thought/Thinking
 //! narrowness, dialog rule/option cohesion. Split from `segment_tests`
-//! (300-line file limit).
+//! (500-line file limit).
 use super::*;
 
 fn v(items: &[&str]) -> Vec<String> {

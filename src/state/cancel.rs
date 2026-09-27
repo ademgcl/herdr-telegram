@@ -1,4 +1,4 @@
-//! Watcher retire paths for shared state. Split from `state` (300-line
+//! Watcher retire paths for shared state. Split from `state` (500-line
 //! file limit): loud user-cancel, quiet pane-death retire; global cancel
 //! lives in `cancel_all`. All single-pane retires are last-writer-wins
 //! (snapshot + remove-if-same Arc) and never nest async locks.
@@ -181,7 +181,7 @@ impl State {
     }
 }
 
-/// Re-exported test helper (split to `test_state`, 300-line file
+/// Re-exported test helper (split to `test_state`, 500-line file
 /// limit): existing `state::cancel::isolated_state` call sites keep
 /// working unchanged.
 #[cfg(test)]

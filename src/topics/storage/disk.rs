@@ -1,6 +1,6 @@
 //! Atomic disk layer for topic mappings: tmp+rename main, tmp+rename
 //! `.prev` last-good, corrupt→`.bak` + prev fallback. Split from `mod`
-//! (300-line file limit).
+//! (500-line file limit).
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,

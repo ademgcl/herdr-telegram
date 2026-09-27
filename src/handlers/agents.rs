@@ -35,7 +35,7 @@ pub(crate) async fn show_panel(s: &AppState, chat: i64, thread: Option<i64>) {
 }
 
 /// Dispatcher for topic routers (one arm, two commands): keeps the
-/// 300-line routers small — `/agents` panels, `/spawn` spawns.
+/// 500-line routers small — `/agents` panels, `/spawn` spawns.
 /// Fail-closed: anything else writes nothing (callers pre-gate, this
 /// is the backstop).
 pub(crate) async fn handle_control(

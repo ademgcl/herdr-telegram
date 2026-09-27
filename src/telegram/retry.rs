@@ -1,5 +1,5 @@
 //! Telegram retry policy: flood-wait + transient backoff (split from
-//! `client`, 300-line file limit). Single source for the retry budget
+//! `client`, 500-line file limit). Single source for the retry budget
 //! shared by `call_retrying` and every loud send/edit path.
 use super::client::TelegramClient;
 use crate::types::Res;

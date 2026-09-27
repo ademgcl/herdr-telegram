@@ -1,5 +1,5 @@
 //! Reconcile tail: DM flip + hygiene + titles. Split from `reconcile`
-//! (300-line file limit).
+//! (500-line file limit).
 use crate::{
     handlers::titles::sync_titles_with,
     herdr::client::list_workspaces,

@@ -1,4 +1,4 @@
-//! Tests for per-kind topic icons (split: 300-line file limit).
+//! Tests for per-kind topic icons (split: 500-line file limit).
 use super::*;
 
 #[test]

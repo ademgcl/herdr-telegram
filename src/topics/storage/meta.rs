@@ -1,4 +1,4 @@
-//! Icon + recent-msg helpers: split from `storage` (300-line file limit).
+//! Icon + recent-msg helpers: split from `storage` (500-line file limit).
 use super::TopicStorage;
 
 impl TopicStorage {

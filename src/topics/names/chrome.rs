@@ -1,6 +1,6 @@
 //! Tolerant Format-B chrome parsing (shared): `[bracket]` split,
 //! space-prefix strip + space-rename intent, code-suffix shedding,
-//! stray trims. Split from `format` (300-line file limit).
+//! stray trims. Split from `format` (500-line file limit).
 use super::KIND_CODES;
 
 /// Collapse whitespace + lowercase (unicode-aware): the single

@@ -1,4 +1,4 @@
-//! Typing-indicator task ownership. Split from `jobs` (300-line file limit).
+//! Typing-indicator task ownership. Split from `jobs` (500-line file limit).
 use super::State;
 use std::sync::Arc;
 

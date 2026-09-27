@@ -1,5 +1,5 @@
 //! Validated process discovery + kill for `dev` (split from `proc`:
-//! 300-line file limit). `proc` re-exports the names it owned, so
+//! 500-line file limit). `proc` re-exports the names it owned, so
 //!! `proc::bot_pids()` call sites stay untouched.
 #![deny(missing_docs)]
 

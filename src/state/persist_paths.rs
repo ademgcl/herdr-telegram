@@ -1,4 +1,4 @@
-//! State-file paths (split from `state`: 300-line file limit). Pure
+//! State-file paths (split from `state`: 500-line file limit). Pure
 //! relocation — same `HERDR_STATE_DIR`-or-CWD root, same filenames.
 use std::path::PathBuf;
 

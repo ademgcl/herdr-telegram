@@ -1,5 +1,5 @@
 //! Pure stall-alert decisions shared by the watcher and watchdog paths.
-//! Split from `limits` (300-line file limit): predicates here are
+//! Split from `limits` (500-line file limit): predicates here are
 //! unit-tested, the async RPC/send orchestration stays in `limits`/`stall`.
 use crate::jobs::notices::{
     LimitHit,

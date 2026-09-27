@@ -1,4 +1,4 @@
-//! No-job cancel race tests (split from `cancel_tests`, 300-line file limit).
+//! No-job cancel race tests (split from `cancel_tests`, 500-line file limit).
 use super::super::retire::global_cancel_clears;
 use super::*;
 use crate::jobs::persist::PendingPrompt;

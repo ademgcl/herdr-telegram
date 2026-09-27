@@ -1,6 +1,6 @@
 //! Dead-pane hygiene: mode-independent reaping of jobs, durable intent,
 //! and per-pane maps for externally-closed panes. Split from `reconcile`
-//! (300-line file limit).
+//! (500-line file limit).
 use crate::{
     jobs::{persist, recover::recoverable},
     state::{
@@ -68,7 +68,7 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
     // as the op guards. Key/type waiters expire by age too (a stale K
     // arm keys into live work, a stale Type arm answers a dead question)
     // — pane-death reap above still applies first. Split to `prune_age`
-    // (300-line file limit): waiters, notice stamps, debounce arms, and
+    // (500-line file limit): waiters, notice stamps, debounce arms, and
     // done stamps all prune there.
     prune_age(s).await;
     // Guard-only wedges pin too: a tap that consumed its waiter (no

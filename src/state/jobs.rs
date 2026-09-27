@@ -1,4 +1,4 @@
-//! Job + waiter lifecycle for shared state. Split from `state` (300-line
+//! Job + waiter lifecycle for shared state. Split from `state` (500-line
 //! file limit): prompt-intent durability, waiter retire, and per-pane
 //! cleanup live here as `impl State` (cancel paths live in `cancel`).
 use super::State;

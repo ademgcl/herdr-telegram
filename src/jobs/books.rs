@@ -1,6 +1,6 @@
 //! Watcher bookkeeping: cover prompts owed at entry so a new submit
 //! mid-finalize keeps its pending count, persisted intent and map
-//! entry. Split from `finalize` (300-line file limit). Pure
+//! entry. Split from `finalize` (500-line file limit). Pure
 //! relocation — epoch/pending/intent/map semantics unchanged.
 use crate::{jobs::job::Job, state::AppState};
 use std::sync::Arc;

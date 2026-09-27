@@ -1,5 +1,5 @@
 //! Pure router guards: stale/setup notice windows + log sanitizer
-//! (split from `router`, 300-line file limit). Single source for the
+//! (split from `router`, 500-line file limit). Single source for the
 //! burst-guard windows used by the update pump.
 use crate::types::{NAGGED_SECS, STALE_SECS};
 use std::time::Instant;

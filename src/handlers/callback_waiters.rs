@@ -1,5 +1,5 @@
 //! Callback waiter arms (K/R) + output taps (p/o): split from `callback`
-//! (300-line file limit).
+//! (500-line file limit).
 //! Exclusive arming: a sibling waiter for the same key would otherwise
 //! win the next message instead of the tapped one.
 use super::callback_parse::{gone_card, pane_live};

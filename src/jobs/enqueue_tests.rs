@@ -1,4 +1,4 @@
-//! Tests for [`super::enqueue`] (split: 300-line file limit).
+//! Tests for [`super::enqueue`] (split: 500-line file limit).
 use super::*;
 use crate::jobs::job::Job;
 use crate::state::cancel::isolated_state;

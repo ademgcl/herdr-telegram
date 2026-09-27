@@ -1,5 +1,5 @@
 //! Routing memory: reply targets + focus. Split from `state`
-//! (300-line file limit). Pure relocation — lock order and semantics
+//! (500-line file limit). Pure relocation — lock order and semantics
 //! unchanged (torder → targets, memory-before-disk focus).
 use super::State;
 use crate::types::write_private;

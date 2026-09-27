@@ -1,5 +1,5 @@
 //! Drop-backstop for the watchdog limit-stall claim (split from
-//! `limits`: 300-line file limit). The claim is inserted pre-send so a
+//! `limits`: 500-line file limit). The claim is inserted pre-send so a
 //! concurrent watcher tick stays silent — but the 50s watchdog timeout
 //! in `main` drops `reconcile` mid-send, bypassing the failure-release.
 //! The leaked claim then suppresses the stall for a full 30-min remind

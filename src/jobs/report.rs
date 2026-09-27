@@ -69,6 +69,17 @@ async fn send_remembered(
     pane: &str,
     msg: &str,
 ) -> Option<i64> {
+    // Phone-shaped BEFORE the send: the card is read on a small screen,
+    // so paragraphs are broken, tables bulleted and blank pile-ups
+    // collapsed. Gated on the user's pref, and a no-op for a short reply
+    // (so the common case costs nothing and cannot regress).
+    let shaped;
+    let msg = if s.shape_telegram() {
+        shaped = crate::telegram::shape::shape(msg);
+        shaped.as_str()
+    } else {
+        msg
+    };
     let sent = tokio::time::timeout(
         std::time::Duration::from_secs(FINAL_SEND_TIMEOUT_SECS),
         s.tg.try_send_msg(chat_id, thread_id, msg, None),

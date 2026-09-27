@@ -1,5 +1,5 @@
 //! Watchdog limit-stall scanner: quota stalls never transition, so this
-//! scans screens directly. Split from `reconcile` (300-line file limit);
+//! scans screens directly. Split from `reconcile` (500-line file limit);
 //! pure predicates live in `limit_decide` (unit-tested there).
 use crate::{
     herdr::client::read_screen_for_limits,

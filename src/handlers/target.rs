@@ -1,5 +1,5 @@
 //! DM target resolution: which pane a command or bare text talks to.
-//! Split from dm.rs under the 300-line file cap.
+//! Split from dm.rs under the 500-line file cap.
 use crate::{state::AppState, types::AgentRow};
 
 pub fn resolve_target(rows: &[AgentRow], spec: Option<&str>) -> Option<AgentRow> {

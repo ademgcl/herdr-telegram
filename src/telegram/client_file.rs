@@ -1,4 +1,4 @@
-//! Telegram file download (split from `client`, 300-line file limit).
+//! Telegram file download (split from `client`, 500-line file limit).
 use super::TelegramClient;
 use crate::types::Res;
 use std::time::Duration;

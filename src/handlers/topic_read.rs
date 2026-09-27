@@ -1,5 +1,5 @@
 //! Agent-topic read commands: recent terminal output. Split from
-//! `forum_topic` (300-line file limit). Pure relocation.
+//! `forum_topic` (500-line file limit). Pure relocation.
 use crate::{
     herdr::client::{read_agent_output, read_agent_visible},
     state::AppState,

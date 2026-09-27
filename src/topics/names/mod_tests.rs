@@ -1,5 +1,5 @@
 //! Tests for tag assignment and workspace icon colour (split from
-//! `mod`: 300-line file limit).
+//! `mod`: 500-line file limit).
 use super::*;
 
 #[test]

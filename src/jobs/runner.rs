@@ -1,6 +1,6 @@
 //! Prompt watcher loop: event stream + 2s poll tick, stream
 //! accumulation, stall watch, and settle→finalize on completion. Split
-//! from `finalize`/`settle` (300-line file limit). One task per prompt;
+//! from `finalize`/`settle` (500-line file limit). One task per prompt;
 //! supersede/cancel retire via epoch + cancel signal, never by killing.
 use crate::jobs::episode::BuzzEpisode;
 use crate::jobs::runner_cancel::cancel_watch;
@@ -135,7 +135,7 @@ pub(crate) async fn watch_job(s: AppState, pane: String, job: Arc<Job>) {
         // /cancel (or a supersede, via the epoch check next iteration)
         // must not wait behind up to 10s of dial.
         if ev.is_none() && last_open.elapsed() >= Duration::from_secs(REOPEN_COOLDOWN_SECS) {
-            // Split to `runner_cancel::reopen_events` (300-line file limit).
+            // Split to `runner_cancel::reopen_events` (500-line file limit).
             match super::runner_cancel::reopen_events(&s, &pane, &job, &mut ev, &mut last_open)
                 .await
             {

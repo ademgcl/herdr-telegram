@@ -1,6 +1,6 @@
 /// Key maps for answering INTERACTIVE blocked panes (see dialog.rs:
 /// option buttons, card posts and tap handling live there; this keeps
-/// only the static key tables so the file stays under the 300-line cap).
+/// only the static key tables so the file stays under the 500-line cap).
 pub fn keys_for(action: &str) -> Option<&'static [&'static str]> {
     match action {
         "allow" => Some(&["enter"]),

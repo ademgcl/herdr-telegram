@@ -1,4 +1,4 @@
-//! New-turn claim on the slot (split from `progress`: 300-line file
+//! New-turn claim on the slot (split from `progress`: 500-line file
 //! limit). Posts this turn's own silent placeholder before the slow
 //! submit RPC. A turn NEVER borrows the previous turn's message.
 use crate::{
