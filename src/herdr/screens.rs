@@ -10,17 +10,31 @@ pub async fn read_screen_visible(socket: &str, pane: &str, lines: u32) -> Vec<St
         .unwrap_or_default()
 }
 
-/// Adaptive read for live streaming: herdr rejects large captures on busy
-/// alternate-screen TUIs (any supported agent) but allows small visible tails;
-/// line-printing agents allow large reads. Use the biggest window available.
+/// Adaptive read for live streaming.
+///
+/// VISIBLE FIRST. The `recent_unwrapped` fallback is not a cheap retry:
+/// on a busy alternate-screen agent herdr runs its alt-screen read path
+/// — which probes the pane's bottom — and only then rejects the capture
+/// with `agent_not_idle`. Asking first meant paying that probe on every
+/// poll tick, for every pane, and never getting the data back: the log
+/// is a wall of `outcome=error` from exactly this call, and the probe is
+/// what drags a scrolled-back pane to the bottom.
+///
+/// `visible` is the correct primary source anyway for live streaming —
+/// it is the pane's current state, and it is the only source herdr
+/// serves while an agent is blocked. The wide recent read stays as the
+/// fallback for when the viewport genuinely comes back empty, which is
+/// the only case it was ever good for.
 pub async fn read_screen_adaptive(socket: &str, pane: &str) -> Vec<String> {
-    let big = read_agent_output(socket, pane, 200).await;
-    match big {
+    let tail = read_agent_visible(socket, pane, LIVE_TAIL_LINES).await;
+    if let Ok(text) = tail
+        && !text.trim().is_empty()
+    {
+        return wrap(text);
+    }
+    match read_agent_output(socket, pane, 200).await {
         Ok(text) if !text.is_empty() => wrap(text),
-        _ => {
-            let tail = read_agent_visible(socket, pane, LIVE_TAIL_LINES).await;
-            tail.map(wrap).unwrap_or_default()
-        }
+        _ => Vec::new(),
     }
 }
 
