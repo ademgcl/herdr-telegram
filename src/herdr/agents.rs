@@ -160,7 +160,25 @@ pub async fn derive_branch(a: &serde_json::Value, cwd: &str) -> Option<String> {
     None
 }
 
+/// Live screen for a pane, newest state first.
+///
+/// VISIBLE FIRST, always — not a per-call-site preference. On a busy
+/// alternate-screen agent herdr cannot serve `recent_unwrapped`: it runs
+/// its alt-screen read path, which PROBES the pane's bottom, and only
+/// then rejects the capture. Asking first means a viewport probe on
+/// every read of every pane, which drags scrolled-back panes to the
+/// bottom. `visible` is the right primary source — it is the pane's
+/// current state, and the only one herdr serves while an agent is
+/// blocked or working.
+///
+/// The wide recent read stays as the fallback for a genuinely empty
+/// viewport, the only case it was ever good for.
 pub async fn read_agent_output(socket: &str, pane: &str, lines: u32) -> Res<String> {
+    if let Ok(v) = read_agent_visible(socket, pane, lines).await
+        && !v.trim().is_empty()
+    {
+        return Ok(v);
+    }
     let r = rpc(
         socket,
         "agent.read",
