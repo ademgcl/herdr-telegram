@@ -53,6 +53,16 @@ pub struct State {
     pub topics: TopicManager,
     pub offset: Mutex<u64>,
     pub status: Mutex<HashMap<String, String>>,
+    /// Agent identity (kind/workspace/title) per pane, TTL-cached.
+    ///
+    /// `observe_status` ran on every `working↔idle` flicker and fetched
+    /// identity each time — ~10 `agent.get` calls a minute, forever,
+    /// re-asking a question whose answer changes only when the agent
+    /// restarts or its tab is renamed. The TTL self-heals a stale entry
+    /// instead of needing invalidation wiring that could miss a case.
+    /// Pruned on write, so it cannot grow unbounded.
+    pub(crate) agent_identity:
+        Mutex<HashMap<String, (crate::types::AgentDetail, std::time::Instant)>>,
     pub jobs: Mutex<HashMap<String, Arc<Job>>>,
     pub targets: Mutex<HashMap<(i64, i64), String>>,
     pub torder: Mutex<VecDeque<(i64, i64)>>,
@@ -179,6 +189,8 @@ pub type AppState = Arc<State>;
 /// this is the floor on how fast a settle can be noticed, i.e. on reply
 /// latency. Deliberately NOT shared with the typing cadence below —
 /// slowing this to save Telegram writes would stretch every reply.
+/// TTL for the cached agent identity (see `State::agent_identity`).
+pub(crate) const AGENT_IDENTITY_TTL_SECS: u64 = 60;
 pub(crate) const POLL_TICK_SECS: u64 = 2;
 
 /// Typing-action cadence (Telegram writes only). A `sendChatAction`
@@ -255,6 +267,7 @@ impl State {
             topics,
             offset: Mutex::new(offset),
             status: Mutex::new(HashMap::new()),
+            agent_identity: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
             targets: Mutex::new(HashMap::new()),
             torder: Mutex::new(VecDeque::new()),

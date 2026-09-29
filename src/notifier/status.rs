@@ -70,9 +70,12 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     // LIMIT_CLEAR_MISSES) or pane death/shell flip, so flicker preserves
     // the episode instead of restarting it.
 
-    // Agent identity once per observation — shared by cards and
-    // alerts below.
-    let info = get_agent(&s.cfg.socket, pane).await.ok();
+    // Agent identity, TTL-cached — shared by cards and alerts below.
+    // Re-fetching on every status flicker cost ~10 `agent.get` a minute,
+    // forever, for an answer that only changes on agent restart or tab
+    // rename. The TTL self-heals within a minute, so there is no
+    // invalidation wiring to get wrong.
+    let info = cached_agent(s, pane).await;
     let (kind, ws_id, title) = match &info {
         Some(a) => (a.kind.clone(), a.ws.clone(), a.title.clone()),
         None => ("?".into(), "?".into(), String::new()),
@@ -260,4 +263,32 @@ pub async fn observe_status(s: &AppState, pane: &str, new_status: &str, silent: 
     tokio::spawn(async move {
         crate::notifier::cards::settle_check(s2, pane2, st2, at).await;
     });
+}
+
+/// Agent identity for `pane`, served from the TTL cache when fresh.
+///
+/// Fail-open on a read error: a miss returns `None` (rendered as the
+/// unknown kind) rather than caching a failure, so a herdr blip costs
+/// one fetch instead of a minute of wrong identity.
+pub(crate) async fn cached_agent(s: &AppState, pane: &str) -> Option<crate::types::AgentDetail> {
+    {
+        let mut c = s.agent_identity.lock().await;
+        let now = std::time::Instant::now();
+        // Prune on write: this is the one place a stale entry could
+        // otherwise outlive its pane.
+        c.retain(|_, (_, at)| {
+            now.duration_since(*at).as_secs() < crate::state::AGENT_IDENTITY_TTL_SECS * 4
+        });
+        if let Some((d, at)) = c.get(pane)
+            && now.duration_since(*at).as_secs() < crate::state::AGENT_IDENTITY_TTL_SECS
+        {
+            return Some(d.clone());
+        }
+    }
+    let d = get_agent(&s.cfg.socket, pane).await.ok()?;
+    s.agent_identity
+        .lock()
+        .await
+        .insert(pane.to_string(), (d.clone(), std::time::Instant::now()));
+    Some(d)
 }
