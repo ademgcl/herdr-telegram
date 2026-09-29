@@ -34,21 +34,16 @@ pub(crate) async fn handle_unknown(
     if !live_blocked {
         s.blocked_sig.lock().await.remove(pane);
         let no_kb = Some(Value::Array(Vec::new()));
-        // Record what the card now shows: a later resolve must not
-        // rewrite it back to the stale question.
+        let moved_on = format!("↩️ already moved on [{pane}] — buttons removed");
+        s.tg.edit_msg(chat, msg_id, &moved_on, no_kb).await;
+        // Record only after the edit: a dropped send must not leave a
+        // record claiming the user saw something they did not.
         crate::handlers::dialog::surfaces::remember_card_text(
             s,
             chat,
             msg_id,
-            &format!("↩️ already moved on [{pane}] — buttons removed"),
+            &crate::ui::fit_msg(&moved_on),
         );
-        s.tg.edit_msg(
-            chat,
-            msg_id,
-            &format!("↩️ already moved on [{pane}] — buttons removed"),
-            no_kb,
-        )
-        .await;
         s.remember(chat, Some(msg_id), pane).await;
         // Sibling surfaces may still show this dead dialog with live
         // buttons — the heal below resolves them.

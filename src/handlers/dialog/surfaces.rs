@@ -33,8 +33,6 @@ pub(crate) fn track_card(
     }
 }
 
-/// Repoint tracking at a fresh post, stripping the replaced surface.
-/// Same-chat only (see module docs). Lock is short; strip lock-free.
 /// Record what a live card shows, so `resolve_cards` can rewrite it.
 /// `text` MUST be the post-`fit_msg` text — what Telegram displays.
 pub(crate) fn remember_card_text(s: &AppState, chat: i64, mid: i64, text: &str) {
@@ -43,14 +41,24 @@ pub(crate) fn remember_card_text(s: &AppState, chat: i64, mid: i64, text: &str) 
     }
 }
 
-/// The text a resolve would rewrite a card to, or `None` when the card's
-/// text was never recorded.
+/// What a resolve should do with one card: rewrite it to the resolved
+/// text, or strip its buttons only.
 ///
-/// Split out so the unrecorded guard is testable without an RPC: a card
-/// with no record is strip-only, because rewriting an unknown card
-/// clobbers whatever it now shows with a stale question.
-pub(crate) fn rewrite_text(s: &AppState, loc: (i64, i64)) -> Option<String> {
-    s.card_text.lock().ok()?.get(&loc).cloned()
+/// A card with no recorded text is NEVER rewritten. Rewriting an unknown
+/// card clobbers whatever it now shows — a freshly-edited "agent
+/// resumed" line, an "already moved on" notice — with a stale question,
+/// which is worse than the bug this fix exists to close. Pure so the
+/// guard is testable without an RPC.
+pub(crate) fn resolve_action(recorded: Option<&str>) -> ResolveAction {
+    match recorded {
+        Some(t) => ResolveAction::Rewrite(t.to_string()),
+        None => ResolveAction::StripOnly,
+    }
+}
+
+pub(crate) enum ResolveAction {
+    Rewrite(String),
+    StripOnly,
 }
 
 /// Drop remembered text for surfaces that no longer exist.
@@ -172,10 +180,14 @@ pub(crate) async fn resolve_cards(s: &AppState, pane: &str) {
         // A card whose text we never recorded is left alone apart from
         // its buttons: rewriting an unknown card would clobber whatever
         // it now shows (a fresh "answered" line) with a stale question.
-        if let Some(text) = rewrite_text(s, (*chat, *mid)) {
-            s.tg.resolve_card(*chat, *mid, &text).await;
-        } else {
-            s.tg.strip_buttons(*chat, *mid).await;
+        let recorded = s
+            .card_text
+            .lock()
+            .ok()
+            .and_then(|t| t.get(&(*chat, *mid)).cloned());
+        match resolve_action(recorded.as_deref()) {
+            ResolveAction::Rewrite(text) => s.tg.resolve_card(*chat, *mid, &text).await,
+            ResolveAction::StripOnly => s.tg.strip_buttons(*chat, *mid).await,
         }
     }
     forget_card_text(s, &cards);

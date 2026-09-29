@@ -321,9 +321,9 @@ async fn test_settle_card_forgets_only_the_dropped_surface() {
     );
 }
 
-/// A card whose text was never recorded must be strip-only. Pinned
-/// WITHOUT a live Telegram client by checking the decision helper the
-/// resolve path uses: a card with no record yields no rewrite text.
+/// The unrecorded guard: a card with no recorded text is strip-only,
+/// never rewritten. Pinned on the decision the resolve path actually
+/// takes, so deleting the guard fails here.
 #[tokio::test]
 async fn test_resolve_cards_offers_no_rewrite_text_for_an_unrecorded_card() {
     let (s, _dir) = crate::state::cancel::isolated_state();
@@ -331,10 +331,15 @@ async fn test_resolve_cards_offers_no_rewrite_text_for_an_unrecorded_card() {
         .lock()
         .await
         .insert("w1:p1".to_string(), vec![(42, 7)]);
-    // A recorded card offers its text; an unrecorded one offers none.
-    super::surfaces::remember_card_text(&s, 42, 7, "⛔ blocked — needs input\n\nQ");
-    assert!(super::surfaces::rewrite_text(&s, (42, 7)).is_some());
-    assert!(super::surfaces::rewrite_text(&s, (99, 1)).is_none());
+    use super::surfaces::{ResolveAction, resolve_action};
+    // A recorded card is rewritten; an unrecorded one is strip-only. The
+    // second arm is the guard: without it, resolve would clobber an
+    // unknown card with a stale question.
+    assert!(matches!(
+        resolve_action(Some("⛔ blocked — needs input\n\nQ")),
+        ResolveAction::Rewrite(_)
+    ));
+    assert!(matches!(resolve_action(None), ResolveAction::StripOnly));
 }
 
 /// And the consuming behaviour on top of it.
