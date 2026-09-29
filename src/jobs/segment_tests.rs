@@ -275,3 +275,70 @@ fn test_transient_inventory_never_posts_answer_always_wins() {
         );
     }
 }
+
+/// The reported leak: a turn that acted (tool call) but rendered no
+/// prose must NOT serve the PREVIOUS turn's answer as its card.
+///
+/// `finalize` re-reads for the TUI-lag race and then retires without
+/// posting, so an empty body is a first-class outcome — a wrong card is
+/// not.
+#[test]
+fn test_acted_turn_with_no_prose_never_serves_the_previous_turns_answer() {
+    let lines = v(&[
+        "  prior turn answer that was delivered", // turn 1
+        "─────────────────────────────────────",  // rule
+        "┃  fix the parser",                      // turn 2 prompt echo
+        "▸ Thought for 2s",                       // turn 2 ACTED
+        "● Bash(cargo test)",                     // turn 2 acted
+        "⠋ Spinning…",                            // still working, no prose
+        "─────────────────────────────────────",
+        "   ⬝⬝⬝ esc interrupt  145.6K (14%)",
+    ]);
+    let body = crate::jobs::segment::final_block(&lines, "fix the parser");
+    let text = body.join("\n");
+    assert!(
+        !text.contains("prior turn answer"),
+        "served the PREVIOUS turn as this turn's card: {text:?}"
+    );
+}
+
+/// The same turn WITH its own prose must still deliver it. The guard
+/// only removes older candidates — it must not swallow the real answer.
+#[test]
+fn test_acted_turn_with_its_own_prose_still_delivers_it() {
+    let lines = v(&[
+        "  prior turn answer that was delivered",
+        "─────────────────────────────────────",
+        "┃  fix the parser",
+        "▸ Thought for 2s",
+        "● Bash(cargo test)",
+        "  Found it — the guard was missing in check().",
+        "─────────────────────────────────────",
+        "                                          Gemini 3.8 Flash · high",
+    ]);
+    let body = crate::jobs::segment::final_block(&lines, "fix the parser");
+    let text = body.join("\n");
+    assert!(text.contains("guard was missing"), "{text:?}");
+    assert!(
+        !text.contains("prior turn answer"),
+        "older turn leaked: {text:?}"
+    );
+}
+
+/// A SILENT turn keeps the old behaviour: with nothing new to say, the
+/// last answer above the echo is legitimately the reply (pinned by the
+/// existing echo tests — this must not regress to silence).
+#[test]
+fn test_silent_turn_still_falls_back_to_the_answer_above_the_echo() {
+    let lines = v(&[
+        "  real answer",
+        "──────────────────────────────────",
+        "> do it",
+        "",
+        "  push it",
+        "──────────────────────────────────",
+        "                                          Gemini 3.8 Flash · high",
+    ]);
+    let body = crate::jobs::segment::final_block(&lines, "do it\n\npush it");
+    assert_eq!(body, v(&["  real answer"]), "silent-turn fallback lost");
+}

@@ -169,12 +169,35 @@ pub(crate) fn is_footer_segment(seg: &[String]) -> bool {
 /// Fresh reply = chrome-cleaned last non-empty segment after cycle
 /// boundaries and prompt echoes. A trailing footer/input box yields an
 /// empty tail, so the last NON-EMPTY segment wins instead of blanking.
+/// Record a turn anchor at its prompt echo. The LAST echo wins: a pane
+/// that re-echoes the prompt lower down (input box still holding it)
+/// makes everything above it this turn's output.
+fn echo_start_anchor(turn_start: &mut Option<usize>, turn_acted: &mut bool, len: usize) {
+    *turn_start = Some(len);
+    *turn_acted = false;
+}
+
 pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     let want = prompt.lines().next().map(str::trim).unwrap_or("");
     let rest = echo_rest(prompt);
     let mut cands: Vec<(Vec<String>, bool)> = Vec::new();
     let mut seg: Vec<String> = Vec::new();
     let mut echo_pos: Option<usize> = None;
+    // Turn scoping. `echo_pos` is only a wrap-chain cursor; it carries no
+    // position in `cands`, so a turn that renders no prose of its own
+    // pops an OLDER turn's block and serves that as the reply (the
+    // reported "the card was my last reply"). Candidates are appended in
+    // screen order, at most one per flush, and never reordered after the
+    // push — so the count at the echo line is exactly the number of
+    // pre-turn candidates, and "belongs to this turn" ⇔ index >= anchor.
+    let mut turn_start: Option<usize> = None;
+    // Whether this turn ACTED. A tool/reasoning split only renders when
+    // the agent works, so it distinguishes "silent turn" (the echo tests'
+    // case: the answer legitimately predates the echo) from "acted but
+    // wrote no prose" (the bug: a stale card). A full-width RULE is
+    // excluded: it is a turn separator and appears on both sides, so
+    // counting it would restore the bug.
+    let mut turn_acted = false;
     // Agy auto title ("Prioritizing Tool Usage") opens every segment behind
     // a `▸ Thought` header. Drain it at flush — but only when more content
     // follows (a lone line may be the whole reply) and never a fatal
@@ -201,6 +224,9 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
     for l in lines.iter() {
         if is_boundary(l) {
             flush(&mut seg, &mut cands, is_rule(l), thought_opened);
+            if turn_start.is_some() && !is_rule(l) {
+                turn_acted = true;
+            }
             echo_pos = None;
             thought_opened = l.trim().starts_with("▸ Thought");
             continue;
@@ -208,6 +234,7 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
         if !want.is_empty() && is_prompt_echo(l, want) {
             flush(&mut seg, &mut cands, false, thought_opened);
             thought_opened = false;
+            echo_start_anchor(&mut turn_start, &mut turn_acted, cands.len());
             echo_pos = Some(0);
             continue;
         }
@@ -224,6 +251,20 @@ pub fn final_block(lines: &[String], prompt: &str) -> Vec<String> {
         seg.push(l.clone());
     }
     flush(&mut seg, &mut cands, false, thought_opened);
+    // Acted, yet this turn produced no candidate of its own: post
+    // nothing. Empty is a first-class outcome — `finalize` re-reads twice
+    // for the TUI-lag race and then retires the transient without
+    // posting. Re-serving the previous turn's answer is the bug.
+    let start = turn_start.unwrap_or(0);
+    if turn_start.is_some() && cands.len() == start && turn_acted {
+        return Vec::new();
+    }
+    // No floor beyond the guard above: the footer-drain below must be
+    // able to cross back to this turn's answer (codex renders the answer
+    // ABOVE its input box and footer, so the answer sits before the
+    // echo). The guard already covers the reported bug, which is a turn
+    // with no candidate at all.
+    let _ = start;
     let Some((mut win, mut gated)) = cands.pop() else {
         return Vec::new();
     };
