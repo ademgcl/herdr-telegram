@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 mod options;
 mod refresh;
-mod surfaces;
+pub(crate) mod surfaces;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -155,11 +155,13 @@ async fn send_with(
     // winner lines — cleaned text drops ❯-rows and would fall back
     // to Confirm while the tap path shows real options.
     let (q, options) = live_card(screen);
+    // Store the POST-`fit_msg` text: what Telegram displays.
+    let body = crate::ui::fit_msg(&blocked_card_text(&q, &options));
     let mid =
         s.tg.send_msg_with_effect(
             chat,
             thread,
-            &blocked_card_text(&q, &options),
+            &body,
             Some(blocked_kb(pane, &options)),
             Some(crate::telegram::EFFECT_FIRE),
         )
@@ -170,6 +172,7 @@ async fn send_with(
     // Track the location too: a PC-side answer strips it (buttons must
     // not outlive the dialog they answered).
     if let Some(m) = mid {
+        surfaces::remember_card_text(s, chat, m, &body);
         // Stamp the full dialog_sig (question + options, never bare q):
         // refresh compares sigs, so a bare-q stamp never matches an
         // option dialog and reposts every tick (spam).
@@ -227,6 +230,7 @@ pub async fn send_blocked_card(s: &AppState, chat: i64, thread: Option<i64>, pan
 /// locations. The next observation reposts fresh via the live mapping.
 pub async fn retire_dialog(s: &AppState, pane: &str) {
     s.blocked_sig.lock().await.remove(pane);
+    surfaces::forget_pane_text(s, pane);
     s.blocked_card.lock().await.remove(pane);
 }
 

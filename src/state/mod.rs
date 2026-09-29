@@ -156,6 +156,16 @@ pub struct State {
     /// chat (forum once, each owner DM once). A PC-side answer strips
     /// these (buttons must not outlive the dialog); resolve consumes.
     pub blocked_card: Mutex<HashMap<String, Vec<(i64, i64)>>>,
+    /// What each live blocked card currently shows, keyed by
+    /// `(chat, message_id)`.
+    ///
+    /// Telegram has no `getMessage`, so a card's text cannot be read
+    /// back — it has to be remembered. `resolve_cards` used to strip only
+    /// the BUTTONS, leaving the card permanently reading "⛔ blocked —
+    /// needs input … Tap an answer" after its dialog was answered, which
+    /// is indistinguishable from a live one. RAM-only, pruned wherever a
+    /// `blocked_card` entry is dropped, with a `hygiene` backstop.
+    pub(crate) card_text: std::sync::Mutex<HashMap<(i64, i64), String>>,
     /// Owner→pane texts for `/history` catch-up (RAM-only: prompts
     /// carry secrets, never disk). Bounded per pane, pruned with it.
     pub history: Mutex<HashMap<String, std::collections::VecDeque<String>>>,
@@ -293,6 +303,7 @@ impl State {
             spawnop: Mutex::new(HashMap::new()),
             spawndone: Mutex::new(crate::handlers::callback_spawn::load_spawndone()),
             blocked_card: Mutex::new(HashMap::new()),
+            card_text: std::sync::Mutex::new(HashMap::new()),
             history: Mutex::new(HashMap::new()),
             shell_gen: Mutex::new(HashMap::new()),
             typing_tasks: Mutex::new(HashMap::new()),

@@ -34,6 +34,14 @@ pub(crate) async fn handle_unknown(
     if !live_blocked {
         s.blocked_sig.lock().await.remove(pane);
         let no_kb = Some(Value::Array(Vec::new()));
+        // Record what the card now shows: a later resolve must not
+        // rewrite it back to the stale question.
+        crate::handlers::dialog::surfaces::remember_card_text(
+            s,
+            chat,
+            msg_id,
+            &format!("↩️ already moved on [{pane}] — buttons removed"),
+        );
         s.tg.edit_msg(
             chat,
             msg_id,
@@ -63,6 +71,12 @@ pub(crate) async fn handle_unknown(
             .await
         {
             Ok(()) => {
+                crate::handlers::dialog::surfaces::remember_card_text(
+                    s,
+                    chat,
+                    msg_id,
+                    &crate::ui::fit_msg(crate::ui::UNKNOWN_BUTTON),
+                );
                 s.remember(chat, Some(msg_id), pane).await;
             }
             Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
@@ -85,6 +99,12 @@ pub(crate) async fn handle_unknown(
         let kb = Some(blocked_kb(pane, &opts));
         match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
             Ok(()) => {
+                crate::handlers::dialog::surfaces::remember_card_text(
+                    s,
+                    chat,
+                    msg_id,
+                    &crate::ui::fit_msg(&text),
+                );
                 s.blocked_sig
                     .lock()
                     .await
@@ -94,6 +114,12 @@ pub(crate) async fn handle_unknown(
             }
             Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
                 if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
+                    crate::handlers::dialog::surfaces::remember_card_text(
+                        s,
+                        chat,
+                        mid,
+                        &crate::ui::fit_msg(&text),
+                    );
                     s.blocked_sig
                         .lock()
                         .await

@@ -39,6 +39,7 @@ impl State {
         self.debounce.lock().await.remove(pane);
         self.clear_limit_episode(pane).await;
         self.blocked_sig.lock().await.remove(pane);
+        crate::handlers::dialog::surfaces::forget_pane_text(self, pane);
         self.blocked_card.lock().await.remove(pane);
         self.history.lock().await.remove(pane);
         // Guards die stale-only (never blind): the pane may be a

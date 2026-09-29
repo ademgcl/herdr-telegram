@@ -112,6 +112,15 @@ pub async fn answer_tap(
                     // update stays "new" for the watchdog.
                     match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
                         Ok(()) => {
+                            // The card now shows a NEW dialog: refresh the
+                            // record so resolve rewrites this question, not
+                            // the one the card used to show.
+                            crate::handlers::dialog::surfaces::remember_card_text(
+                                s,
+                                chat,
+                                msg_id,
+                                &crate::ui::fit_msg(&text),
+                            );
                             let _ = s.tg.set_reaction(chat, msg_id, Some("❗")).await;
                             s.blocked_sig
                                 .lock()
@@ -132,6 +141,12 @@ pub async fn answer_tap(
                                 )
                                 .await
                             {
+                                crate::handlers::dialog::surfaces::remember_card_text(
+                                    s,
+                                    chat,
+                                    mid,
+                                    &crate::ui::fit_msg(&text),
+                                );
                                 let _ = s.tg.set_reaction(chat, mid, Some("❗")).await;
                                 s.blocked_sig
                                     .lock()
@@ -168,6 +183,15 @@ pub async fn answer_tap(
                     // strip it buttonless now).
                     match s.tg.try_edit_msg(chat, msg_id, &done, no_kb).await {
                         Ok(()) => {
+                            // The card no longer shows the question; record
+                            // what it DOES show, or a later resolve rewrites
+                            // it back to the stale question.
+                            crate::handlers::dialog::surfaces::remember_card_text(
+                                s,
+                                chat,
+                                msg_id,
+                                &crate::ui::fit_msg(&done),
+                            );
                             let _ = s.tg.set_reaction(chat, msg_id, Some("✅")).await;
                             s.remember(chat, Some(msg_id), pane).await;
                         }

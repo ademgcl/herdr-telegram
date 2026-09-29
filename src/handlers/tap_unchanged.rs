@@ -68,10 +68,22 @@ pub async fn handle_unchanged(
     let kb = Some(blocked_kb(pane, &opts));
     match s.tg.try_edit_msg(chat, msg_id, &text, kb.clone()).await {
         Ok(()) => {
+            crate::handlers::dialog::surfaces::remember_card_text(
+                s,
+                chat,
+                msg_id,
+                &crate::ui::fit_msg(&text),
+            );
             s.remember(chat, Some(msg_id), pane).await;
         }
         Err(e) if crate::telegram::messages::edit_gone(&e.to_string()) => {
             if let Some(mid) = s.tg.send_msg(chat, thread, &text, kb).await {
+                crate::handlers::dialog::surfaces::remember_card_text(
+                    s,
+                    chat,
+                    mid,
+                    &crate::ui::fit_msg(&text),
+                );
                 s.remember(chat, Some(mid), pane).await;
                 crate::handlers::dialog::settle_card(s, pane, chat, mid).await;
             }

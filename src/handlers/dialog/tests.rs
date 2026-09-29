@@ -272,3 +272,84 @@ fn test_winner_lines_ignores_transient_tool_noise() {
         "progress dropped: {body}"
     );
 }
+
+/// `card_text` is keyed by (chat, mid), so a missing prune is a
+/// permanent leak (AGENTS.md: a new map needs expiry + prune).
+#[tokio::test]
+async fn test_retire_dialog_forgets_the_card_text() {
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    super::surfaces::remember_card_text(&s, 42, 7, "⛔ blocked — needs input\n\nPick one");
+    s.blocked_card
+        .lock()
+        .await
+        .insert("w1:p1".to_string(), vec![(42, 7)]);
+    assert!(s.card_text.lock().unwrap().contains_key(&(42, 7)));
+
+    super::retire_dialog(&s, "w1:p1").await;
+    assert!(
+        !s.card_text.lock().unwrap().contains_key(&(42, 7)),
+        "text outlived its card"
+    );
+    assert!(!s.blocked_card.lock().await.contains_key("w1:p1"));
+}
+
+/// A surface dropped by settle_card (a same-chat predecessor) loses its
+/// text; a sibling that stays tracked keeps it.
+#[tokio::test]
+async fn test_settle_card_forgets_only_the_dropped_surface() {
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    let predecessor = (1i64, 100i64);
+    let sibling = (2i64, 200i64);
+    s.blocked_card
+        .lock()
+        .await
+        .insert("w1:p1".to_string(), vec![predecessor, sibling]);
+    for loc in [predecessor, sibling] {
+        super::surfaces::remember_card_text(&s, loc.0, loc.1, "⛔ blocked — needs input\n\nQ");
+    }
+
+    super::surfaces::settle_card(&s, "w1:p1", 1, 101).await;
+
+    let texts = s.card_text.lock().unwrap();
+    assert!(
+        !texts.contains_key(&predecessor),
+        "dropped surface kept its text"
+    );
+    assert!(
+        texts.contains_key(&sibling),
+        "tracked sibling lost its text"
+    );
+}
+
+/// A card whose text was never recorded must be strip-only. Pinned
+/// WITHOUT a live Telegram client by checking the decision helper the
+/// resolve path uses: a card with no record yields no rewrite text.
+#[tokio::test]
+async fn test_resolve_cards_offers_no_rewrite_text_for_an_unrecorded_card() {
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    s.blocked_card
+        .lock()
+        .await
+        .insert("w1:p1".to_string(), vec![(42, 7)]);
+    // A recorded card offers its text; an unrecorded one offers none.
+    super::surfaces::remember_card_text(&s, 42, 7, "⛔ blocked — needs input\n\nQ");
+    assert!(super::surfaces::rewrite_text(&s, (42, 7)).is_some());
+    assert!(super::surfaces::rewrite_text(&s, (99, 1)).is_none());
+}
+
+/// And the consuming behaviour on top of it.
+#[tokio::test]
+async fn test_resolve_consumes_an_unrecorded_card_without_recording_text() {
+    let (s, _dir) = crate::state::cancel::isolated_state();
+    s.blocked_card
+        .lock()
+        .await
+        .insert("w1:p1".to_string(), vec![(42, 7)]);
+    // deliberately NOT remembered
+    super::surfaces::resolve_cards(&s, "w1:p1").await;
+    assert!(!s.blocked_card.lock().await.contains_key("w1:p1"));
+    assert!(
+        !s.card_text.lock().unwrap().contains_key(&(42, 7)),
+        "resolve must not invent a text record"
+    );
+}

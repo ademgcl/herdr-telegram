@@ -232,7 +232,21 @@ pub(crate) async fn reap_orphans(s: &AppState, pane_list: &mut Option<HashSet<St
                 .retain(|p, _| live.contains(p));
             s.debounce.lock().await.retain(|p, _| live.contains(p));
             s.blocked_sig.lock().await.retain(|p, _| live.contains(p));
-            s.blocked_card.lock().await.retain(|p, _| live.contains(p));
+            // One lock for both: computing the live set in a second lock
+            // opened a window where a resolve could have its text deleted
+            // before it read it, degrading the rewrite to strip-only.
+            let live_cards: std::collections::HashSet<(i64, i64)> = {
+                let mut map = s.blocked_card.lock().await;
+                map.retain(|p, _| live.contains(p));
+                map.values().flatten().copied().collect()
+            };
+            // Backstop: any remembered text whose card is no longer tracked is
+            // dropped, so the map cannot grow forever (AGENTS.md: a new map
+            // needs expiry + prune).
+            if let Ok(mut t) = s.card_text.lock() {
+                t.retain(|k, _| live_cards.contains(k));
+            }
+
             // Kind memory is mapping-less by design (shells never mint):
             // dead entries never pass remove_mapping_if_thread, so they
             // retain live-only here like every other per-pane map.
